@@ -6765,6 +6765,12 @@ var THREE = __wxRoot.THREE || window.THREE;
      * game.json — normal play never sees either. */
     debugPanel: '',
     debugGallery: false,
+    /* Debug only: force a ship tier at cold start (0..4 or id string), so an
+     * unattended playtest can screenshot a built-up ocean liner. Empty in
+     * game.json — normal play always starts on the raft. */
+    debugTier: '',
+    /* Debug only: build every structure and cycle all 5 tiers at start. */
+    debugBuildAll: false,
     palette: {
       skyTop: '#1d2550', skyBottom: '#e58a6a', fog: '#6f5a7e', grass: '#6bab5c',
       dirt: '#8b6446', sand: '#e6cf96', water: '#3f7fb3', accent: '#ffc463'
@@ -6921,54 +6927,119 @@ var THREE = __wxRoot.THREE || window.THREE;
    * WeChat caps the package at 4 MB.
    */
   var GRAIN_ATLAS = (function buildGrainAtlas() {
-    // 4 tiles across, 64px each: 0 wood, 1 stone, 2 metal, 3 cloth.
+    // 8 tiles across, 64px each. Unlike the old near-white scratch texture,
+    // these have visible patterns so the materials actually read as materials:
+    //   0 wood planks  1 stone bricks  2 metal plate  3 cloth
+    //   4 roof tiles   5 glass window  6 sand        7 painted hull
     var S = 64, c = document.createElement('canvas');
-    c.width = S * 4; c.height = S;
+    c.width = S * 8; c.height = S;
     var g = c.getContext('2d');
     var rnd = mulberry32(90210);
-    function tile(i, base, streakColour, streaks, horizontal) {
-      g.fillStyle = base;
-      g.fillRect(i * S, 0, S, S);
-      for (var k = 0; k < streaks; k++) {
-        g.strokeStyle = streakColour;
-        g.globalAlpha = 0.06 + rnd() * 0.14;
-        g.lineWidth = 1 + rnd() * 1.6;
-        g.beginPath();
-        if (horizontal) {
-          var y = rnd() * S;
-          g.moveTo(i * S, y);
-          g.bezierCurveTo(i * S + S * 0.3, y + (rnd() - 0.5) * 6, i * S + S * 0.7, y + (rnd() - 0.5) * 6, i * S + S, y + (rnd() - 0.5) * 5);
-        } else {
-          var x = i * S + rnd() * S;
-          g.moveTo(x, 0);
-          g.bezierCurveTo(x + (rnd() - 0.5) * 6, S * 0.3, x + (rnd() - 0.5) * 6, S * 0.7, x + (rnd() - 0.5) * 5, S);
-        }
-        g.stroke();
+    function bg(i, col) { g.fillStyle = col; g.fillRect(i * S, 0, S, S); }
+    function line(i, x1, y1, x2, y2, col, w) {
+      g.strokeStyle = col; g.lineWidth = w || 2; g.beginPath();
+      g.moveTo(i * S + x1, y1); g.lineTo(i * S + x2, y2); g.stroke();
+    }
+
+    // 0 — wooden planks: dark seams every 16px, grain lines, nail heads.
+    bg(0, '#e8d3a8');
+    for (var p = 0; p < 4; p++) {
+      var py = p * 16;
+      g.fillStyle = 'rgba(120,80,40,0.55)';
+      g.fillRect(0, py, S * 8, 0); // no-op guard
+      for (var k = 0; k < 3; k++) {
+        line(0, 0, py + 3 + k * 4, S, py + 3 + k * 4, 'rgba(150,105,55,0.30)', 1);
       }
-      g.globalAlpha = 1;
-      // A few knots / speckles for tooth.
-      for (var d = 0; d < 26; d++) {
-        g.fillStyle = 'rgba(0,0,0,' + (0.02 + rnd() * 0.05).toFixed(3) + ')';
-        g.fillRect(i * S + rnd() * S, rnd() * S, 1 + rnd() * 2, 1 + rnd() * 2);
+      line(0, 0, py, S, py, 'rgba(90,60,30,0.75)', 2);
+      g.fillStyle = 'rgba(80,55,30,0.6)';
+      g.fillRect(0 + 6, py + 6, 2, 2); g.fillRect(0 + 54, py + 6, 2, 2);
+    }
+
+    // 1 — stone bricks: offset rows, mortar lines.
+    bg(1, '#cfcbc2');
+    for (var by = 0; by < 4; by++) {
+      var yy = by * 16, off = (by % 2) * 16;
+      line(1, 0, yy, S, yy, 'rgba(90,88,84,0.8)', 2);
+      for (var bx = -1; bx < 3; bx++) {
+        var xx = bx * 32 + off;
+        line(1, xx, yy, xx, yy + 16, 'rgba(90,88,84,0.8)', 2);
+      }
+      for (var sp = 0; sp < 6; sp++) {
+        g.fillStyle = 'rgba(255,255,255,0.25)';
+        g.fillRect(off + rnd() * S, yy + rnd() * 14, 3, 2);
       }
     }
-    tile(0, '#ffffff', '#000000', 9, true);    // wood: horizontal grain
-    tile(1, '#ffffff', '#000000', 5, false);   // stone: vertical cracks
-    tile(2, '#ffffff', '#ffffff', 6, true);    // metal: bright streaks
-    tile(3, '#ffffff', '#000000', 3, false);   // cloth: faint weave
+
+    // 2 — metal plate: horizontal brushed lines + rivets.
+    bg(2, '#c9d2da');
+    for (var ml = 2; ml < S; ml += 4) line(2, 0, ml, S, ml, 'rgba(255,255,255,0.35)', 1);
+    line(2, 0, 0, S, 0, 'rgba(80,95,110,0.6)', 2);
+    line(2, 0, 62, S, 62, 'rgba(80,95,110,0.6)', 2);
+    [[6, 6], [58, 6], [6, 58], [58, 58]].forEach(function (rv) {
+      g.fillStyle = 'rgba(90,105,120,0.9)';
+      g.beginPath(); g.arc(2 * S + rv[0], rv[1], 2.2, 0, Math.PI * 2); g.fill();
+    });
+
+    // 3 — cloth / canvas: woven crosshatch.
+    bg(3, '#e7dfd0');
+    for (var cw = 0; cw < S; cw += 5) {
+      line(3, cw, 0, cw, S, 'rgba(160,145,120,0.35)', 1);
+      line(3, 0, cw, S, cw, 'rgba(160,145,120,0.35)', 1);
+    }
+
+    // 4 — roof tiles: overlapping scalloped rows.
+    bg(4, '#b8654f');
+    for (var ty = 0; ty < 4; ty++) {
+      var y4 = ty * 16;
+      for (var tx = 0; tx < 4; tx++) {
+        var x4 = tx * 16 + (ty % 2 ? 8 : 0);
+        g.fillStyle = (tx + ty) % 2 ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.10)';
+        g.fillRect(x4, y4, 15, 15);
+        line(4, x4, y4 + 15, x4 + 16, y4 + 15, 'rgba(80,30,20,0.7)', 2);
+      }
+    }
+
+    // 5 — glass window: pale blue with a cross frame and a highlight.
+    bg(5, '#a9d8e6');
+    g.fillStyle = 'rgba(255,255,255,0.35)';
+    g.beginPath(); g.moveTo(5 * S + 6, 4); g.lineTo(5 * S + 26, 4); g.lineTo(5 * S + 14, 60); g.lineTo(5 * S + 2, 60); g.fill();
+    line(5, 32, 0, 32, S, 'rgba(240,248,250,0.9)', 3);
+    line(5, 0, 32, S, 32, 'rgba(240,248,250,0.9)', 3);
+    line(5, 0, 0, S, 0, 'rgba(70,110,130,0.8)', 3);
+    line(5, 0, 63, S, 63, 'rgba(70,110,130,0.8)', 3);
+
+    // 6 — sand: speckles.
+    bg(6, '#e4d6a8');
+    for (var sd = 0; sd < 220; sd++) {
+      g.fillStyle = rnd() > 0.5 ? 'rgba(160,135,80,0.4)' : 'rgba(255,250,220,0.5)';
+      g.fillRect(6 * S + rnd() * S, rnd() * S, 1.5, 1.5);
+    }
+
+    // 7 — painted hull: horizontal strakes with a fine seam.
+    bg(7, '#dde4ea');
+    for (var hy = 0; hy < 4; hy++) {
+      line(7, 0, hy * 16, S, hy * 16, 'rgba(110,125,140,0.55)', 2);
+      line(7, 0, hy * 16 + 3, S, hy * 16 + 3, 'rgba(255,255,255,0.6)', 1);
+    }
+
     var tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
     return tex;
   })();
-  /** Pick an atlas tile from the colour: wood-ish -> 0, stone -> 1, etc. */
+  /** Pick one of the 8 tiles from a box's colour. Vertex colour still tints it,
+   *  so one atlas serves every building while each keeps its own hue. */
   function grainTileFor(hex) {
     var r = parseInt(hex.slice(1, 3), 16), g2 = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
-    if (r > g2 + 18 && g2 > b + 8) return 0;              // warm brown/orange = wood
-    if (Math.abs(r - g2) < 16 && Math.abs(g2 - b) < 16) return 1; // grey = stone
-    if (b > r + 10) return 1;                              // blue-grey = stone/metal
-    return 3;                                              // everything else = cloth
+    if (r > 150 && g2 < 130 && b < 120 && r > g2 + 40) return 4;   // red/orange roof
+    if (b > r + 25 && b > g2 + 5) return 5;                         // blue glass / water
+    if (r > g2 + 18 && g2 > b + 8) return 0;                        // warm brown = wood
+    if (r > 190 && g2 > 180 && b < 170) return 6;                    // pale sand
+    if (Math.abs(r - g2) < 18 && Math.abs(g2 - b) < 18) return 2;   // grey = metal
+    if (r > 200 && g2 > 200 && b > 200) return 7;                    // near-white = hull
+    return 1;                                                         // everything else = stone
   }
   function voxelModel(boxes, textured) {
     var parts = [[], []];
@@ -6985,6 +7056,9 @@ var THREE = __wxRoot.THREE || window.THREE;
         var pos = geo.attributes.position, nor = geo.attributes.normal, base = positions.length / 3;
         var tint = color(box[6]);
         var tile = grainTileFor(box[6]);
+        // 贴图已经是彩色的；顶点色只做温和的色调偏移，否则乘完会发暗、把
+        // 木纹/砖缝盖掉。往白提 0.55 让图案清晰可见，仍保留物体间的色差。
+        if (useTex) tint.lerp(color('#ffffff'), 0.55);
         // How many atlas repeats this box spans: bigger boxes get more grain.
         var ru = Math.max(0.5, box[3] * 1.4), rv = Math.max(0.5, box[4] * 1.4);
         var uvAttr = geo.attributes.uv;
@@ -6993,9 +7067,9 @@ var THREE = __wxRoot.THREE || window.THREE;
           normals.push(nor.getX(v), nor.getY(v), nor.getZ(v));
           colors.push(tint.r, tint.g, tint.b);
           if (useTex) {
-            // Map into the tile's horizontal band, tiled within it.
+            // Map into one of the 8 tiles; repeat the pattern within the tile.
             var u = (uvAttr ? uvAttr.getX(v) : 0), vv = (uvAttr ? uvAttr.getY(v) : 0);
-            uvs.push((tile + (u * ru % 1)) / 4, vv * rv % 1);
+            uvs.push((tile + (u * ru % 1)) / 8, vv * rv % 1);
           }
         }
         var index = geo.index.array;
@@ -7494,6 +7568,235 @@ var THREE = __wxRoot.THREE || window.THREE;
     B.add(0, 2.06, 12.92, 0.07, 0.62, 0.07, C.grey);               // jackstaff
     return B;
   })();
+
+  /* =========================================================================
+   * 船体进化（用户要求：木筏 → 木船 → 小船 → 邮轮 → 更大的船）
+   * -------------------------------------------------------------------------
+   * 所有船型都用**同一套局部坐标基准**（船首 +13、船尾 -13、半宽 4.2、
+   * 甲板 y≈1.8），因此 BUILDING_POS / SURVIVAL_STEPS / hullContains 的坐标
+   * 完全不用改；每级只是「船体长什么样」+「整船缩放多少」不同。
+   * applyTier() 换掉 body 里的船 mesh，建筑和装备作为 body 的 children 不动，
+   * 只随整船一起缩放 —— 这是最不容易坏的实现方式。
+   * ========================================================================= */
+
+  /** 1 木筏：几根原木 + 绳索 + 一根小桅杆和旗。忽略后半段船体，只占中段。 */
+  var RAFT_BOXES = (function () {
+    var B = boxList(), i, j;
+    for (i = -4; i <= 4; i++) {
+      B.add(0, 0.28, i * 0.42, 2.6, 0.44, 0.4, i % 2 ? '#9c6d3e' : '#a97845');
+    }
+    // 横向捆绳
+    for (j = -1; j <= 1; j++) B.add(j * 0.9, 0.54, 0, 0.14, 0.08, 3.9, '#6b4a2c');
+    // 简陋护栏（四角）
+    [[-1.2, -1.6], [1.2, -1.6], [-1.2, 1.6], [1.2, 1.6]].forEach(function (p) {
+      B.add(p[0], 0.78, p[1], 0.12, 0.6, 0.12, '#7a5230');
+    });
+    B.add(0, 1.05, -1.3, 0.1, 1.5, 0.1, '#7a5230');      // 桅杆
+    B.add(0.26, 1.7, -1.3, 0.5, 0.3, 0.06, '#e2574c');  // 小旗
+    B.add(0, 0.58, 1.2, 0.6, 0.14, 0.6, '#8f6135');     // 木箱
+    return B;
+  })();
+
+  /** 2 木船：首尾收窄的船壳 + 甲板 + 帆和桅杆。 */
+  var WOODBOAT_BOXES = (function () {
+    var B = boxList(), i, z, w;
+    for (i = 0; i < 22; i++) {
+      z = -6.6 + i * 0.6;
+      w = 1.9 * Math.sqrt(Math.max(0.05, 1 - Math.pow(z / 7.2, 2)));
+      B.add(0, 0.5, z, w * 2, 0.95, 0.62, i % 2 ? '#9c6d3e' : '#a97845');
+      B.add(0, 1.02, z, w * 1.85, 0.12, 0.6, '#c89a5e');      // 甲板
+      B.add(-w, 1.12, z, 0.18, 0.34, 0.62, '#7a5230');        // 左舷
+      B.add(w, 1.12, z, 0.18, 0.34, 0.62, '#7a5230');          // 右舷
+    }
+    for (i = -3; i <= 3; i++) B.add(i * 0.55, 1.4, 0, 0.1, 0.1, 4.6, '#6b4a2c'); // 板缝
+    B.add(0, 1.6, 0, 0.16, 3.4, 0.16, '#7a5230');             // 主桅
+    B.add(0.9, 2.5, 0.05, 1.8, 1.7, 0.08, '#f2ead6');         // 帆
+    B.add(0.9, 3.4, 0.05, 0.14, 0.14, 0.14, '#e8c87a');
+    B.add(0, 1.3, -6.2, 0.5, 0.5, 0.5, '#8f6135');            // 船尾箱
+    return B;
+  })();
+
+  /** 3 小船：更长的船壳 + 一个小船舱 + 烟囱 + 栏杆。 */
+  var SMALLSHIP_BOXES = (function () {
+    var B = boxList(), i, z, w;
+    for (i = 0; i < 30; i++) {
+      z = -9.6 + i * 0.66;
+      w = 2.5 * Math.sqrt(Math.max(0.05, 1 - Math.pow(z / 10.4, 2)));
+      B.add(0, 0.6, z, w * 2, 1.15, 0.68, i % 2 ? '#8a939c' : '#7c8792');
+      B.add(0, 1.2, z, w * 1.9, 0.14, 0.66, '#c6a06a');
+      B.add(-w, 1.34, z, 0.2, 0.4, 0.68, '#5d6672');
+      B.add(w, 1.34, z, 0.2, 0.4, 0.68, '#5d6672');
+      if (i % 3 === 0) {                                       // 舷窗
+        B.add(-w + 0.02, 0.8, z, 0.06, 0.24, 0.24, '#bfeef5');
+        B.add(w - 0.02, 0.8, z, 0.06, 0.24, 0.24, '#bfeef5');
+      }
+    }
+    // 船舱
+    for (i = -3; i <= 3; i++) B.add(0, 1.75, i * 0.62, 3.0, 1.0, 0.62, i % 2 ? '#eef1f4' : '#e2e8ee');
+    B.add(0, 2.32, 0, 3.2, 0.16, 4.5, '#8f9aa6');
+    for (i = -2; i <= 2; i++) B.add(0, 1.95, i * 0.9, 3.05, 0.3, 0.12, '#bfeef5');
+    B.add(0.9, 2.9, -1.2, 0.7, 1.2, 0.7, '#4a525c');        // 烟囱
+    B.add(0.9, 3.56, -1.2, 0.8, 0.14, 0.8, '#9aa3ac');
+    for (i = -4; i <= 4; i++) {                               // 栏杆
+      B.add(-2.3, 1.5, i * 1.1, 0.1, 0.36, 0.1, '#dfe5ea');
+      B.add(2.3, 1.5, i * 1.1, 0.1, 0.36, 0.1, '#dfe5ea');
+    }
+    return B;
+  })();
+
+  /** 5 远洋邮轮：在邮轮基础上再拉长、加一层甲板、第三个烟囱。 */
+  var LINER_BOXES = (function () {
+    var B = HERO_BOXES.slice();   // 直接复用 987 方块的邮轮
+    // 船体两端各加长 4 单位
+    var i, z, w, C2 = { hull: '#4e5761', deck: '#c6a06a', rail: '#ccd5dd', white: '#e4ebf0' };
+    for (i = 0; i < 9; i++) {
+      z = 13.0 + i * 0.45;
+      w = 4.2 * Math.sqrt(Math.max(0.02, 1 - Math.pow((z - 8) / 9, 2)));
+      B.push([0, 0.6, z, w * 2, 1.1, 0.5, C2.hull]);
+      B.push([0, 1.8, z, w * 1.9, 0.14, 0.5, C2.deck]);
+      B.push([-w, 1.95, z, 0.16, 0.4, 0.5, C2.rail]);
+      B.push([w, 1.95, z, 0.16, 0.4, 0.5, C2.rail]);
+      z = -13.0 - i * 0.45;
+      w = 4.2 * Math.sqrt(Math.max(0.02, 1 - Math.pow((z + 8) / 9, 2)));
+      B.push([0, 0.6, z, w * 2, 1.1, 0.5, C2.hull]);
+      B.push([0, 1.8, z, w * 1.9, 0.14, 0.5, C2.deck]);
+      B.push([-w, 1.95, z, 0.16, 0.4, 0.5, C2.rail]);
+      B.push([w, 1.95, z, 0.16, 0.4, 0.5, C2.rail]);
+    }
+    // 第三层甲板（加高的白色楼体 + 更大的观景台）
+    for (i = -6; i <= 6; i++) {
+      B.push([0, 4.3, i * 1.0, 2.6, 0.9, 1.0, C2.white]);
+      B.push([0, 4.8, i * 1.0, 2.7, 0.14, 1.0, C2.rail]);
+    }
+    // 第三个烟囱
+    B.push([-1.72, 5.9, 0, 0.9, 2.2, 0.9, '#4a525c']);
+    B.push([-1.72, 7.05, 0, 1.0, 0.18, 1.0, '#9aa3ac']);
+    return B;
+  })();
+
+  /** 5 级船型表。slots 沿用统一基准坐标，只按级给不同数量（截取 BUILDING_POS 前 N 个）。 */
+  var SHIP_TIERS = [
+    { id: 'raft',       name: '木筏',     boxes: RAFT_BOXES,       modelHeight: 1.9,    heroSize: 1.7, camDistance: 26, slotCount: 4,  pop: 0.62,
+      hullLen: 2.4, hullBeam: 1.6,
+      upgradeCost: { wood: 20, plastic: 8, metal: 0 },  needBuildings: 0 },
+    { id: 'woodBoat',   name: '木船',     boxes: WOODBOAT_BOXES,   modelHeight: 3.6,    heroSize: 2.4, camDistance: 30, slotCount: 6,  pop: 0.78,
+      hullLen: 4.2, hullBeam: 1.9,
+      upgradeCost: { wood: 40, plastic: 20, metal: 10 }, needBuildings: 2 },
+    { id: 'smallShip',  name: '小船',     boxes: SMALLSHIP_BOXES,  modelHeight: 4.0,    heroSize: 3.0, camDistance: 36, slotCount: 8,  pop: 0.9,
+      hullLen: 6.0, hullBeam: 2.2,
+      upgradeCost: { wood: 70, plastic: 40, metal: 25 }, needBuildings: 4 },
+    { id: 'cruise',     name: '邮轮',     boxes: HERO_BOXES,       modelHeight: SHIP_HEIGHT, heroSize: 4.6, camDistance: 46, slotCount: 12, pop: 1.0,
+      hullLen: 7.1, hullBeam: 2.4,
+      upgradeCost: { wood: 140, plastic: 90, metal: 60 }, needBuildings: 6 },
+    { id: 'oceanLiner', name: '远洋邮轮', boxes: LINER_BOXES,      modelHeight: 8.2,    heroSize: 5.2, camDistance: 56, slotCount: 16, pop: 1.12,
+      hullLen: 9.0, hullBeam: 3.0,
+      upgradeCost: null, needBuildings: 0 }
+  ];
+  var shipTier = 0;   // 当前等级；开局是木筏（5 级：raft/woodBoat/smallShip/cruise/oceanLiner）
+
+  /** 给每一级生成建造位与生存装备位（局部坐标，随该级船体尺寸分布）。
+   * 小船的甲板短、邮轮的甲板长，位置必须分级，否则建筑会飘到船外。 */
+  function tierSlots(tier) {
+    var out = [], n = tier.slotCount, spanZ = tier.id === 'raft' ? 2.2
+      : tier.id === 'woodBoat' ? 4.2 : tier.id === 'smallShip' ? 6.5 : 10.5;
+    var spanX = tier.id === 'raft' ? 1.1 : tier.id === 'woodBoat' ? 1.5 : 2.4;
+    var deckY = tier.id === 'cruise' || tier.id === 'oceanLiner' ? 1.8 : (tier.id === 'raft' ? 0.55 : 1.2);
+    for (var i = 0; i < n; i++) {
+      var row = Math.floor(i / 2), col = i % 2;
+      var x = (col ? 1 : -1) * spanX;
+      var z = -spanZ + row * (spanZ * 2 / Math.max(1, Math.ceil(n / 2) - 1));
+      out.push([x, deckY, z]);
+      out.push([x, deckY + (tier.id === 'cruise' || tier.id === 'oceanLiner' ? 1.82 : 0), z - 0.6]);
+    }
+    return out;
+  }
+  function tierSurvivalSlots(tier) {
+    var out = [], s = tier.id === 'raft' ? 1.3 : tier.id === 'woodBoat' ? 2.2 : tier.id === 'smallShip' ? 3.2 : 5.0;
+    var deckY = tier.id === 'cruise' || tier.id === 'oceanLiner' ? 1.8 : (tier.id === 'raft' ? 0.55 : 1.2);
+    var pts = [[s, s * 0.6], [-s, s * 0.6], [s * 0.7, s], [0, s * 1.15], [-s * 0.7, s], [0, s * 0.4]];
+    for (var i = 0; i < pts.length; i++) out.push([pts[i][0], deckY, pts[i][1]]);
+    return out;
+  }
+  /* 新造的建筑 / 生存装备必须落在「当前船型」的甲板上，而不是永远用邮轮的
+   * BUILDING_POS / SURVIVAL_STEPS.at。否则开局木筏上造工作台会飘到海里。
+   * 邮轮级沿用精心排布的 12 个原建造位，其余级用分级生成的 slots。 */
+  function currentBuildingSlot(i) {
+    var t = SHIP_TIERS[shipTier] || SHIP_TIERS[0];
+    if (t.id === 'cruise') return BUILDING_POS[i % BUILDING_POS.length];
+    var s = tierSlots(t);
+    return s[i % s.length];
+  }
+  function currentSurvivalSlot(i) {
+    var t = SHIP_TIERS[shipTier] || SHIP_TIERS[0];
+    var s = tierSurvivalSlots(t);
+    return s[i % s.length];
+  }
+
+  /** 换船：替换 body 里的船 mesh，并把已建建筑/装备迁移到新甲板位置。 */
+  var shipMesh = null;
+  function applyTier(index, skipSave) {
+    index = Math.max(0, Math.min(SHIP_TIERS.length - 1, index | 0));
+    shipTier = index;
+    var t = SHIP_TIERS[index];
+    var body = hero.node.userData.body;
+    if (shipMesh) { body.remove(shipMesh); shipMesh = null; }
+    /* makeCharacter 把整艘邮轮的网格直接烘进了 body（body 本身就是那个
+     * voxelModel Group）。换船时必须把这些旧船网格一并移除，否则邮轮永远
+     * 留在船里、木筏只是套在里面 —— 这就是「开局不是小木筏」的根因。
+     * 建筑/生存装备是 Group、且都登记在 buildings / survivalModels 里，
+     * 不动它们；只清理 body 直属的 Mesh（船体网格）。 */
+    for (var ci = body.children.length - 1; ci >= 0; ci--) {
+      var ch = body.children[ci];
+      if (ch.isMesh && buildings.indexOf(ch) < 0 && survivalModels.indexOf(ch) < 0) {
+        body.remove(ch);
+        if (ch.geometry) ch.geometry.dispose();
+        if (ch.material) ch.material.dispose();
+      }
+    }
+    shipMesh = voxelModel(t.boxes, true);
+    body.add(shipMesh);
+    // 整船缩放按该级真实模型高度，小木筏不会被压成一点。
+    var sc = t.heroSize / t.modelHeight;
+    body.scale.setScalar(sc);
+    R.heroSize = t.heroSize;
+    // 建筑/装备反向补偿，并按新甲板位置重排（与新建时同一套 slot 函数，
+    // 这样邮轮级会落回 BUILDING_POS，其余级落在分级 slots 上）。
+    var counter = t.pop;
+    buildings.forEach(function (b, i) {
+      var p = currentBuildingSlot(i);
+      b.position.set(p[0], p[1], p[2]);
+      b.scale.setScalar(BUILDING_SCALE * counter);
+      b.visible = true;
+    });
+    survivalModels.forEach(function (m, k) {
+      var st = stepById(survival[k]);
+      var p = currentSurvivalSlot(k);
+      m.position.set(p[0], p[1], p[2]);
+      m.scale.setScalar((st ? st.scale : 1) * counter);
+      m.visible = true;
+    });
+    if (!skipSave) saveWorld();
+    if (typeof fitBubble === 'function') fitBubble();
+    if (typeof fitShadow === 'function') fitShadow();
+    if (window.console && window.console.info) console.info('[ship] tier=' + t.name);
+  }
+  function canUpgrade() {
+    if (shipTier >= SHIP_TIERS.length - 1) return false;
+    var t = SHIP_TIERS[shipTier];
+    if (buildings.length + survival.length < t.needBuildings) return false;
+    if (res.wood < t.upgradeCost.wood || res.plastic < t.upgradeCost.plastic || res.metal < t.upgradeCost.metal) return false;
+    return true;
+  }
+  function tryUpgrade() {
+    if (!canUpgrade()) { addFT('还不能升级船：看「船」面板里的条件', hero.x, hero.z, '#ffb4a0', 2); return false; }
+    var t = SHIP_TIERS[shipTier];
+    res.wood -= t.upgradeCost.wood; res.plastic -= t.upgradeCost.plastic; res.metal -= t.upgradeCost.metal;
+    applyTier(shipTier + 1);
+    addFT('船升级了：' + SHIP_TIERS[shipTier].name + '！', hero.x, hero.z, '#ffe2a8', 3);
+    fanfare([523, 659, 784, 1047], 0.11, 'triangle', 0.075);
+    saveWorld();
+    return true;
+  }
 
   /** A shark as the top-down camera sees it: a rounded, tapered body that sits
    *  *in* the water (not a flat plank), a dorsal fin breaking the surface, and a
@@ -8436,7 +8739,9 @@ var THREE = __wxRoot.THREE || window.THREE;
    *  height, so one number (heroSize) sizes the whole vessel. */
   var BUILDING_SCALE = 1.45;
   /** Every character's look in one place: the game and the studio's thumbnails both draw from here. */
-  var MODELS = { hero: HERO_BOXES, enemy: SHARK_BOXES, pickup: BOTTLE_BOXES };
+  /* hero 的初始几何就是木筏：标题画面、冷启动前的第一帧都不会露出邮轮。
+   * 真正换船由 applyTier() 负责（它会先清掉这些烘进 body 的网格）。 */
+  var MODELS = { hero: RAFT_BOXES, enemy: SHARK_BOXES, pickup: BOTTLE_BOXES };
   var spriteTextures = {};
   function spriteTexture(slot) {
     if (!spriteTextures[slot]) {
@@ -8474,6 +8779,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     shadow.rotation.x = -Math.PI / 2;
     shadow.position.y = 0.03;
     holder.add(shadow);
+    holder.userData.shadow = shadow;
     holder.userData.body = body;
     scene.add(holder);
     return holder;
@@ -8491,9 +8797,18 @@ var THREE = __wxRoot.THREE || window.THREE;
    * aft, half-beam across), because a 16-unit liner that grabbed loot in a
    * 4-unit circle would leave half its own deck unreachable, and a shark that
    * bit at a raft-sized radius would swim through the hull to do it. */
-  var SHIP_SCALE = R.heroSize / SHIP_HEIGHT;        // 4.6 / 7.51 ≈ 0.61
-  var SHIP_HALF_LEN = SHIP.halfLen * SHIP_SCALE;    // ≈ 7.1
-  var SHIP_HALF_BEAM = SHIP.halfBeam * SHIP_SCALE;  // ≈ 2.4
+  /* 船体椭圆占位按当前船型动态取值，换船后立刻生效（不能用开局常量）。
+   * 每级在 SHIP_TIERS 里直接给出世界单位下的半长/半宽：木筏最小、远洋邮轮
+   * 最大。若用固定的 SHIP.halfLen 乘整船缩放，小木筏反而会得到最大的碰撞圈
+   * （因为它 modelHeight 小、缩放系数反而大），那显然不对。 */
+  function shipHalfLen() {
+    var t = SHIP_TIERS[shipTier] || SHIP_TIERS[0];
+    return t.hullLen || (SHIP.halfLen * (t.heroSize / t.modelHeight));
+  }
+  function shipHalfBeam() {
+    var t = SHIP_TIERS[shipTier] || SHIP_TIERS[0];
+    return t.hullBeam || (SHIP.halfBeam * (t.heroSize / t.modelHeight));
+  }
   /* A long ship only reads as a ship when it is seen at an angle: end-on it is
    * a grey stick. The raft was symmetric so its heading never mattered; the
    * liner starts at a three-quarter view (bow toward the camera and to the
@@ -8507,19 +8822,43 @@ var THREE = __wxRoot.THREE || window.THREE;
     var fs = Math.sin(hero.facing), fc = Math.cos(hero.facing);
     var p = pad || 0;
     return {
-      fwd: (dx * fs + dz * fc) / (SHIP_HALF_LEN + p),
-      lat: (dx * fc - dz * fs) / (SHIP_HALF_BEAM + p)
+      fwd: (dx * fs + dz * fc) / (shipHalfLen() + p),
+      lat: (dx * fc - dz * fs) / (shipHalfBeam() + p)
     };
   }
   function hullContains(x, z, pad) {
     var q = hullPoint(x, z, pad);
     return q.fwd * q.fwd + q.lat * q.lat <= 1;
   }
-  var bubble = new THREE.Mesh(new THREE.SphereGeometry(R.heroSize * 0.82, 20, 14), new THREE.MeshBasicMaterial({ color: '#9fe8ff', transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending }));
-  bubble.position.y = R.heroSize * 0.5;
-  bubble.scale.z = 1.9;             // the safety bubble wraps the whole hull
+  /* 救生圈护盾：贴水面的扁平光环，不再是笼罩整船的大水滴。
+   * 旧版是 SphereGeometry + 非均匀缩放，俯视角下会投影成一个比船大几倍的
+   * 蓝色蛋形，小木筏尤其明显。环形只见边缘，不遮挡船体。 */
+  var bubble = new THREE.Mesh(
+    new THREE.RingGeometry(0.82, 1.0, 48),
+    new THREE.MeshBasicMaterial({ color: '#9fe8ff', transparent: true, opacity: 0.42,
+      side: THREE.DoubleSide, depthWrite: false })
+  );
+  bubble.rotation.x = -Math.PI / 2;
+  bubble.position.y = WATER_Y + 0.12;
   bubble.visible = false;
   hero.node.add(bubble);
+  /** 光环随船型贴合船体椭圆，不套大圈。 */
+  function fitBubble() {
+    var hl = shipHalfLen(), hb = shipHalfBeam();
+    bubble.scale.set(hb * 1.2, hl * 1.1, 1);
+  }
+  fitBubble();
+  /** 接触阴影也随船型变：makeCharacter 用的是开局 heroSize(4.6)，木筏会拖
+   * 一条 16 单位长的大黑影。按当前级的半长/半宽重设缩放即可。 */
+  function fitShadow() {
+    var sh = hero.node.userData.shadow;
+    if (!sh) return;
+    var hl = shipHalfLen(), hb = shipHalfBeam();
+    // 基准 PlaneGeometry 是 shadowW=R.heroSize*1.15、shadowD=R.heroSize*3.5
+    var baseW = 4.6 * 1.15, baseD = 4.6 * 3.5;
+    sh.scale.set(Math.max(0.25, (hb * 2.2) / baseW), Math.max(0.25, (hl * 2.2) / baseD), 1);
+  }
+  fitShadow();
 
   // White foam for the wake and dash bursts, pooled separately from the gold sparks.
   var FOAM = 48, foam = [];
@@ -8660,7 +8999,7 @@ var THREE = __wxRoot.THREE || window.THREE;
   /* Docking: anchoring the raft turns it into a town you can stand on. */
   var docked = false, dockX = 0, dockZ = 0, deckBobT = 0;
   var fishTimer = 0, fishReady = false;
-  var dockBtnRect = null, fishBtnRect = null;
+  var dockBtnRect = null, fishBtnRect = null, townViewBtnRect = null;
   function makeDive() {
     if (dive || !window.DiveGame || !window.DiveGame.create) return;
     try {
@@ -8745,6 +9084,7 @@ var THREE = __wxRoot.THREE || window.THREE;
       addFT('已下锚 · 船变成了小镇', hero.x, hero.z, '#9ff0b8', 2.6);
       fanfare([440, 554], 0.12, 'sine', 0.05);
     } else {
+      townView = false;   // 起锚时自动回到航行视角
       addFT('起锚出航', hero.x, hero.z, '#ffe2a8', 1.8);
       blip(520, 0.18, 'triangle', 0.05, 760);
     }
@@ -8969,6 +9309,18 @@ var THREE = __wxRoot.THREE || window.THREE;
     }
     // (The next town blueprint is shown through the build menu itself, so there
     //  is no second overlapping pill here.)
+    /* 船可升级提示：条件满足时在左侧给一条醒目的绿字。 */
+    if (shipTier < SHIP_TIERS.length - 1 && canUpgrade()) {
+      var upHintY = hintY + font * 3.1;
+      hudCtx.fillStyle = 'rgba(30,100,60,0.85)';
+      var uhW = Math.min(w * 0.42, 260);
+      roundRect(m, upHintY, uhW, font * 1.5, 8); hudCtx.fill();
+      hudCtx.strokeStyle = 'rgba(170,255,200,0.8)'; hudCtx.lineWidth = 1.5;
+      roundRect(m, upHintY, uhW, font * 1.5, 8); hudCtx.stroke();
+      hudCtx.fillStyle = '#c8ffd8';
+      hudCtx.font = '800 ' + (font * 0.76) + 'px ' + FONT;
+      hudCtx.fillText('船可升级！按 V 打开船只管理', m + 10, upHintY + font * 1.08);
+    }
     // Session clock counts UP (no round timer any more — the world persists).
     var sessionMin = Math.floor(elapsed / 60), sessionSec = Math.floor(elapsed % 60);
     var timerText = sessionMin + ':' + String(sessionSec).padStart(2, '0');
@@ -8993,22 +9345,24 @@ var THREE = __wxRoot.THREE || window.THREE;
     // The blueprint choice: two cards, pick with ← / → or a tap.
     if (buildOffer) {
       buildOfferT += 1 / 60;
-      var cardW = Math.min(w * 0.36, 210), cardH = cardW * 0.62;
+      var cardW = Math.min(w * 0.36, 210), cardH = Math.min(cardW * 0.62, h * 0.3);
       var gap = 18, totalW = cardW * buildOffer.length + gap * (buildOffer.length - 1);
-      var startX = (w - totalW) / 2, cy2 = h * 0.66;
+      // Centre the cards vertically so they are always fully on screen (a
+      // 390px-tall WeChat landscape viewport used to push them off the bottom).
+      var startX = (w - totalW) / 2, cy2 = Math.min(h * 0.6, h - cardH - font * 2.5);
       hudCtx.fillStyle = 'rgba(8,14,26,0.35)';
       hudCtx.fillRect(0, 0, w, h);
       hudCtx.textAlign = 'center';
       hudCtx.font = '800 ' + (font * 1.1) + 'px ' + FONT;
       hudCtx.fillStyle = '#ffe2a8';
       hudCtx.fillText('选一张图纸（← → 或点击）', w / 2, cy2 - font * 1.2);
-      buildCardRects = [];
+      townCardRects = [];
       for (var bo = 0; bo < buildOffer.length; bo++) {
         var si = buildOffer[bo], sp3 = BUILDING_SPECS[si];
         var cxp = startX + bo * (cardW + gap), cyp = cy2;
         var afford = canAfford(sp3);
         var isSel = bo === buildSel;
-        buildCardRects.push({ x: cxp, y: cyp, w: cardW, h: cardH, index: bo });
+        townCardRects.push({ x: cxp, y: cyp, w: cardW, h: cardH, index: bo });
         hudCtx.fillStyle = afford ? 'rgba(24,46,66,0.94)' : 'rgba(40,26,26,0.9)';
         roundRect(cxp, cyp, cardW, cardH, 14); hudCtx.fill();
         hudCtx.strokeStyle = isSel && afford ? '#ffd166' : 'rgba(255,255,255,0.2)';
@@ -9025,7 +9379,7 @@ var THREE = __wxRoot.THREE || window.THREE;
         hudCtx.fillText('民+' + sp3.pop + '  ' + sp3.desc, cxp + cardW / 2, cyp + cardH - font * 0.75);
       }
       hudCtx.textAlign = 'left';
-    } else buildCardRects = null;
+    } else townCardRects = null;
     // Dash button (touch) — dimmed and swept dark while recharging.
     var br = 30, bx = w - m - br - 10, by = h - m - br - 10;
     boostRect = { x: bx, y: by, r: br + 10 };
@@ -9089,25 +9443,36 @@ var THREE = __wxRoot.THREE || window.THREE;
       hudCtx.fillText(docked ? '起锚出航' : '下锚停船', dkX + dkW / 2, dkY + dkH * 0.66);
       hudCtx.textAlign = 'left';
       // Fishing, only while anchored.
+      var extraY = dkY - font * 1.9 - 10;
       if (docked) {
-        var fW = Math.min(w * 0.26, 150), fH = font * 1.9;
-        var fX = w / 2 - fW / 2, fY = dkY - fH - 10;
-        fishBtnRect = { x: fX, y: fY, w: fW, h: fH };
+        // 「上镇」和「钓鱼」并排，下锚后才有 — 这是「能进入城镇」的入口。
+        var twoW = Math.min(w * 0.16, 108), twoH = font * 1.9, twoGap = 10;
+        var tFightX = w / 2 - twoW - twoGap / 2;
+        var tTownX = w / 2 + twoGap / 2;
+        fishBtnRect = { x: tFightX, y: extraY, w: twoW, h: twoH };
+        townViewBtnRect = { x: tTownX, y: extraY, w: twoW, h: twoH };
         var ready = fishReady;
         hudCtx.globalAlpha = ready ? 0.85 + Math.sin(performance.now() / 180) * 0.15 : 1;
         hudCtx.fillStyle = ready ? 'rgba(40,110,70,0.95)' : (fishTimer > 0 ? 'rgba(40,50,70,0.8)' : 'rgba(20,44,64,0.85)');
-        roundRect(fX, fY, fW, fH, fH / 2); hudCtx.fill();
+        roundRect(tFightX, extraY, twoW, twoH, twoH / 2); hudCtx.fill();
         hudCtx.strokeStyle = ready ? 'rgba(170,255,200,1)' : 'rgba(150,220,255,0.6)';
         hudCtx.lineWidth = ready ? 3 : 2;
-        roundRect(fX, fY, fW, fH, fH / 2); hudCtx.stroke();
+        roundRect(tFightX, extraY, twoW, twoH, twoH / 2); hudCtx.stroke();
         hudCtx.globalAlpha = 1;
         hudCtx.fillStyle = ready ? '#eaffef' : '#dff2ff';
-        hudCtx.font = '800 ' + (font * 0.84) + 'px ' + FONT;
+        hudCtx.font = '800 ' + (font * 0.8) + 'px ' + FONT;
         hudCtx.textAlign = 'center';
-        hudCtx.fillText(ready ? '收竿！' : (fishTimer > 0 ? '等鱼上钩…' : '钓鱼'), fX + fW / 2, fY + fH * 0.66);
+        hudCtx.fillText(ready ? '收竿！' : (fishTimer > 0 ? '等鱼…' : '钓鱼'), tFightX + twoW / 2, extraY + twoH * 0.66);
+        // 上镇按钮
+        hudCtx.fillStyle = townView ? 'rgba(200,140,60,0.92)' : 'rgba(24,60,80,0.9)';
+        roundRect(tTownX, extraY, twoW, twoH, twoH / 2); hudCtx.fill();
+        hudCtx.strokeStyle = 'rgba(255,214,140,0.85)'; hudCtx.lineWidth = 2;
+        roundRect(tTownX, extraY, twoW, twoH, twoH / 2); hudCtx.stroke();
+        hudCtx.fillStyle = '#ffe9c8';
+        hudCtx.fillText(townView ? '回航行' : '上镇 G', tTownX + twoW / 2, extraY + twoH * 0.66);
         hudCtx.textAlign = 'left';
-      } else fishBtnRect = null;
-    } else { dockBtnRect = null; fishBtnRect = null; }
+      } else { fishBtnRect = null; townViewBtnRect = null; }
+    } else { dockBtnRect = null; fishBtnRect = null; townViewBtnRect = null; }
     /* Recruit prompt: when a drifter is within reach, a bright button appears
      * near the bottom centre. Tapping it recruits them. */
     var recruitNow = inRecruitRange();
@@ -9245,7 +9610,7 @@ var THREE = __wxRoot.THREE || window.THREE;
       hudCtx.fillStyle = 'rgba(8,14,26,0.5)'; hudCtx.fillRect(0, 0, w, h);
       var pW = Math.min(w * 0.78, 560);
       var rowH = font * 2.1;
-      var pH = Math.min(h * 0.76, 92 + rowH * Math.max(1, Math.min(parts2.length, 6)));
+      var pH = Math.min(h * 0.8, 150 + rowH * Math.max(1, Math.min(parts2.length, 6)));
       var pX = (w - pW) / 2, pY = (h - pH) / 2;
       hudCtx.fillStyle = 'rgba(18,26,44,0.96)';
       roundRect(pX, pY, pW, pH, 16); hudCtx.fill();
@@ -9259,8 +9624,38 @@ var THREE = __wxRoot.THREE || window.THREE;
       hudCtx.fillStyle = 'rgba(223,242,255,0.75)';
       hudCtx.fillText('木 ' + res.wood + '   塑 ' + res.plastic + '   铁 ' + res.metal
         + '   ·   建筑 ' + parts2.length + ' 件', w / 2, pY + font * 2.7);
+      /* --- 船体进化：当前船型 / 下一级 / 升级按钮 --- */
+      var tierNow = SHIP_TIERS[shipTier], tierNext = SHIP_TIERS[shipTier + 1] || null;
+      var upY = pY + font * 3.5;
+      hudCtx.font = '800 ' + (font * 0.86) + 'px ' + FONT;
+      hudCtx.fillStyle = '#bfe8ff';
+      hudCtx.fillText('当前船型：' + tierNow.name + '（第 ' + (shipTier + 1) + '/5 级）', w / 2, upY);
+      upgradeBtnRect = null;
+      if (tierNext) {
+        hudCtx.font = '700 ' + (font * 0.72) + 'px ' + FONT;
+        hudCtx.fillStyle = 'rgba(223,242,255,0.8)';
+        hudCtx.fillText('升级到 ' + tierNext.name + '：木' + tierNext.upgradeCost.wood
+          + ' 塑' + tierNext.upgradeCost.plastic + ' 铁' + tierNext.upgradeCost.metal
+          + ' · 需建筑 ' + tierNow.needBuildings + ' 件', w / 2, upY + font * 1.25);
+        var upW = Math.min(pW * 0.5, 190), upH = font * 1.7;
+        var upX = (w - upW) / 2, upY2 = upY + font * 1.75;
+        var okUp = canUpgrade();
+        hudCtx.fillStyle = okUp ? 'rgba(60,140,90,0.92)' : 'rgba(60,66,78,0.85)';
+        roundRect(upX, upY2, upW, upH, upH / 2); hudCtx.fill();
+        hudCtx.strokeStyle = okUp ? 'rgba(170,255,200,0.95)' : 'rgba(255,255,255,0.25)';
+        hudCtx.lineWidth = 2;
+        roundRect(upX, upY2, upW, upH, upH / 2); hudCtx.stroke();
+        hudCtx.fillStyle = okUp ? '#eaffef' : 'rgba(220,230,240,0.7)';
+        hudCtx.font = '800 ' + (font * 0.84) + 'px ' + FONT;
+        hudCtx.fillText(okUp ? '升级船只' : '条件未满足', upX + upW / 2, upY2 + upH * 0.68);
+        upgradeBtnRect = { x: upX, y: upY2, w: upW, h: upH, ok: okUp };
+      } else {
+        hudCtx.font = '700 ' + (font * 0.72) + 'px ' + FONT;
+        hudCtx.fillStyle = '#ffe2a8';
+        hudCtx.fillText('已是最大船型', w / 2, upY + font * 1.25);
+      }
       manageRects = [];
-      var listY = pY + font * 3.5;
+      var listY = upY + (tierNext ? font * 4.4 : font * 2.6);
       var maxRows = Math.floor((pH - font * 5.2) / rowH);
       for (var pi = 0; pi < parts2.length && pi < Math.max(1, maxRows); pi++) {
         var p2 = parts2[pi], ry = listY + pi * rowH;
@@ -9450,6 +9845,19 @@ var THREE = __wxRoot.THREE || window.THREE;
       try { sushiUI = window.SushiShop.drawPanel(hudCtx, w, h, { font: Math.max(15, font), tab: sushiTab }); }
       catch (e) { sushiUI = null; }
     }
+    /* Debug only: show the tier-cycle migration result on screen so an
+     * unattended playtest screenshot verifies buildings survive every tier. */
+    if (R.debugBuildAll && window.__debugTierCycle) {
+      var cyc = window.__debugTierCycle, txt = cyc.error ? ('船型切换异常 ' + cyc.error)
+        : ('船型迁移 ' + (cyc.survived ? '通过' : '失败') + ' · 件数 ' + cyc.before
+           + ' · ' + cyc.log.join(' / '));
+      hudCtx.font = '700 ' + (font * 0.72) + 'px ' + FONT;
+      hudCtx.fillStyle = 'rgba(10,20,34,0.78)';
+      var tw = hudCtx.measureText(txt).width + 20;
+      roundRect(m, h - m - font * 1.6, tw, font * 1.5, 8); hudCtx.fill();
+      hudCtx.fillStyle = cyc.error ? '#ffb4a0' : '#9ff0b8';
+      hudCtx.fillText(txt, m + 10, h - m - font * 0.55);
+    }
   }
 
   /* 8. GAME STATE */
@@ -9479,6 +9887,7 @@ var THREE = __wxRoot.THREE || window.THREE;
    * a partial refund, and shows what the raft is carrying. Opened from the 船
    * button (or the M key), drawn entirely in Canvas 2D. */
   var manageOpen = false, manageRects = null, manageSel = 0, manageBtnRect = null;
+  var upgradeBtnRect = null;   // 船只管理面板里的「升级船只」按钮
   var recruitRect = null;      // hit area of the recruit button
   /* --- Castaways: survivors drifting on flotsam. Sail up to one, tap it, and
    * they join the raft with a specialty that changes how the run plays. This is
@@ -9520,7 +9929,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     var pool = CASTAWAY_DEFS.filter(function (d) { return !used[d.id]; });
     if (!pool.length) return;
     var def = pool[Math.floor(Math.random() * pool.length)];
-    var a = Math.random() * Math.PI * 2, d = SHIP_HALF_LEN + 3 + Math.random() * 6;
+    var a = Math.random() * Math.PI * 2, d = shipHalfLen() + 3 + Math.random() * 6;
     var x = hero.x + Math.cos(a) * d, z = hero.z + Math.sin(a) * d;
     var node = makeCharacter('pickup', R.pickupSize * 1.5, CASTAWAY_BOXES);
     var ring = new THREE.Mesh(new THREE.RingGeometry(1.1, 1.35, 32),
@@ -9536,7 +9945,7 @@ var THREE = __wxRoot.THREE || window.THREE;
   function tryRecruit() {
     for (var i = castaways.length - 1; i >= 0; i--) {
       var c = castaways[i];
-      if (Math.hypot(c.x - hero.x, c.z - hero.z) > SHIP_HALF_LEN + 3.5) continue;
+      if (Math.hypot(c.x - hero.x, c.z - hero.z) > shipHalfLen() + 3.5) continue;
       recruited.push(c.def);
       applyPerk(c.def);
       // Mirror into the dialogue module so this NPC can talk to the player and
@@ -9569,13 +9978,13 @@ var THREE = __wxRoot.THREE || window.THREE;
       c.ring.material.opacity = 0.4 + Math.sin(c.t * 2.4) * 0.2;
       // The drifter slowly makes for the ship, so they are approachable.
       var dx = hero.x - c.x, dz = hero.z - c.z, d = Math.hypot(dx, dz);
-      if (d > SHIP_HALF_LEN + 2) { c.x += dx / d * dt * 0.5; c.z += dz / d * dt * 0.5; }
+      if (d > shipHalfLen() + 2) { c.x += dx / d * dt * 0.5; c.z += dz / d * dt * 0.5; }
       c.ring.position.set(c.x, WATER_Y + 0.12, c.z);
     }
   }
   function inRecruitRange() {
     for (var i = 0; i < castaways.length; i++) {
-      if (Math.hypot(castaways[i].x - hero.x, castaways[i].z - hero.z) <= SHIP_HALF_LEN + 3.5) return castaways[i];
+      if (Math.hypot(castaways[i].x - hero.x, castaways[i].z - hero.z) <= shipHalfLen() + 3.5) return castaways[i];
     }
     return null;
   }
@@ -9626,7 +10035,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     return true;
   }
   function openManage() { if (!manageOpen) { manageOpen = true; manageSel = 0; blip(560, 0.1, 'sine', 0.04, 720); } }
-  function closeManage() { manageOpen = false; manageRects = null; }
+  function closeManage() { manageOpen = false; manageRects = null; upgradeBtnRect = null; }
   /* --- 成就 / 排行榜面板的开合与数据 -----------------------------------
    * 面板是「独占」的：打开时把管理面板、建造菜单、蓝图选择一起收掉，这样同一
    * 时刻只有一个浮层在吃指针事件，命中判断不会互相打架。
@@ -9683,6 +10092,7 @@ var THREE = __wxRoot.THREE || window.THREE;
   var magnet = 0, tradeBonus = 0, shieldBonus = 0;
   /* The build choice: two blueprints on offer, the player picks one. */
   var buildOffer = null, buildOfferT = 0, offerCooldown = 6, buildSel = 0, buildCardRects = null;
+  var townCardRects = null;   // 城镇图纸卡片的独立命中区（勿与 buildCardRects 共用）
   var surgeT = 0, surgeShowT = 0, waterDry = 0, waterDropT = 0, guardT = 0;
   function canAfford(spec) {
     return res.wood >= spec.cost.wood && res.plastic >= spec.cost.plastic && res.metal >= spec.cost.metal;
@@ -9796,7 +10206,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     if (!canAfford(spec)) { addFT('材料不够！', hero.x, hero.z, '#ff9a96', 1.2); return; }
     payFor(spec);
     var model = voxelModel(BUILDING_BOXES[specIndex], true);
-    var at = BUILDING_POS[buildings.length % BUILDING_POS.length];
+    var at = currentBuildingSlot(buildings.length);
     model.position.set(at[0], at[1], at[2]);
     model.scale.setScalar(BUILDING_SCALE);
     model.userData.pop = 0;
@@ -9897,7 +10307,8 @@ var THREE = __wxRoot.THREE || window.THREE;
     for (var i = 0; i < survival.length; i++) if (survival[i] === step.id) return false;
     res.wood -= cost.wood; res.plastic -= cost.plastic; res.metal -= cost.metal;
     var model = voxelModel(step.boxes, true);
-    model.position.set(step.at[0], step.at[1], step.at[2]);
+    var sat = currentSurvivalSlot(survival.length);
+    model.position.set(sat[0], sat[1], sat[2]);
     model.scale.setScalar(step.scale);
     model.userData.pop = 0;
     hero.node.userData.body.add(model);
@@ -9925,7 +10336,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     // bow (facing) so simply steering forward always yields something.
     for (var tries = 0; tries < 300; tries++) {
       var a = Math.random() * Math.PI * 2;
-      var r = SHIP_HALF_LEN * 0.45 + Math.random() * (SHIP_HALF_LEN * 0.85);
+      var r = shipHalfLen() * 0.45 + Math.random() * (shipHalfLen() * 0.85);
       var x = hero.x + Math.cos(a) * r, z = hero.z + Math.sin(a) * r;
       if (groundAt(x, z) > 0) continue;
       return { x: x, z: z };
@@ -10089,9 +10500,35 @@ var THREE = __wxRoot.THREE || window.THREE;
     var saved = loadWorld();
     if (saved) {
       restoreWorld(saved);
+      applyTier(saved.tier === undefined ? 0 : saved.tier, true);   // 恢复船型
       if (survival.length || buildings.length) {
         addFT('欢迎回来 · 你的小镇还在', hero.x, hero.z, '#9ff0b8', 3);
       }
+    } else {
+      applyTier(0, true);   // 冷启动：从木筏开始，不是直接给邮轮
+    }
+    /* Debug only: force a tier for unattended playtests / screenshots. */
+    if (R.debugTier !== '' && R.debugTier !== undefined && R.debugTier !== null) {
+      var dt = R.debugTier, di = typeof dt === 'number' ? (dt | 0) : -1;
+      if (di < 0) for (var di2 = 0; di2 < SHIP_TIERS.length; di2++) if (SHIP_TIERS[di2].id === dt) di = di2;
+      if (di >= 0 && di < SHIP_TIERS.length) applyTier(di, true);
+    }
+    /* Debug only: build every structure, then cycle all five tiers so a
+     * playtest screenshot proves the buildings migrate and never disappear. */
+    if (R.debugBuildAll) {
+      try {
+        window.__debugBuildAll();
+        var before = buildings.length + survival.length;
+        var log = [];
+        for (var tc = 0; tc < SHIP_TIERS.length; tc++) {
+          applyTier(tc, true);
+          log.push(SHIP_TIERS[tc].id + ':' + (buildings.length + survival.length));
+        }
+        window.__debugTierCycle = { before: before, log: log,
+          survived: buildings.length + survival.length === before };
+        /* leave the biggest ship on screen for the screenshot */
+        applyTier(SHIP_TIERS.length - 1, true);
+      } catch (e) { window.__debugTierCycle = { error: String(e && e.message || e) }; }
     }
     for (var i = 0; i < R.maxPickups; i++) addPickup();
     addEnemy();
@@ -10180,7 +10617,7 @@ var THREE = __wxRoot.THREE || window.THREE;
         survival: survival.slice(),            // ids of built survival gear
         // Keep the array aligned with buildings[]; null marks an unknown one.
         townSpecs: buildings.map(function (b) { return b.userData.specIndex === undefined ? null : b.userData.specIndex; }),
-        res: res, score: score, pop: pop,
+        res: res, score: score, pop: pop, tier: shipTier,
         recruitedIds: recruited.map(function (r) { return r.id; }).filter(function (x) { return x; })
       }));
     } catch (e) { /* sandboxed or full */ }
@@ -10216,7 +10653,8 @@ var THREE = __wxRoot.THREE || window.THREE;
         if (!step) continue;
         // Rebuild it without paying again.
         var model = voxelModel(step.boxes, true);
-        model.position.set(step.at[0], step.at[1], step.at[2]);
+        var sat = currentSurvivalSlot(survival.length);
+        model.position.set(sat[0], sat[1], sat[2]);
         model.scale.setScalar(step.scale);
         model.userData.pop = 1;   // skip the pop animation
         hero.node.userData.body.add(model);
@@ -10231,7 +10669,7 @@ var THREE = __wxRoot.THREE || window.THREE;
         var specIdx = saved.townSpecs[b];
         if (specIdx === undefined || specIdx === null || specIdx >= BUILDING_SPECS.length) continue;
         var spec = BUILDING_SPECS[specIdx];
-        var at = BUILDING_POS[buildings.length % BUILDING_POS.length];
+        var at = currentBuildingSlot(buildings.length);
         if (!at) continue;
         var bmodel = voxelModel(BUILDING_BOXES[specIdx], true);
         bmodel.position.set(at[0], at[1], at[2]);
@@ -10347,6 +10785,8 @@ var THREE = __wxRoot.THREE || window.THREE;
     }
     if (event.code === 'KeyB' && phase === 'playing' && !paused) { openBuildMenu(); event.preventDefault(); return; }
     if (event.code === 'KeyV' && phase === 'playing' && !paused && !manageOpen) { openManage(); event.preventDefault(); return; }
+    // G — 上甲板进镇 / 回航行视角（需先下锚）
+    if (event.code === 'KeyG' && phase === 'playing' && !paused) { toggleTownView(); event.preventDefault(); return; }
     // Escape also backs out of a dive.
     if (event.code === 'Escape' && dive && dive.active()) { exitDive(); event.preventDefault(); return; }
     if (event.code === 'Escape' && manageOpen) { closeManage(); event.preventDefault(); return; }
@@ -10396,6 +10836,20 @@ var THREE = __wxRoot.THREE || window.THREE;
       return;
     }
     if (phase !== 'playing') { if (canRestart()) start(); return; }
+    /* --- 城镇图纸选择：最高优先级模态。独立使用 townCardRects（不与工作台
+     * 建造菜单的 buildCardRects 共用，否则后者会在 drawHUD 里把它清空，导致
+     * 「选图纸点击没反应」这个 bug）。 ---
+     */
+    if (buildOffer && townCardRects) {
+      for (var bc = 0; bc < townCardRects.length; bc++) {
+        var rc = townCardRects[bc];
+        if (event.clientX >= rc.x && event.clientX <= rc.x + rc.w
+            && event.clientY >= rc.y && event.clientY <= rc.y + rc.h) {
+          pickBuild(rc.index); return;
+        }
+      }
+      return; // 选图纸期间，卡片外的点击全部忽略
+    }
     /* --- NPC 对话面板：点选项 / 点关闭 / 点别处关 --- */
     if (npcPanelOpen) {
       if (npcUI) {
@@ -10451,8 +10905,14 @@ var THREE = __wxRoot.THREE || window.THREE;
         && event.clientY >= npcHintRect.y && event.clientY <= npcHintRect.y + npcHintRect.h) {
       openNpcPanel(); return;
     }
-    // Ship management panel: demolish buttons, or tap outside to close.
+    // Ship management panel: upgrade button, demolish buttons, or tap outside.
     if (manageOpen) {
+      if (upgradeBtnRect && upgradeBtnRect.ok
+          && event.clientX >= upgradeBtnRect.x && event.clientX <= upgradeBtnRect.x + upgradeBtnRect.w
+          && event.clientY >= upgradeBtnRect.y && event.clientY <= upgradeBtnRect.y + upgradeBtnRect.h) {
+        tryUpgrade();
+        return;
+      }
       if (manageRects) {
         for (var mr = 0; mr < manageRects.length; mr++) {
           var mrc = manageRects[mr];
@@ -10506,6 +10966,12 @@ var THREE = __wxRoot.THREE || window.THREE;
       if (fishReady) reelIn(); else castLine();
       return;
     }
+    if (townViewBtnRect
+        && event.clientX >= townViewBtnRect.x && event.clientX <= townViewBtnRect.x + townViewBtnRect.w
+        && event.clientY >= townViewBtnRect.y && event.clientY <= townViewBtnRect.y + townViewBtnRect.h) {
+      toggleTownView();
+      return;
+    }
     // Ship management button.
     if (manageBtnRect) {
       var smx = event.clientX - manageBtnRect.x, smy = event.clientY - manageBtnRect.y;
@@ -10552,17 +11018,6 @@ var THREE = __wxRoot.THREE || window.THREE;
     if (buildBtnRect) {
       var bbx = event.clientX - buildBtnRect.x, bby = event.clientY - buildBtnRect.y;
       if (bbx * bbx + bby * bby <= buildBtnRect.r * buildBtnRect.r) { openBuildMenu(); return; }
-    }
-    // Tapping a blueprint card picks it; the run is paused behind the offer.
-    if (buildOffer && buildCardRects) {
-      for (var bc = 0; bc < buildCardRects.length; bc++) {
-        var rc = buildCardRects[bc];
-        if (event.clientX >= rc.x && event.clientX <= rc.x + rc.w
-            && event.clientY >= rc.y && event.clientY <= rc.y + rc.h) {
-          pickBuild(rc.index); return;
-        }
-      }
-      return; // taps outside the cards are ignored while choosing
     }
     if (boostRect) {
       var bdx = event.clientX - boostRect.x, bdy = event.clientY - boostRect.y;
@@ -10624,8 +11079,8 @@ var THREE = __wxRoot.THREE || window.THREE;
     hero.dashT = R.dash.time;
     hero.dashCd = R.dash.cooldown;
     hero.dashX = dir.x; hero.dashZ = dir.z;
-    spawnFoam(hero.x - Math.sin(hero.facing) * SHIP_HALF_LEN * 0.6,
-              hero.z - Math.cos(hero.facing) * SHIP_HALF_LEN * 0.6, 14, 3.4);
+    spawnFoam(hero.x - Math.sin(hero.facing) * shipHalfLen() * 0.6,
+              hero.z - Math.cos(hero.facing) * shipHalfLen() * 0.6, 14, 3.4);
     blip(300, 0.18, 'triangle', 0.05, 700);
   }
 
@@ -10754,14 +11209,14 @@ var THREE = __wxRoot.THREE || window.THREE;
       if (heroSpd > 3 && wakeTimer <= 0) {
         wakeTimer = 0.07;
         var wnx = hero.vx / heroSpd, wnz = hero.vz / heroSpd;
-        var sternX = hero.x - wnx * SHIP_HALF_LEN * 0.92;
-        var sternZ = hero.z - wnz * SHIP_HALF_LEN * 0.92;
+        var sternX = hero.x - wnx * shipHalfLen() * 0.92;
+        var sternZ = hero.z - wnz * shipHalfLen() * 0.92;
         spawnFoam(sternX, sternZ, 2, 1.6);
         if (Math.random() < 0.5) {
           // one quarter of the hull, alternating sides
           var sideSign = Math.random() < 0.5 ? 1 : -1;
-          spawnFoam(sternX + (-wnz) * sideSign * SHIP_HALF_BEAM,
-                    sternZ + (wnx) * sideSign * SHIP_HALF_BEAM, 1, 0.9);
+          spawnFoam(sternX + (-wnz) * sideSign * shipHalfBeam(),
+                    sternZ + (wnx) * sideSign * shipHalfBeam(), 1, 0.9);
         }
       }
 
@@ -10923,7 +11378,10 @@ var THREE = __wxRoot.THREE || window.THREE;
     hero.y = lerp(hero.y, floatY(hero.x, hero.z), Math.min(1, dt * 14));
     var moving = Math.hypot(hero.vx, hero.vz) > 0.5 && phase === 'playing';
     var heroBody = hero.node.userData.body;
-    if (!heroBody.userData.sprite) heroBody.scale.setScalar(BASE_HERO_SCALE * (hero.dashT > 0 ? 1 + Math.sin(t * 40) * 0.08 : 1));
+    // 用当前船型的缩放（applyTier 会改它），不要用开局那一次的固定常量，
+    // 否则换船后每帧都会被覆盖回木筏尺寸。
+    var tierScale = (SHIP_TIERS[shipTier] ? SHIP_TIERS[shipTier].heroSize / SHIP_TIERS[shipTier].modelHeight : BASE_HERO_SCALE);
+    if (!heroBody.userData.sprite) heroBody.scale.setScalar(tierScale * (hero.dashT > 0 ? 1 + Math.sin(t * 40) * 0.08 : 1));
     hero.node.position.set(hero.x, hero.y + (moving ? Math.abs(Math.sin(t * 12)) * 0.12 : Math.sin(t * 2.4) * 0.03), hero.z);
     if (heroBody.userData.sprite) heroBody.material.rotation = moving ? Math.sin(t * 12) * 0.06 : 0;
     else heroBody.rotation.y = lerp(heroBody.rotation.y, hero.facing, Math.min(1, dt * 10));
@@ -11090,9 +11548,21 @@ var THREE = __wxRoot.THREE || window.THREE;
   var PITCH = 45 * Math.PI / 180;
   var CAM_DISTANCE = 46;
   var focus = new THREE.Vector3(0, floatY(0, 0), 0);
+  /* 进镇视角：下锚后可以「走上甲板」，把相机拉近、压低俯角，让建好的
+   * 建筑以侧面立起来，而不是永远从高空俯视一艘扁平的船。 */
+  var townView = false;
+  function toggleTownView() {
+    if (!docked) { addFT('先下锚停船，才能上镇', hero.x, hero.z, '#ffb4a0', 1.8); return; }
+    townView = !townView;
+    addFT(townView ? '已上镇 · 走近看看你的小镇' : '回到航行视角', hero.x, hero.z, '#9ff0b8', 2);
+    blip(townView ? 560 : 420, 0.15, 'sine', 0.05, townView ? 760 : 300);
+  }
   function cameraDistance() {
     var aspect = camera.aspect;
-    return aspect >= 1 ? CAM_DISTANCE : CAM_DISTANCE + (1 - aspect) * 34;
+    // 船越小镜头越近；上镇时固定贴近甲板。
+    var base = townView ? 20 : (SHIP_TIERS[shipTier] ? SHIP_TIERS[shipTier].camDistance : CAM_DISTANCE);
+    var dist = base;
+    return aspect >= 1 ? dist : dist + (1 - aspect) * (townView ? 18 : 34);
   }
   function placeCamera(dt) {
     // Follow the hero all the way to the shore; narrow portrait screens would otherwise lose it.
@@ -11100,10 +11570,11 @@ var THREE = __wxRoot.THREE || window.THREE;
     focus.z = lerp(focus.z, hero.z, Math.min(1, dt * 5));
     focus.y = lerp(focus.y, hero.y, Math.min(1, dt * 4));
     var distance = cameraDistance();
-    // Aim above the waterline so the whole hull + superstructure is framed; on
-    // the result screen bias further down so the card does not cover the town.
-    var lift = phase === 'playing' ? R.heroSize * 0.55 : R.heroSize * 0.20;
-    camera.position.set(focus.x, focus.y + Math.sin(PITCH) * distance, focus.z + Math.cos(PITCH) * distance);
+    // 上镇时把镜头压低（俯角 20°）并聚焦到甲板高度，建筑就有了立体侧面；
+    // 航行/结算时保持俯视 45° 以看到整艘船。
+    var pitch = townView ? 20 * Math.PI / 180 : PITCH;
+    var lift = townView ? 3.0 : (phase === 'playing' ? R.heroSize * 0.55 : R.heroSize * 0.20);
+    camera.position.set(focus.x, focus.y + Math.sin(pitch) * distance, focus.z + Math.cos(pitch) * distance);
     if (shake > 0) {
       camera.position.x += (Math.random() - 0.5) * shake * 0.9;
       camera.position.y += (Math.random() - 0.5) * shake * 0.6;
@@ -11192,7 +11663,11 @@ var THREE = __wxRoot.THREE || window.THREE;
       var key = new THREE.DirectionalLight('#ffe2c4', 2.2);
       key.position.set(-3, 5, 4);
       stage.add(key);
-      var model = voxelModel(MODELS[slot]);
+      /* hero 的特写跟随当前船型：开局是木筏，升级后是对应船体，而不是永远
+       * 拍那艘静态邮轮。slot 里其它角色仍用各自固定的模型。 */
+      var heroBoxes = slot === 'hero' && SHIP_TIERS[shipTier]
+        ? SHIP_TIERS[shipTier].boxes : MODELS[slot];
+      var model = voxelModel(heroBoxes);
       stage.add(model);
       var box = new THREE.Box3().setFromObject(model), center = box.getCenter(new THREE.Vector3()), extent = box.getSize(new THREE.Vector3());
       var cam = new THREE.PerspectiveCamera(30, 1, 0.1, 500);
@@ -11319,7 +11794,9 @@ var THREE = __wxRoot.THREE || window.THREE;
       recruited: recruited.map(function (r) { return r.name; }),
       recruitAvailable: !!inRecruitRange(),
       docked: docked, fishReady: fishReady, fishTimer: Math.round(fishTimer * 10) / 10,
+      shipTier: shipTier, shipTierName: SHIP_TIERS[shipTier].name, canUpgrade: canUpgrade(),
       dockBtnVisible: !!dockBtnRect, fishBtnVisible: !!fishBtnRect,
+      townViewBtnVisible: !!townViewBtnRect, townView: townView,
       diveExitVisible: !!diveExitRect, diveExitBanner: Math.round(diveExitBanner * 10) / 10,
       canOpenBuild: typeof openBuildMenu === 'function',
       selfSustain: Math.round(selfSustainT * 10) / 10, townReady: townReady, buildOpen: buildOpen,
@@ -11389,6 +11866,33 @@ var THREE = __wxRoot.THREE || window.THREE;
   };
   window.__debugOpenBuild = function () { openBuildMenu(); return buildOpen; };
   window.__debugBuild = function (id) { return pickSurvival(id); };
+  /* Force the town blueprint offer (bypasses townReady) for click regression. */
+  window.__debugOfferTown = function () {
+    townReady = true;
+    res.wood = 999; res.plastic = 999; res.metal = 999;
+    var saved = R.autoBuild; R.autoBuild = false;   // force the card UI
+    offerBuild();
+    R.autoBuild = saved;
+    return buildOffer ? buildOffer.slice() : null;
+  };
+  window.__debugTownRects = function () { return townCardRects; };
+  /* 船体 5 级：强制切级 / 查看分级表。 */
+  window.__debugSetTier = function (idOrIndex) {
+    var idx = typeof idOrIndex === 'string'
+      ? SHIP_TIERS.findIndex(function (t) { return t.id === idOrIndex; })
+      : (idOrIndex | 0);
+    if (idx < 0 || idx >= SHIP_TIERS.length) return { ok: false, reason: 'unknown-tier' };
+    applyTier(idx, true);
+    return { ok: true, index: idx, id: SHIP_TIERS[idx].id, name: SHIP_TIERS[idx].name };
+  };
+  window.__debugTiers = function () {
+    return SHIP_TIERS.map(function (t, i) {
+      return { index: i, id: t.id, name: t.name, boxes: t.boxes.length,
+        slots: t.slotCount, cam: t.camDistance, heroSize: t.heroSize,
+        modelHeight: t.modelHeight };
+    });
+  };
+  window.__debugUpgrade = function () { return tryUpgrade(); };
   /* Build every structure at once, for verifying that the whole town lands on
    * the ship's decks (and for screenshots of a finished liner). */
   window.__debugBuildAll = function () {
