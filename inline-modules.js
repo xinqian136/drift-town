@@ -21,7 +21,9 @@ const MODULES = [
   { file: 'game-data.js', marker: 'GameData' },
   { file: 'prototype/dive/dive-canvas.js', marker: 'DiveGame' },
   { file: 'achievements.js', marker: 'Achievements' },
-  { file: 'leaderboard.js', marker: 'Leaderboard' }
+  { file: 'leaderboard.js', marker: 'Leaderboard' },
+  { file: 'npc-dialogue.js', marker: 'NpcDialogue' },
+  { file: 'sushi-shop.js', marker: 'SushiShop' }
 ];
 
 function buildBlock() {

@@ -5807,6 +5807,894 @@ var THREE = __wxRoot.THREE || window.THREE;
 });
 
 })();
+
+/* --- inlined from npc-dialogue.js --- */
+(function () {
+/**
+ * 漂流小镇 · NPC 对话与好感度
+ * =============================================================================
+ * 把 data/npcs.json 里已经写好的小传、招募条件、好感事件链，做成游戏里能跑的
+ * 对话系统。和 achievements.js / leaderboard.js 一样是零依赖 IIFE，挂在
+ * window.NpcDialogue 上，同时 module.exports（node 可 require）。
+ *
+ * 设计边界（务必看清，不要当已验证）：
+ *   - 本模块只负责「状态与数据」：谁在船上、好感多少、哪些事件已触发、
+ *     当前该说什么、玩家选了之后发生什么。
+ *   - 绘制只在 draw* 函数里做，收 ctx 参数，绝不碰 DOM。
+ *   - 数据中没有的字段一律降级处理，不抛异常。
+ *   - data/npcs.json 的 events 是 schema（字段定义），不是事件实例数组；
+ *     真正的事件实例在每个 npc 的 affinityEvents[] 里。
+ */
+(function (root, factory) {
+  'use strict';
+  var api = factory();
+  if (root) root.NpcDialogue = api;
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+})(typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : this), function () {
+  'use strict';
+
+  var MODULE_VERSION = '1.0.0';
+  var SAVE_KEY = 'drift-town:npc-dialogue:v1';
+
+  /* ==== 内联的 NPC 与事件数据（由 data/npcs.json 提取精华） ====
+   * 只保留游戏消费的字段，避免把整张表（含大量说明文字）打进包体。 */
+
+  var NPCS = [
+    {
+      id: 'laochen', name: '老陈', title: '捞了四十年的老手', specialty: 'salvage',
+      perk: '打捞范围 +40%', color: '#8fb8d8',
+      bio: '大潮前是渔船上的水手，大潮后是海上最会看垃圾往哪漂的人。话少，手快，说「这玩意儿有用」的时候基本都对。',
+      legacy: '他原来的船叫「陈记二号」，沉在离这里两天航程的地方。他从不提船，只提船上那口锅。',
+      events: [
+        { id: 'laochen-1', type: 'help', title: '补网',
+          desc: '他又弄破了一张网，说这次是故意的，想看看你学没学会。',
+          choices: [
+            { text: '帮他补', affinity: 10, message: '他没说话，但第二天甲板上多了一桶淡水。' },
+            { text: '让他自己补', affinity: 2, message: '「也对，我还没老到不能动。」' }
+          ] },
+        { id: 'laochen-2', type: 'story', title: '陈记二号',
+          desc: '喝了点酒之后，他第一次说起了自己的船。',
+          choices: [
+            { text: '问船沉在哪里', affinity: 15, message: '他画了一张潦草的图，标注了两天航程外的一片水域。' },
+            { text: '什么都不问', affinity: 5, message: '他点点头，把酒壶收了回去。' }
+          ] }
+      ]
+    },
+    {
+      id: 'ahai', name: '阿海', title: '第一个戴上面罩的人', specialty: 'dive',
+      perk: '潜水氧气 +20 秒', color: '#7fd8e8',
+      bio: '在别的聚落做过潜水员，是唯一一个见过海面之下的人。说话时眼睛总往水下看，像在数还有多少没捞上来。',
+      legacy: '他上一任搭档没上来。这件事他没跟任何人讲，但每次下水他都会多带一根绳子。',
+      events: [
+        { id: 'ahai-1', type: 'help', title: '多带的绳子',
+          desc: '他把绳子递给你，说他每次下水都多带一根。',
+          choices: [
+            { text: '问他为什么', affinity: 12, message: '「万一有人需要。」他这么说的时候没看你。' },
+            { text: '收下就好', affinity: 6, message: '他松了口气。' }
+          ] },
+        { id: 'ahai-2', type: 'story', title: '中层的光',
+          desc: '他说中层水域有一片会发光的东西，他从来没敢靠近。',
+          choices: [
+            { text: '提议一起去', affinity: 18, message: '你们一起下去了。那是一片会随着水流呼吸的藻。' },
+            { text: '记在地图上', affinity: 8, message: '他把位置画在海图边缘，很轻。' }
+          ] }
+      ]
+    },
+    {
+      id: 'xiaoman', name: '小满', title: '把海的馈赠做成一餐的人', specialty: 'cook',
+      perk: '寿司店图纸 · 食物 +50%', color: '#e8b87f',
+      bio: '大潮前在陆地上的一家小店里切鱼，大潮后一直在找一个能重新开火的地方。她是解锁寿司店的关键。',
+      legacy: '她的刀是父亲留下的，刀柄缠过三次布。她说刀还在，店就还没关。',
+      events: [
+        { id: 'xiaoman-1', type: 'help', title: '磨刀',
+          desc: '她的刀钝了，磨刀石却丢在了水里。',
+          choices: [
+            { text: '潜下去找', affinity: 15, message: '你捞上来一块石头。她接过去，掂了掂，说「这个比原来的好」。' },
+            { text: '找块新的给她', affinity: 8, message: '她收下了，但看得出不是她想要的那种。' }
+          ] },
+        { id: 'xiaoman-2', type: 'conflict', title: '第一道菜',
+          desc: '她要你决定寿司店的第一道菜是什么。选错了她会照做，但不会高兴。',
+          choices: [
+            { text: '海藻卷（稳）', affinity: 10, message: '「稳妥。」她开始洗海藻，动作很快。' },
+            { text: '深海蟹肉军舰（赌）', affinity: 20, message: '她愣了两秒，然后笑了：「有胆。」' }
+          ] }
+      ]
+    },
+    {
+      id: 'tiejiangbo', name: '铁匠波', title: '只会往硬里做的匠人', specialty: 'build',
+      perk: '建造材料 -20%', color: '#b8a090',
+      bio: '手上有旧伤，握锤的姿势不对但打得比谁都稳。大潮时失去了一条腿（他给自己做了条木腿）。说话直接，讨厌废话。',
+      legacy: '他的工坊本来在沉城的第三层，现在那里是 Tier 3 海域。他说过想再回去看一眼。',
+      events: [
+        { id: 'tiejiangbo-1', type: 'trade', title: '木腿',
+          desc: '他的木腿裂了，想换一条。「但我不会求人。」',
+          choices: [
+            { text: '给他材料', affinity: 12, message: '他收了，第二天给你打了一副更结实的工具。' },
+            { text: '帮他一起做', affinity: 20, message: '你们花了一整晚。他最后说：「这条腿比上一条好。」' }
+          ] },
+        { id: 'tiejiangbo-2', type: 'story', title: '第三层',
+          desc: '他提起沉城里的工坊，声音低了下去。',
+          choices: [
+            { text: '承诺带他回去', affinity: 15, message: '「不用。你下去的时候帮我看看，那炉火是不是还亮着。」' },
+            { text: '转移话题', affinity: 3, message: '他点点头，继续敲他的铁。' }
+          ] }
+      ]
+    },
+    {
+      id: 'lili', name: '莉莉', title: '会在定价上跟你较劲的人', specialty: 'run',
+      perk: '售价 +10%', color: '#d8a0c8',
+      bio: '大潮前在岸上做买卖，算账比谁都快。来了就重新规划摊位位置，说「东西好吃不重要，要让人以为它好」。',
+      legacy: '她有一本记满了价格的旧账本，最后一页没写完。她说那天她正在算最后一笔。',
+      events: [
+        { id: 'lili-1', type: 'trade', title: '旧账本',
+          desc: '她让你帮她把账本上最后一页算完。',
+          choices: [
+            { text: '认真算', affinity: 15, message: '数字对不上的地方，她一直知道，只是需要有人一起看遍。' },
+            { text: '随手填个数字', affinity: -3, message: '她合上账本，什么都没说。' }
+          ] },
+        { id: 'lili-2', type: 'conflict', title: '涨价',
+          desc: '她想把海藻卷涨到两倍价。小满不同意。',
+          choices: [
+            { text: '支持莉莉', affinity: 12, message: '客流掉了两天，然后回来了。她赢了一局。' },
+            { text: '支持小满', affinity: 5, message: '「行吧，你们管味道。」她把账本翻到新的一页。' }
+          ] }
+      ]
+    }
+  ];
+
+  /* ==== 状态 ==== */
+
+  var state = {
+    recruited: {},     // id -> true
+    affinity: {},      // id -> number
+    fired: {},         // eventId -> true（已触发过的事件）
+    pending: null,     // { npcId, eventId } 当前待玩家选择的事件
+    log: []            // 最近的对白（供 UI 显示）
+  };
+
+  function clampAffinity(v) { return Math.max(-20, Math.min(100, Math.round(v || 0))); }
+  function npcById(id) {
+    for (var i = 0; i < NPCS.length; i++) if (NPCS[i].id === id) return NPCS[i];
+    return null;
+  }
+  function affinityOf(id) { return clampAffinity(state.affinity[id]); }
+
+  /** 好感度分档：决定了 NPC 对你说话的口气，也决定 2 号事件能否触发。 */
+  function tierOf(aff) {
+    if (aff >= 30) return { id: 'close', name: '知己' };
+    if (aff >= 15) return { id: 'friend', name: '朋友' };
+    if (aff >= 5) return { id: 'warm', name: '熟络' };
+    if (aff >= 0) return { id: 'new', name: '陌生' };
+    return { id: 'cold', name: '戒备' };
+  }
+
+  function note(text) {
+    state.log.push({ text: text, at: Date.now() });
+    if (state.log.length > 40) state.log.shift();
+  }
+
+  /* ==== 存档 ==== */
+
+  function load() {
+    try {
+      var storage = (typeof localStorage !== 'undefined') ? localStorage : null;
+      if (!storage) return false;
+      var raw = storage.getItem(SAVE_KEY);
+      if (!raw) return false;
+      var data = JSON.parse(raw);
+      state.recruited = data.recruited || {};
+      state.affinity = data.affinity || {};
+      state.fired = data.fired || {};
+      return true;
+    } catch (e) { return false; }
+  }
+  function save() {
+    try {
+      var storage = (typeof localStorage !== 'undefined') ? localStorage : null;
+      if (!storage) return false;
+      storage.setItem(SAVE_KEY, JSON.stringify({
+        recruited: state.recruited, affinity: state.affinity, fired: state.fired
+      }));
+      return true;
+    } catch (e) { return false; }
+  }
+  function reset() {
+    state.recruited = {}; state.affinity = {}; state.fired = {};
+    state.pending = null; state.log = [];
+    save();
+  }
+
+  /* ==== 招募 ==== */
+
+  /** 招募一个人上船。返回 { ok, npc?, reason? }。 */
+  function recruit(npcId) {
+    var npc = npcById(npcId);
+    if (!npc) return { ok: false, reason: 'unknown-npc' };
+    if (state.recruited[npcId]) return { ok: false, reason: 'already-aboard', npc: npc };
+    state.recruited[npcId] = true;
+    if (state.affinity[npcId] === undefined) state.affinity[npcId] = 0;
+    note(npc.name + ' 上船了。');
+    save();
+    return { ok: true, npc: npc };
+  }
+
+  function recruitedList() {
+    var out = [];
+    for (var i = 0; i < NPCS.length; i++) if (state.recruited[NPCS[i].id]) out.push(NPCS[i]);
+    return out;
+  }
+  function isAboard(id) { return !!state.recruited[id]; }
+
+  /* ==== 事件 ==== */
+
+  /** 当前有没有可选的事件？返回 { npc, event } 或 null。 */
+  function availableEvent() {
+    // 优先返回已经 pending 的
+    if (state.pending) {
+      var n0 = npcById(state.pending.npcId);
+      var ev0 = n0 ? findEvent(n0, state.pending.eventId) : null;
+      if (n0 && ev0) return { npc: n0, event: ev0 };
+      state.pending = null;
+    }
+    // 遍历所有在船上的人，找第一个可触发的事件
+    for (var i = 0; i < NPCS.length; i++) {
+      var npc = NPCS[i];
+      if (!state.recruited[npc.id]) continue;
+      var ev = nextEventFor(npc);
+      if (ev) { state.pending = { npcId: npc.id, eventId: ev.id }; return { npc: npc, event: ev }; }
+    }
+    return null;
+  }
+  function findEvent(npc, eventId) {
+    for (var i = 0; i < npc.events.length; i++) if (npc.events[i].id === eventId) return npc.events[i];
+    return null;
+  }
+  /** 第 0 个事件在好感 0 就能触发；第 1 个要求好感 >= 5（先聊过一次）。 */
+  function nextEventFor(npc) {
+    for (var i = 0; i < npc.events.length; i++) {
+      var ev = npc.events[i];
+      if (state.fired[ev.id]) continue;
+      var need = i === 0 ? 0 : 5;
+      if (affinityOf(npc.id) < need) continue;
+      return ev;
+    }
+    return null;
+  }
+  function firedCount() {
+    var n = 0;
+    for (var k in state.fired) if (state.fired[k]) n++;
+    return n;
+  }
+
+  /** 玩家选了一个选项。返回 { ok, affinityDelta, total, message, at }。 */
+  function choose(choiceIndex) {
+    if (!state.pending) return { ok: false, reason: 'no-pending' };
+    var npc = npcById(state.pending.npcId);
+    var ev = npc ? findEvent(npc, state.pending.eventId) : null;
+    if (!npc || !ev) { state.pending = null; return { ok: false, reason: 'event-gone' }; }
+    var choice = ev.choices[Math.max(0, Math.min(ev.choices.length - 1, choiceIndex | 0))];
+    var before = affinityOf(npc.id);
+    state.affinity[npc.id] = clampAffinity(before + (choice.affinity || 0));
+    state.fired[ev.id] = true;
+    state.pending = null;
+    note(ev.title + '：' + (choice.message || ''));
+    save();
+    return {
+      ok: true, npc: npc, event: ev, choice: choice,
+      affinityDelta: state.affinity[npc.id] - before,
+      total: state.affinity[npc.id],
+      message: choice.message || ''
+    };
+  }
+
+  /* ==== 汇总（给 achievements 之类消费） ==== */
+
+  function summary() {
+    return {
+      recruited: recruitedList().map(function (n) { return n.id; }),
+      affinity: Object.keys(state.affinity).map(function (k) {
+        return { id: k, value: affinityOf(k), tier: tierOf(affinityOf(k)).name };
+      }),
+      eventsFired: firedCount(),
+      totalAffinity: Object.keys(state.affinity).reduce(function (s, k) { return s + affinityOf(k); }, 0)
+    };
+  }
+
+  /* ==== 绘制（Canvas 2D，无 DOM） ==== */
+
+  var FONT_STACK = 'system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+
+  function rr(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  /**
+   * 画对话面板。opts: { font, scroll }
+   * 返回 { close: {x,y,w,h}, choices: [{x,y,w,h,index}], maxScroll }
+   */
+  function drawDialogue(ctx, w, h, opts) {
+    opts = opts || {};
+    var font = opts.font || 16;
+    var cur = availableEvent();
+    var out = { close: null, choices: [], maxScroll: 0 };
+    if (!cur) return out;
+
+    var pw = Math.min(w * 0.86, 620);
+    var ph = Math.min(h * 0.72, 440);
+    var px = (w - pw) / 2, py = (h - ph) / 2;
+
+    // Dim the scene.
+    ctx.fillStyle = 'rgba(6,12,22,0.62)';
+    ctx.fillRect(0, 0, w, h);
+
+    // Panel.
+    ctx.fillStyle = 'rgba(20,30,48,0.97)';
+    rr(ctx, px, py, pw, ph, 18); ctx.fill();
+    ctx.strokeStyle = 'rgba(150,220,255,0.4)'; ctx.lineWidth = 2;
+    rr(ctx, px, py, pw, ph, 18); ctx.stroke();
+
+    // Portrait placeholder: a coloured disc with the NPC's first character.
+    var pr = font * 1.9;
+    var pcx = px + pr + 22, pcy = py + pr + 20;
+    ctx.fillStyle = cur.npc.color || '#8fb8d8';
+    ctx.beginPath(); ctx.arc(pcx, pcy, pr, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.font = '700 ' + (pr * 1.1) + 'px ' + FONT_STACK;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(cur.npc.name.charAt(0), pcx, pcy + 1);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+
+    // Name + title + affinity.
+    var tx = pcx + pr + 16;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 ' + (font * 1.25) + 'px ' + FONT_STACK;
+    ctx.fillText(cur.npc.name, tx, py + font * 2.1);
+    ctx.fillStyle = 'rgba(200,225,250,0.75)';
+    ctx.font = '600 ' + (font * 0.78) + 'px ' + FONT_STACK;
+    ctx.fillText(cur.npc.title, tx, py + font * 3.25);
+
+    var aff = affinityOf(cur.npc.id);
+    var tier = tierOf(aff);
+    ctx.fillStyle = tier.id === 'cold' ? '#ffb4a0' : (tier.id === 'close' ? '#9ff0b8' : '#cfe6ff');
+    ctx.font = '700 ' + (font * 0.76) + 'px ' + FONT_STACK;
+    ctx.fillText(tier.name + ' · 好感 ' + aff, tx, py + font * 4.2);
+
+    // Close button.
+    var cb = font * 1.7;
+    var cbx = px + pw - cb - 14, cby = py + 14;
+    out.close = { x: cbx, y: cby, w: cb, h: cb };
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    rr(ctx, cbx, cby, cb, cb, cb / 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.font = '700 ' + (font * 0.95) + 'px ' + FONT_STACK;
+    ctx.textAlign = 'center';
+    ctx.fillText('×', cbx + cb / 2, cby + cb * 0.72);
+    ctx.textAlign = 'left';
+
+    // Event title + body.
+    var by = py + font * 5.6;
+    ctx.fillStyle = '#ffe2a8';
+    ctx.font = '800 ' + (font * 1.0) + 'px ' + FONT_STACK;
+    ctx.fillText(cur.event.title, px + 22, by);
+
+    ctx.fillStyle = 'rgba(235,245,255,0.92)';
+    ctx.font = '400 ' + (font * 0.86) + 'px ' + FONT_STACK;
+    var bodyLines = wrap(ctx, cur.event.desc, pw - 44);
+    for (var i = 0; i < bodyLines.length && i < 6; i++) {
+      ctx.fillText(bodyLines[i], px + 22, by + font * 1.6 + i * font * 1.35);
+    }
+
+    // Choices.
+    var cy = py + ph - font * (cur.event.choices.length * 2.6) - 16;
+    for (var c = 0; c < cur.event.choices.length; c++) {
+      var ch = cur.event.choices[c];
+      var cw = pw - 44, chh = font * 1.9;
+      var cx = px + 22, cyy = cy + c * (chh + 8);
+      ctx.fillStyle = 'rgba(60,100,140,0.55)';
+      rr(ctx, cx, cyy, cw, chh, chh / 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(160,220,255,0.45)'; ctx.lineWidth = 1.5;
+      rr(ctx, cx, cyy, cw, chh, chh / 2); ctx.stroke();
+      ctx.fillStyle = '#eaf6ff';
+      ctx.font = '700 ' + (font * 0.84) + 'px ' + FONT_STACK;
+      ctx.fillText(ch.text, cx + 16, cyy + chh * 0.66);
+      out.choices.push({ x: cx, y: cyy, w: cw, h: chh, index: c });
+    }
+    return out;
+  }
+
+  /** 画「有话说」的小气泡提示。 */
+  function drawHint(ctx, w, h, opts) {
+    opts = opts || {};
+    var font = opts.font || 16;
+    var cur = availableEvent();
+    if (!cur) return null;
+    var label = cur.npc.name + ' 有话要说';
+    ctx.font = '700 ' + (font * 0.82) + 'px ' + FONT_STACK;
+    var tw = ctx.measureText(label).width;
+    var bw = tw + 34, bh = font * 1.9;
+    var bx = (w - bw) / 2, by = h - bh - font * 4.2;
+    ctx.fillStyle = 'rgba(30,90,120,0.92)';
+    rr(ctx, bx, by, bw, bh, bh / 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(160,235,255,0.75)'; ctx.lineWidth = 2;
+    rr(ctx, bx, by, bw, bh, bh / 2); ctx.stroke();
+    ctx.fillStyle = '#dff6ff';
+    ctx.fillText(label, bx + 17, by + bh * 0.64);
+    return { x: bx, y: by, w: bw, h: bh };
+  }
+
+  function wrap(ctx, text, maxW) {
+    var lines = [], line = '', chars = String(text || '').split('');
+    for (var i = 0; i < chars.length; i++) {
+      var test = line + chars[i];
+      if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = chars[i]; }
+      else line = test;
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  /* ==== 自检 ==== */
+
+  function selfTest() {
+    var problems = [];
+    // 数据结构完整
+    for (var i = 0; i < NPCS.length; i++) {
+      var n = NPCS[i];
+      if (!n.id || !n.name) problems.push('npc[' + i + '] 缺 id/name');
+      if (!n.events || !n.events.length) problems.push(n.id + ' 没有事件');
+      for (var e = 0; e < (n.events || []).length; e++) {
+        var ev = n.events[e];
+        if (!ev.id || !ev.title || !ev.desc) problems.push(n.id + '.events[' + e + '] 字段不全');
+        if (!ev.choices || !ev.choices.length) problems.push(n.id + '.events[' + e + '] 没有选项');
+      }
+    }
+    // 纯函数健壮性
+    try {
+      affinityOf('nonexistent'); tierOf(-99); tierOf(999);
+      npcById('nobody');
+    } catch (err) { problems.push('纯函数抛异常: ' + err.message); }
+    // 非法选择
+    var r = choose(0);
+    if (r.ok !== false) problems.push('无 pending 时 choose 应返回 ok:false');
+    return { passed: problems.length === 0, problems: problems, npcCount: NPCS.length, version: MODULE_VERSION };
+  }
+
+  return {
+    VERSION: MODULE_VERSION,
+    NAMES: NPCS.map(function (n) { return n.name; }),
+    load: load, save: save, reset: reset,
+    recruit: recruit, isAboard: isAboard, recruitedList: recruitedList,
+    affinityOf: affinityOf, tierOf: tierOf,
+    availableEvent: availableEvent, choose: choose,
+    summary: summary,
+    drawDialogue: drawDialogue, drawHint: drawHint,
+    selfTest: selfTest
+  };
+});
+
+})();
+
+/* --- inlined from sushi-shop.js --- */
+(function () {
+/**
+ * 漂流小镇 · 寿司店与食材经济
+ * =============================================================================
+ * 把「潜水采集 → 食材入库 → 寿司店做菜 → 卖钱」这条链接通，也就是设计文档
+ * 阶段 4 的核心闭环。同时是 achievements.js / leaderboard.js 同款零依赖 IIFE，
+ * 挂在 window.SushiShop 上。
+ *
+ * 设计边界（别当已验证）：
+ *   - 这是本地模拟经营，没有真实客人与真实经济系统。
+ *   - 菜谱来自 data/recipes.json 的精华（内联，不读文件）。
+ *   - 没有后端：利润、口碑都是本地数值，不会跨设备同步。
+ *   - 绘制的都是 Canvas 2D 函数，收 ctx，不碰 DOM。
+ */
+(function (root, factory) {
+  'use strict';
+  var api = factory();
+  if (root) root.SushiShop = api;
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+})(typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : this), function () {
+  'use strict';
+
+  var MODULE_VERSION = '1.0.0';
+  var SAVE_KEY = 'drift-town:sushi:v1';
+
+  /* ==== 食材（潜水带回来的东西） ==== */
+  var INGREDIENTS = {
+    seaweed:      { name: '海藻',   tier: 1, from: 'dive' },
+    clam:         { name: '贝类',   tier: 1, from: 'dive' },
+    squid:        { name: '墨鱼',   tier: 2, from: 'dive' },
+    silverScale:  { name: '银鳞鱼', tier: 3, from: 'dive' },
+    seaUrchin:    { name: '海胆',   tier: 3, from: 'dive' },
+    fishRoe:      { name: '鱼子',   tier: 3, from: 'dive' },
+    deepKelp:     { name: '深海藻', tier: 3, from: 'dive' },
+    deepCrab:     { name: '深海蟹', tier: 4, from: 'dive' },
+    rice:         { name: '米',     tier: 1, from: 'market' }
+  };
+
+  /* ==== 菜谱（来自 data/recipes.json 的精华） ==== */
+  var RECIPES = [
+    { id: 'seaweedRoll',    name: '海藻卷',       tier: 1, need: { seaweed: 2, rice: 1 },              cookTime: 12, basePrice: 8,  priceRange: [15, 22],  rep: 1 },
+    { id: 'clamSashimi',    name: '贝类刺身',     tier: 1, need: { clam: 2, rice: 1 },                 cookTime: 14, basePrice: 10, priceRange: [16, 24],  rep: 1 },
+    { id: 'kelpSoup',       name: '海藻汤',       tier: 1, need: { seaweed: 1, deepKelp: 1 },          cookTime: 20, basePrice: 12, priceRange: [18, 26],  rep: 2 },
+    { id: 'grilledSkewer',  name: '烤串',         tier: 2, need: { squid: 1, silverScale: 1 },         cookTime: 18, basePrice: 16, priceRange: [26, 38],  rep: 2 },
+    { id: 'squidGunkan',    name: '墨鱼军舰',     tier: 2, need: { squid: 1, seaweed: 1, rice: 1 },    cookTime: 22, basePrice: 20, priceRange: [32, 46],  rep: 3 },
+    { id: 'silverScaleNigiri', name: '银鳞握寿司', tier: 3, need: { silverScale: 1, rice: 1 },         cookTime: 16, basePrice: 12, priceRange: [28, 40],  rep: 3 },
+    { id: 'seaUrchinBowl',  name: '海胆盖饭',     tier: 3, need: { seaUrchin: 1, rice: 2 },            cookTime: 24, basePrice: 22, priceRange: [42, 58],  rep: 4 },
+    { id: 'roeGunkan',      name: '鱼子军舰',     tier: 3, need: { fishRoe: 1, seaweed: 1, rice: 1 },  cookTime: 26, basePrice: 26, priceRange: [46, 64],  rep: 4 },
+    { id: 'deepCrabGunkan', name: '深海蟹肉军舰', tier: 4, need: { deepCrab: 1, seaweed: 1, deepKelp: 1 }, cookTime: 32, basePrice: 30, priceRange: [75, 98], rep: 6 },
+    { id: 'abyssPlatter',   name: '深渊拼盘',     tier: 4, need: { deepCrab: 1, squid: 1, seaUrchin: 1, rice: 2 }, cookTime: 45, basePrice: 58, priceRange: [120, 160], rep: 10 }
+  ];
+
+  /* ==== 状态 ==== */
+  var state = {
+    open: false,            // 寿司店是否已建成
+    stock: {},              // ingredientId -> 数量
+    menu: [],               // 上架菜谱 id（最多 menuSlots 道）
+    menuSlots: 3,
+    menuSlotsMax: 6,
+    price: {},              // recipeId -> 玩家定价
+    coins: 0,
+    reputation: 0,
+    daySold: 0,
+    lastSettle: null,
+    history: []             // 最近几天的结算
+  };
+
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  /* ==== 存档 ==== */
+  function load() {
+    try {
+      var s = (typeof localStorage !== 'undefined') ? localStorage : null;
+      if (!s) return false;
+      var raw = s.getItem(SAVE_KEY);
+      if (!raw) return false;
+      var d = JSON.parse(raw);
+      state.open = !!d.open;
+      state.stock = d.stock || {};
+      state.menu = d.menu || [];
+      state.menuSlots = d.menuSlots || 3;
+      state.price = d.price || {};
+      state.coins = d.coins || 0;
+      state.reputation = d.reputation || 0;
+      return true;
+    } catch (e) { return false; }
+  }
+  function save() {
+    try {
+      var s = (typeof localStorage !== 'undefined') ? localStorage : null;
+      if (!s) return false;
+      s.setItem(SAVE_KEY, JSON.stringify({
+        open: state.open, stock: state.stock, menu: state.menu,
+        menuSlots: state.menuSlots, price: state.price,
+        coins: state.coins, reputation: state.reputation
+      }));
+      return true;
+    } catch (e) { return false; }
+  }
+  function reset() {
+    state.open = false; state.stock = {}; state.menu = []; state.menuSlots = 3;
+    state.price = {}; state.coins = 0; state.reputation = 0;
+    state.daySold = 0; state.lastSettle = null; state.history = [];
+    save();
+  }
+
+  /* ==== 开店 ==== */
+  function unlock() {
+    if (state.open) return { ok: false, reason: 'already-open' };
+    state.open = true;
+    save();
+    return { ok: true };
+  }
+  function isOpen() { return state.open; }
+
+  /* ==== 食材 ==== */
+  /** 潜水带回的东西入库。diveLoot 可以是 { items: [{key, name}] } 或 { key: n }。 */
+  function addFromDive(diveLoot) {
+    if (!state.open || !diveLoot) return { ok: false, added: {} };
+    var added = {};
+    var items = diveLoot.items || [];
+    for (var i = 0; i < items.length; i++) {
+      var key = items[i].key || items[i].name;
+      var mapped = mapDiveKey(key);
+      if (!mapped) continue;
+      state.stock[mapped] = (state.stock[mapped] || 0) + 1;
+      added[mapped] = (added[mapped] || 0) + 1;
+    }
+    save();
+    return { ok: true, added: added };
+  }
+  /** 潜水模块的 key 和本模块的食材 id 不是一一对应，这里做一次映射。 */
+  function mapDiveKey(k) {
+    if (!k) return null;
+    var s = String(k).toLowerCase();
+    if (s.indexOf('seaweed') >= 0 || s.indexOf('kelp') >= 0) return s.indexOf('deep') >= 0 ? 'deepKelp' : 'seaweed';
+    if (s.indexOf('clam') >= 0 || s.indexOf('shell') >= 0) return 'clam';
+    if (s.indexOf('squid') >= 0) return 'squid';
+    if (s.indexOf('silver') >= 0) return 'silverScale';
+    if (s.indexOf('urchin') >= 0) return 'seaUrchin';
+    if (s.indexOf('roe') >= 0) return 'fishRoe';
+    if (s.indexOf('crab') >= 0) return 'deepCrab';
+    if (s.indexOf('rice') >= 0) return 'rice';
+    return null;
+  }
+  function stockOf(id) { return state.stock[id] || 0; }
+  function stockList() {
+    return Object.keys(INGREDIENTS).map(function (id) {
+      return { id: id, name: INGREDIENTS[id].name, tier: INGREDIENTS[id].tier, count: stockOf(id) };
+    }).filter(function (x) { return x.count > 0; });
+  }
+  /** 从市场买米（唯一非潜水来源的食材）。 */
+  function buyRice(n, coinsPer) {
+    n = Math.max(1, Math.floor(n || 1));
+    var cost = n * (coinsPer || 3);
+    if (state.coins < cost) return { ok: false, reason: 'no-coins', need: cost };
+    state.coins -= cost;
+    state.stock.rice = (state.stock.rice || 0) + n;
+    save();
+    return { ok: true, bought: n, cost: cost };
+  }
+
+  /* ==== 菜单 ==== */
+  function canCook(recipeId) {
+    var r = recipeById(recipeId);
+    if (!r) return false;
+    for (var k in r.need) if (stockOf(k) < r.need[k]) return false;
+    return true;
+  }
+  function recipeById(id) {
+    for (var i = 0; i < RECIPES.length; i++) if (RECIPES[i].id === id) return RECIPES[i];
+    return null;
+  }
+  /** 上架 / 下架。返回 { ok, reason? }。 */
+  function toggleMenu(recipeId) {
+    var idx = state.menu.indexOf(recipeId);
+    if (idx >= 0) { state.menu.splice(idx, 1); save(); return { ok: true, action: 'removed' }; }
+    if (state.menu.length >= state.menuSlots) return { ok: false, reason: 'menu-full' };
+    if (!recipeById(recipeId)) return { ok: false, reason: 'unknown-recipe' };
+    state.menu.push(recipeId);
+    save();
+    return { ok: true, action: 'added' };
+  }
+  function setPrice(recipeId, price) {
+    var r = recipeById(recipeId);
+    if (!r) return { ok: false, reason: 'unknown-recipe' };
+    var lo = r.priceRange[0], hi = r.priceRange[1];
+    var p = Math.max(Math.floor(lo * 0.5), Math.min(Math.floor(hi * 1.5), Math.floor(price || r.priceRange[0])));
+    state.price[recipeId] = p;
+    save();
+    return { ok: true, price: p, min: lo, max: hi };
+  }
+  function priceOf(recipeId) {
+    var r = recipeById(recipeId);
+    if (!r) return 0;
+    return state.price[recipeId] !== undefined ? state.price[recipeId] : r.priceRange[0];
+  }
+  /** 预计毛利率（不含口碑加成）。 */
+  function marginOf(recipeId) {
+    var r = recipeById(recipeId);
+    if (!r) return 0;
+    var p = priceOf(recipeId);
+    return r.basePrice > 0 ? Math.round((p - r.basePrice) / p * 100) : 0;
+  }
+
+  /* ==== 日营业 ==== */
+  /**
+   * 结算一天。返回当天的账单。
+   * 客流受三条影响：菜单是否满、定价是否合理、口碑。
+   */
+  function settleDay() {
+    if (!state.open) return { ok: false, reason: 'not-open' };
+    var lines = [], gross = 0, cost = 0, served = 0, repGain = 0;
+    for (var i = 0; i < state.menu.length; i++) {
+      var r = recipeById(state.menu[i]);
+      if (!r) continue;
+      if (!canCook(r.id)) { lines.push({ id: r.id, name: r.name, sold: 0, reason: '食材不足' }); continue; }
+      // 消耗食材
+      for (var k in r.need) state.stock[k] -= r.need[k];
+      // 定价越高卖得越少；口碑越高卖得越多
+      var p = priceOf(r.id);
+      var lo = r.priceRange[0], hi = r.priceRange[1];
+      var priceFactor = p <= lo ? 1.25 : (p >= hi ? 0.55 : 1 - (p - lo) / (hi - lo) * 0.45);
+      var repFactor = 1 + Math.min(0.8, state.reputation / 120);
+      var sold = Math.max(1, Math.round(2 * priceFactor * repFactor));
+      served += sold;
+      gross += sold * p;
+      cost += sold * r.basePrice;
+      repGain += (r.rep || 0) * sold * 0.15;
+      lines.push({ id: r.id, name: r.name, sold: sold, price: p });
+    }
+    var net = gross - cost;
+    state.coins += net;
+    state.reputation = Math.max(0, state.reputation + Math.round(repGain));
+    state.daySold = served;
+    var bill = {
+      ok: true, day: state.history.length + 1, lines: lines,
+      served: served, gross: gross, cost: cost, net: net,
+      reputation: state.reputation, coins: state.coins
+    };
+    state.lastSettle = bill;
+    state.history.push(bill);
+    if (state.history.length > 10) state.history.shift();
+    save();
+    return bill;
+  }
+
+  /* ==== 汇总 ==== */
+  function summary() {
+    return {
+      open: state.open, coins: state.coins, reputation: state.reputation,
+      menu: state.menu.slice(), menuSlots: state.menuSlots,
+      stock: stockList(), daySold: state.daySold,
+      lastSettle: state.lastSettle ? clone(state.lastSettle) : null
+    };
+  }
+
+  /* ==== 绘制 ==== */
+  var FONT_STACK = 'system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+  function rr(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  /**
+   * 画寿司店面板。opts: { font, tab: 'menu'|'stock' }
+   * 返回 { close, rows: [{x,y,w,h,id}], settle }
+   */
+  function drawPanel(ctx, w, h, opts) {
+    opts = opts || {};
+    var font = opts.font || 16;
+    var tab = opts.tab || 'menu';
+    var out = { close: null, rows: [], settle: null, tab: tab };
+
+    var pw = Math.min(w * 0.9, 700), ph = Math.min(h * 0.8, 500);
+    var px = (w - pw) / 2, py = (h - ph) / 2;
+
+    ctx.fillStyle = 'rgba(6,12,22,0.6)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(24,28,40,0.97)';
+    rr(ctx, px, py, pw, ph, 18); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,200,140,0.4)'; ctx.lineWidth = 2;
+    rr(ctx, px, py, pw, ph, 18); ctx.stroke();
+
+    // Header
+    ctx.fillStyle = '#ffd9a8';
+    ctx.font = '800 ' + (font * 1.4) + 'px ' + FONT_STACK;
+    ctx.fillText('海上寿司店', px + 24, py + font * 2.2);
+    ctx.fillStyle = 'rgba(220,235,255,0.8)';
+    ctx.font = '600 ' + (font * 0.8) + 'px ' + FONT_STACK;
+    ctx.fillText('金币 ' + state.coins + '   ·   口碑 ' + state.reputation
+      + '   ·   今日卖出 ' + state.daySold + ' 份', px + 24, py + font * 3.3);
+
+    // Close
+    var cb = font * 1.7, cbx = px + pw - cb - 14, cby = py + 14;
+    out.close = { x: cbx, y: cby, w: cb, h: cb };
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    rr(ctx, cbx, cby, cb, cb, cb / 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = '700 ' + (font * 1.0) + 'px ' + FONT_STACK;
+    ctx.textAlign = 'center';
+    ctx.fillText('×', cbx + cb / 2, cby + cb * 0.72);
+    ctx.textAlign = 'left';
+
+    // Tabs
+    var tabs = [{ id: 'menu', label: '菜单' }, { id: 'stock', label: '食材' }];
+    var tabY = py + font * 4.2;
+    for (var t = 0; t < tabs.length; t++) {
+      var tw = font * 4.2, tx = px + 24 + t * (tw + 8);
+      var active = tabs[t].id === tab;
+      ctx.fillStyle = active ? 'rgba(200,120,60,0.85)' : 'rgba(255,255,255,0.08)';
+      rr(ctx, tx, tabY, tw, font * 1.7, font * 0.85); ctx.fill();
+      ctx.fillStyle = active ? '#fff5ea' : 'rgba(220,235,255,0.7)';
+      ctx.font = '700 ' + (font * 0.8) + 'px ' + FONT_STACK;
+      ctx.textAlign = 'center';
+      ctx.fillText(tabs[t].label, tx + tw / 2, tabY + font * 1.2);
+      ctx.textAlign = 'left';
+    }
+
+    // Rows
+    var rowY = tabY + font * 2.6;
+    var rowH = font * 2.4;
+    var list = tab === 'menu' ? RECIPES : stockList();
+    var maxRows = Math.floor((py + ph - rowY - font * 3.4) / rowH);
+    for (var i = 0; i < list.length && i < maxRows; i++) {
+      var item = list[i];
+      var ry = rowY + i * rowH;
+      var isOn = tab === 'menu' && state.menu.indexOf(item.id) >= 0;
+      ctx.fillStyle = isOn ? 'rgba(200,140,70,0.22)' : 'rgba(255,255,255,0.05)';
+      rr(ctx, px + 20, ry, pw - 40, rowH - 6, 10); ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 ' + (font * 0.88) + 'px ' + FONT_STACK;
+      if (tab === 'menu') {
+        ctx.fillText(item.name, px + 34, ry + rowH * 0.46);
+        ctx.fillStyle = 'rgba(210,230,255,0.7)';
+        ctx.font = '600 ' + (font * 0.68) + 'px ' + FONT_STACK;
+        var needTxt = Object.keys(item.need).map(function (k) {
+          return (INGREDIENTS[k] ? INGREDIENTS[k].name : k) + '×' + item.need[k];
+        }).join(' ');
+        ctx.fillText(needTxt + '   定价 ' + priceOf(item.id) + '   毛利 ' + marginOf(item.id) + '%',
+          px + 34, ry + rowH * 0.78);
+        // cooked? mark on the right
+        ctx.fillStyle = canCook(item.id) ? '#9ff0b8' : '#ffb4a0';
+        ctx.font = '700 ' + (font * 0.76) + 'px ' + FONT_STACK;
+        ctx.textAlign = 'right';
+        ctx.fillText(isOn ? '已上架' : (canCook(item.id) ? '可做' : '缺食材'), px + pw - 34, ry + rowH * 0.62);
+        ctx.textAlign = 'left';
+      } else {
+        ctx.fillText(item.name + ' ×' + item.count, px + 34, ry + rowH * 0.62);
+        ctx.fillStyle = 'rgba(210,230,255,0.6)';
+        ctx.font = '600 ' + (font * 0.68) + 'px ' + FONT_STACK;
+        ctx.fillText('Tier ' + item.tier, px + pw - 80, ry + rowH * 0.62);
+      }
+      out.rows.push({ x: px + 20, y: ry, w: pw - 40, h: rowH - 6, id: item.id });
+    }
+
+    // Footer
+    ctx.fillStyle = 'rgba(220,235,255,0.65)';
+    ctx.font = '600 ' + (font * 0.72) + 'px ' + FONT_STACK;
+    var foot = tab === 'menu'
+      ? '点击菜品上架/下架（' + state.menu.length + '/' + state.menuSlots + '）   按 T 结算一天'
+      : '食材来自潜水采集，米可在市场买';
+    ctx.fillText(foot, px + 24, py + ph - font * 0.9);
+
+    // Last settle bill
+    if (state.lastSettle && tab === 'menu') {
+      out.settle = { net: state.lastSettle.net, served: state.lastSettle.served };
+    }
+    return out;
+  }
+
+  /* ==== 自检 ==== */
+  function selfTest() {
+    var problems = [];
+    // 菜谱数据完整
+    for (var i = 0; i < RECIPES.length; i++) {
+      var r = RECIPES[i];
+      if (!r.id || !r.name) problems.push('recipe[' + i + '] 缺 id/name');
+      if (!r.need || !Object.keys(r.need).length) problems.push(r.id + ' 没有食材');
+      for (var k in r.need) if (!INGREDIENTS[k]) problems.push(r.id + ' 用了未知食材 ' + k);
+      if (!r.priceRange || r.priceRange.length !== 2) problems.push(r.id + ' priceRange 不合法');
+    }
+    // 纯函数健壮性
+    try {
+      recipeById('nope'); priceOf('nope'); marginOf('nope');
+      stockOf('nope'); canCook('nope'); toggleMenu('nope'); setPrice('nope', 1);
+    } catch (e) { problems.push('纯函数抛异常: ' + e.message); }
+    // 未开店的保护
+    if (settleDay().ok !== false) problems.push('未开店时 settleDay 应返回 ok:false');
+    return { passed: problems.length === 0, problems: problems, recipes: RECIPES.length, ingredients: Object.keys(INGREDIENTS).length };
+  }
+
+  return {
+    VERSION: MODULE_VERSION,
+    RECIPES: RECIPES.map(function (r) { return { id: r.id, name: r.name, tier: r.tier }; }),
+    INGREDIENTS: clone(INGREDIENTS),
+    load: load, save: save, reset: reset,
+    unlock: unlock, isOpen: isOpen,
+    addFromDive: addFromDive, stockOf: stockOf, stockList: stockList, buyRice: buyRice,
+    recipeById: recipeById, canCook: canCook,
+    toggleMenu: toggleMenu, setPrice: setPrice, priceOf: priceOf, marginOf: marginOf,
+    settleDay: settleDay,
+    summary: summary,
+    drawPanel: drawPanel,
+    selfTest: selfTest
+  };
+});
+
+})();
 /* === INLINED-MODULES:END === */
 
 
@@ -5871,6 +6759,12 @@ var THREE = __wxRoot.THREE || window.THREE;
     },
     worldSize: 34,           // sea diameter in blocks
     seed: 7,                 // island shape
+    /* Debug only: 'ach' or 'lb' opens that panel as the round starts, and
+     * debugGallery tiles the six town buildings over the HUD, so an unattended
+     * playtest can screenshot them (the harness cannot press keys). Empty in
+     * game.json — normal play never sees either. */
+    debugPanel: '',
+    debugGallery: false,
     palette: {
       skyTop: '#1d2550', skyBottom: '#e58a6a', fog: '#6f5a7e', grass: '#6bab5c',
       dirt: '#8b6446', sand: '#e6cf96', water: '#3f7fb3', accent: '#ffc463'
@@ -6889,98 +7783,477 @@ var THREE = __wxRoot.THREE || window.THREE;
     B.add(0.52, 0.68, 0.78, 0.4, 0.12, 0.12, '#6fbf6a');
     return B;
   })();
+  /* --- 水塔 — a raised timber tank on a braced frame. Built the same way as the
+   * cabin: a footing, a tapered leg frame with stepped diagonal braces, a ladder,
+   * a railed maintenance gallery, hoop-banded tank panels, the outlet plumbing
+   * with its valve, and a level gauge on the front leg. --- */
   var TOWER_BOXES = (function () {
-    var B = boxList(), i;
-    [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]].forEach(function (p) {
-      B.add(p[0], 0.55, p[1], 0.16, 1.1, 0.16, '#7a5a3a');
-    });
-    for (i = 0; i < 4; i++) B.add(0, 0.3 + i * 0.26, 0.5, 0.4, 0.08, 0.08, '#9a7a52');
-    B.add(0, 1.55, 0, 1.3, 0.9, 1.3, '#8fb6c9');               // tank
-    B.add(0, 1.1, 0, 1.36, 0.14, 1.36, '#6b8fa3');
-    B.add(0, 2.0, 0, 1.36, 0.14, 1.36, '#6b8fa3');
-    B.add(0, 2.2, 0, 1.5, 0.24, 1.5, '#5d7f94');               // roof
-    B.add(0, 2.42, 0, 0.9, 0.22, 0.9, '#4f6f84');
-    B.add(0, 2.6, 0, 0.4, 0.16, 0.4, '#3f5c70');
-    B.add(0.66, 1.4, 0.16, 0.16, 0.9, 0.16, '#6b8fa3');        // down pipe
+    var B = boxList(), i, f, t, x, z, side, onX, along;
+    /* Stone footing: a plinth slab with one pad under each leg. */
+    B.add(0, 0.06, 0, 1.36, 0.12, 1.36, '#8a7a6a');
+    for (f = -1; f <= 1; f += 2) for (i = -1; i <= 1; i += 2) {
+      B.add(f * 0.52, 0.19, i * 0.52, 0.34, 0.14, 0.34, '#7d6e5e');
+    }
+    /* Four legs, three stepped segments each, so the frame tapers inward. */
+    for (t = 0; t < 3; t++) {
+      x = 0.53 - t * 0.05; z = 0.53 - t * 0.05;
+      for (f = -1; f <= 1; f += 2) for (i = -1; i <= 1; i += 2) {
+        B.add(f * x, 0.30 + t * 0.30, i * z, 0.15 - t * 0.012, 0.32, 0.15 - t * 0.012,
+              t % 2 ? '#7a5a3a' : '#86653f');
+      }
+    }
+    /* Diagonal cross braces, four steps per face, on all four faces. */
+    for (f = 0; f < 4; f++) {
+      onX = (f % 2) === 0; side = f < 2 ? -1 : 1;
+      for (i = 0; i < 4; i++) {
+        t = i / 3;                                              // 0 at the foot, 1 at the top
+        along = -0.40 + t * 0.80;
+        B.add(onX ? along : side * 0.46, 0.34 + t * 0.58, onX ? side * 0.46 : along,
+              0.28, 0.08, 0.08, '#9a7a52');
+      }
+    }
+    /* The ring beam the gallery and the tank sit on. */
+    B.add(0, 1.12, 0, 1.10, 0.10, 1.10, '#7a5a3a');
+    /* A ladder up the front face to the gallery walkway. */
+    B.add(-0.13, 0.66, 0.64, 0.06, 0.98, 0.06, '#9a7a52');
+    B.add(0.13, 0.66, 0.64, 0.06, 0.98, 0.06, '#9a7a52');
+    for (i = 0; i < 4; i++) B.add(0, 0.30 + i * 0.24, 0.64, 0.32, 0.05, 0.05, '#b08a5c');
+    /* Maintenance gallery: a deck ring, corner posts and a top rail. */
+    B.add(0, 1.20, 0.80, 1.42, 0.10, 0.30, '#8a6a44');
+    B.add(0, 1.20, -0.80, 1.42, 0.10, 0.30, '#8a6a44');
+    B.add(0.80, 1.20, 0, 0.30, 0.10, 1.42, '#8a6a44');
+    B.add(-0.80, 1.20, 0, 0.30, 0.10, 1.42, '#8a6a44');
+    for (f = -1; f <= 1; f += 2) for (i = -1; i <= 1; i += 2) {
+      B.add(f * 0.92, 1.42, i * 0.92, 0.06, 0.46, 0.06, '#a9784e');
+    }
+    B.add(0, 1.62, 0.94, 1.90, 0.06, 0.06, '#a9784e');
+    B.add(0, 1.62, -0.94, 1.90, 0.06, 0.06, '#a9784e');
+    B.add(0.94, 1.62, 0, 0.06, 0.06, 1.90, '#a9784e');
+    B.add(-0.94, 1.62, 0, 0.06, 0.06, 1.90, '#a9784e');
+    for (f = -1; f <= 1; f += 2) B.add(f * 0.47, 1.62, 0.94, 0.05, 0.06, 0.05, '#a9784e');
+    /* The tank: four panel walls with chamfered corners, so the silhouette reads
+     * round rather than as a crate. */
+    var TY = 1.30, TH = 0.98, TC = TY + TH * 0.5;
+    B.add(0, TC, 0.62, 1.24, TH, 0.14, '#8fb6c9');
+    B.add(0, TC, -0.62, 1.24, TH, 0.14, '#8fb6c9');
+    B.add(0.62, TC, 0, 0.14, TH, 1.24, '#8fb6c9');
+    B.add(-0.62, TC, 0, 0.14, TH, 1.24, '#8fb6c9');
+    for (f = -1; f <= 1; f += 2) for (i = -1; i <= 1; i += 2) {
+      B.add(f * 0.62, TC, i * 0.62, 0.20, TH, 0.20, '#7fa8bd');
+    }
+    /* Hoop bands, a bottom and top flange. */
+    for (i = 0; i < 3; i++) {
+      B.add(0, TY + 0.07 + i * 0.44, 0, 1.42, 0.09, 1.42, i === 1 ? '#6b8fa3' : '#7fa0b4');
+    }
+    B.add(0, TY - 0.06, 0, 1.10, 0.12, 1.10, '#6b8fa3');
+    B.add(0, TY + TH - 0.02, 0, 1.30, 0.10, 1.30, '#6b8fa3');
+    /* Domed roof in three shrinking plates, a vent hood and the finial. */
+    B.add(0, 2.36, 0, 1.36, 0.12, 1.36, '#5d7f94');
+    B.add(0, 2.50, 0, 1.02, 0.14, 1.02, '#547689');
+    B.add(0, 2.64, 0, 0.66, 0.14, 0.66, '#4f6f84');
+    B.add(0, 2.78, 0, 0.34, 0.16, 0.34, '#3f5c70');
+    B.add(0, 2.90, 0, 0.42, 0.06, 0.42, '#2d4859');
+    B.add(0, 2.98, 0, 0.10, 0.12, 0.10, '#c9a24a');
+    /* Outlet plumbing: down pipe, collar, elbow, spout and the valve wheel,
+     * plus a second line running down the back. */
+    B.add(0.74, 1.62, 0.30, 0.14, 1.30, 0.14, '#6b8fa3');
+    B.add(0.74, 0.94, 0.30, 0.14, 0.12, 0.14, '#8fa8b8');
+    B.add(0.74, 0.84, 0.24, 0.14, 0.14, 0.24, '#7a94a6');
+    B.add(0.74, 0.78, 0.08, 0.14, 0.10, 0.22, '#8fa8b8');
+    B.add(0.74, 1.34, 0.30, 0.22, 0.10, 0.22, '#c9a24a');
+    B.add(-0.74, 1.70, -0.26, 0.12, 1.10, 0.12, '#6b8fa3');
+    B.add(-0.74, 1.16, -0.26, 0.20, 0.10, 0.20, '#8fa8b8');
+    /* Water-level gauge on the front-left leg: a pale strip with five ticks and
+     * a red float marker. */
+    B.add(-0.44, 0.86, 0.66, 0.16, 0.86, 0.05, '#cdeef5');
+    B.add(-0.44, 0.94, 0.68, 0.18, 0.12, 0.03, '#e2574c');
+    for (i = 0; i < 5; i++) B.add(-0.36, 0.50 + i * 0.18, 0.66, 0.07, 0.03, 0.06, '#7a5a3a');
     return B;
   })();
+  /* --- 温室 — a timber-framed glasshouse. The glazing is split into panes by a
+   * real mullion grid rather than being one sheet, the ridge roof has a vent
+   * light that stands proud of it, and the inside carries the working clutter:
+   * an irrigation pipe with drip spurs, a row of clay pots, a potting bench, a
+   * shading curtain rolled along the eave and a cistern at the end wall. --- */
   var GREENHOUSE_BOXES = (function () {
     var B = boxList(), i, j;
-    B.add(0, 0.18, 0, 1.5, 0.26, 1.3, '#8f6135');               // soil bed
-    B.add(0, 0.34, 0, 1.4, 0.12, 1.2, '#5e4126');
-    for (i = -1; i <= 1; i += 2) for (j = -1; j <= 1; j += 2) {
-      B.add(i * 0.68, 0.85, j * 0.58, 0.1, 1.14, 0.1, '#d8e8ea'); // frame posts
+    /* Stone footing under the sill, then the raised soil bed inside it. */
+    B.add(0, 0.06, 0, 1.50, 0.12, 1.30, '#8a7a6a');
+    B.add(0, 0.20, 0, 1.34, 0.18, 1.14, '#8f6135');
+    B.add(0, 0.31, 0, 1.26, 0.06, 1.06, '#5e4126');
+    /* Corner posts and the intermediate mullions on every wall. The frame is a
+     * painted timber grey-green: pale enough to read as a greenhouse frame, and
+     * warm enough to stand apart from the cool glass it holds. */
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(function (p) {
+      B.add(p[0] * 0.70, 0.82, p[1] * 0.58, 0.10, 1.16, 0.10, '#9aada6');
+    });
+    for (i = -1; i <= 1; i += 2) {
+      B.add(i * 0.24, 0.82, 0.58, 0.06, 1.16, 0.07, '#8ea29b');   // front mullions
+      B.add(i * 0.24, 0.82, -0.58, 0.06, 1.16, 0.07, '#8ea29b');  // back mullions
+      B.add(0.70, 0.82, i * 0.18, 0.07, 1.16, 0.06, '#8ea29b');   // side mullions
+      B.add(-0.70, 0.82, i * 0.18, 0.07, 1.16, 0.06, '#8ea29b');
     }
-    B.add(0, 1.36, 0, 1.5, 0.1, 1.24, '#d8e8ea');               // eave
-    B.add(0, 0.85, 0.6, 1.4, 0.9, 0.06, '#cdeef5');             // glass walls
-    B.add(0, 0.85, -0.6, 1.4, 0.9, 0.06, '#cdeef5');
-    B.add(0.72, 0.85, 0, 0.06, 0.9, 1.2, '#cdeef5');
-    B.add(-0.72, 0.85, 0, 0.06, 0.9, 1.2, '#cdeef5');
-    B.add(0, 1.56, 0, 1.3, 0.14, 1.1, '#bfe9f2');               // shallow glass roof
-    B.add(0, 1.7, 0, 0.8, 0.14, 0.7, '#a8dce8');
+    /* Sill plate and the horizontal glazing bar halfway up. */
+    B.add(0, 0.34, 0, 1.52, 0.08, 1.32, '#7d918a');
+    B.add(0, 0.82, 0, 1.52, 0.06, 1.32, '#8ea29b');
+    /* Glazing: one pane per bay, on all four walls — six front, six back, eight
+     * across the two sides. */
+    B.add(0, 0.58, 0.60, 1.34, 0.44, 0.05, '#cdeef5');
+    B.add(0, 1.06, 0.60, 1.34, 0.42, 0.05, '#d8f2f8');
+    B.add(0, 0.58, -0.60, 1.34, 0.44, 0.05, '#cdeef5');
+    B.add(0, 1.06, -0.60, 1.34, 0.42, 0.05, '#d8f2f8');
+    for (i = -1; i <= 1; i += 2) {
+      B.add(0.72, 0.58, i * 0.36, 0.05, 0.44, 0.34, '#cdeef5');
+      B.add(0.72, 1.06, i * 0.36, 0.05, 0.42, 0.34, '#d8f2f8');
+      B.add(-0.72, 0.58, i * 0.36, 0.05, 0.44, 0.34, '#cdeef5');
+      B.add(-0.72, 1.06, i * 0.36, 0.05, 0.42, 0.34, '#d8f2f8');
+    }
+    /* A sliding vent pane propped open on the front-left bay: the pane sits
+     * proud of the wall and is held by a strut. */
+    B.add(-0.44, 1.10, 0.70, 0.40, 0.36, 0.04, '#e8f8fb');
+    B.add(-0.44, 1.30, 0.70, 0.42, 0.05, 0.06, '#9aada6');
+    B.add(-0.64, 0.92, 0.68, 0.05, 0.34, 0.05, '#7d918a');
+    /* Eave beams, then a pitched ridge roof: three glass steps either side with
+     * a framing bar between each. */
+    B.add(0, 1.40, 0, 1.56, 0.10, 1.36, '#9aada6');
     for (i = 0; i < 3; i++) {
-      B.add(-0.4 + i * 0.4, 0.6, 0.15, 0.16, 0.34, 0.16, '#4c9a5c'); // plants
-      B.add(-0.4 + i * 0.4, 0.82, 0.15, 0.3, 0.16, 0.3, '#6dbd6a');
+      var rw = 1.46 - i * 0.42, ry = 1.50 + i * 0.13;
+      B.add(0, ry, 0.36 - i * 0.10, rw, 0.07, 0.34, i % 2 ? '#bfe9f2' : '#cdeef5');
+      B.add(0, ry, -0.36 + i * 0.10, rw, 0.07, 0.34, i % 2 ? '#bfe9f2' : '#cdeef5');
     }
-    return B;
-  })();
-  var LIGHTHOUSE_BOXES = (function () {
-    var B = boxList(), i;
-    B.add(0, 0.14, 0, 0.9, 0.28, 0.9, '#9aa4b0');               // base
-    var bands = ['#f6f2e8', '#e2574c', '#f6f2e8', '#e2574c'];
+    B.add(0, 1.46, 0.62, 1.50, 0.09, 0.08, '#9aada6');            // eave glazing bars
+    B.add(0, 1.46, -0.62, 1.50, 0.09, 0.08, '#9aada6');
+    B.add(0, 1.90, 0, 0.70, 0.08, 0.10, '#9aada6');               // ridge cap
+    /* Roof vent: a raised lantern with its own little lid, standing proud. */
+    B.add(0, 1.98, 0, 0.44, 0.10, 0.44, '#9aada6');
+    B.add(0, 2.06, 0, 0.40, 0.10, 0.40, '#e8f8fb');
+    B.add(0, 2.14, 0, 0.46, 0.06, 0.46, '#7d918a');
+    B.add(0, 2.19, 0, 0.10, 0.06, 0.10, '#aab4c0');
+    /* Shading curtain rolled along the sunny eave, with its cord and pull. */
+    B.add(0, 1.44, 0.66, 1.46, 0.12, 0.10, '#e8e0c8');
+    B.add(0, 1.44, 0.66, 1.46, 0.04, 0.12, '#c9bd9a');
+    B.add(0.62, 1.36, 0.68, 0.05, 0.30, 0.04, '#c9bd9a');
+    /* Irrigation: a header pipe along the back wall, four drip spurs below it. */
+    B.add(0, 0.94, -0.48, 1.20, 0.06, 0.06, '#7a94a6');
     for (i = 0; i < 4; i++) {
-      var w = 0.72 - i * 0.09;
-      B.add(0, 0.34 + i * 0.4, 0, w, 0.4, w, bands[i]);
+      B.add(-0.45 + i * 0.30, 0.86, -0.48, 0.05, 0.12, 0.05, '#8fa8b8');
+      B.add(-0.45 + i * 0.30, 0.78, -0.48, 0.09, 0.05, 0.09, '#a8bcc8');
     }
-    B.add(0, 1.94, 0, 0.66, 0.14, 0.66, '#3a4a56');             // balcony
-    B.add(0, 2.16, 0, 0.5, 0.3, 0.5, '#cdeef5');                // lamp room
-    B.add(0, 2.16, 0, 0.28, 0.28, 0.28, '#ffd98a', true);       // the lamp
-    B.add(0, 2.38, 0, 0.62, 0.16, 0.62, '#3a4a56');             // roof
-    B.add(0, 2.52, 0, 0.34, 0.14, 0.34, '#2d3a44');
-    B.add(0, 2.64, 0, 0.12, 0.16, 0.12, '#c9a24a');
+    /* Cistern in the back-right corner with a tap. */
+    B.add(0.52, 0.46, -0.40, 0.34, 0.40, 0.30, '#8fa8b8');
+    B.add(0.52, 0.68, -0.40, 0.38, 0.07, 0.34, '#a8bcc8');
+    B.add(0.52, 0.60, -0.24, 0.10, 0.16, 0.10, '#6b8fa3');
+    /* Planting: two rows of clay pots down the bed, each with its own sprout. */
+    for (i = 0; i < 4; i++) {
+      B.add(-0.44 + i * 0.30, 0.42, 0.28, 0.18, 0.16, 0.18, '#b8785a');
+      B.add(-0.44 + i * 0.30, 0.52, 0.28, 0.12, 0.06, 0.12, '#a8664a');
+      B.add(-0.44 + i * 0.30, 0.62, 0.28, 0.16, 0.12, 0.16, i % 2 ? '#6dbd6a' : '#5aa85c');
+      B.add(-0.40 + i * 0.30, 0.52, -0.06, 0.14, 0.12, 0.14, '#b8785a');
+      B.add(-0.40 + i * 0.30, 0.62, -0.06, 0.12, 0.10, 0.12, i % 2 ? '#8ec44f' : '#6dbd6a');
+    }
+    /* Potting bench against the left wall, with a trowel and a seed tray. */
+    B.add(-0.52, 0.60, 0.30, 0.30, 0.05, 0.62, '#c9a069');
+    B.add(-0.52, 0.62, 0.30, 0.28, 0.04, 0.58, '#e0b183');
+    B.add(-0.52, 0.46, 0.06, 0.05, 0.30, 0.05, '#8f6135');
+    B.add(-0.52, 0.46, 0.54, 0.05, 0.30, 0.05, '#8f6135');
+    B.add(-0.52, 0.68, 0.16, 0.16, 0.03, 0.22, '#aab4c0');
+    B.add(-0.52, 0.68, 0.50, 0.14, 0.06, 0.16, '#7a5a3a');
     return B;
   })();
+  /* --- 灯塔 — a tapering striped tower on a stone base. The tower narrows in
+   * eight bands (each band a separate box, so the taper is real), the base has a
+   * plinth, a doorway with a lintel and a lamp above it, the shaft carries a
+   * spiral of four windows, and the top has a corbelled gallery with a railing,
+   * a glazed lantern room with a mullion frame, the lamp itself and a domed vent
+   * cap with a finial. --- */
+  var LIGHTHOUSE_BOXES = (function () {
+    var B = boxList(), i, a, side;
+    /* Plinth and the stone base drum. */
+    B.add(0, 0.07, 0, 0.96, 0.14, 0.96, '#9aa4b0');
+    B.add(0, 0.18, 0, 0.86, 0.10, 0.86, '#aab4c0');
+    for (i = 0; i < 5; i++) {
+      a = i * Math.PI * 2 / 5;
+      B.add(Math.cos(a) * 0.34, 0.16, Math.sin(a) * 0.34, 0.18, 0.08, 0.18, '#8a94a0');
+    }
+    /* Doorway on the front of the base: frame, recessed door, lintel, lamp,
+     * step and a threshold plate. */
+    B.add(0, 0.50, 0.43, 0.36, 0.56, 0.06, '#5c6b78');
+    B.add(0, 0.50, 0.45, 0.28, 0.46, 0.05, '#7a4a28');
+    B.add(0, 0.74, 0.45, 0.34, 0.08, 0.07, '#4a5661');
+    B.add(0, 0.78, 0.47, 0.16, 0.06, 0.05, '#ffd98a', true);
+    B.add(0, 0.20, 0.54, 0.44, 0.06, 0.20, '#aab4c0');
+    B.add(0, 0.43, 0.47, 0.06, 0.06, 0.05, '#c9a24a');
+    B.add(0, 0.30, 0.45, 0.26, 0.04, 0.05, '#4a5661');
+    /* The striped shaft: eight bands that taper, each with a small cornice lip
+     * so the bands read as masonry courses and not as a plain colour swap. */
+    var bands = ['#f6f2e8', '#e2574c', '#f6f2e8', '#e2574c',
+                 '#f6f2e8', '#e2574c', '#f6f2e8', '#e2574c'];
+    for (i = 0; i < 8; i++) {
+      var w = 0.66 - i * 0.042, by = 0.30 + i * 0.185;
+      B.add(0, by, 0, w, 0.185, w, bands[i]);
+      if (i < 7) B.add(0, by + 0.10, 0, w + 0.03, 0.02, w + 0.03, i % 2 ? '#d8d2c4' : '#c2463d');
+    }
+    /* Spiral windows: four small openings winding up the shaft, each with a
+     * pale sill and a dark reveal so they read as holes, not stickers. */
+    for (i = 0; i < 4; i++) {
+      a = i * Math.PI * 0.5 + 0.4;
+      side = Math.cos(a) >= 0 ? 1 : -1;
+      var ww = 0.60 - i * 0.035, cx = Math.cos(a) * ww * 0.92, cz = Math.sin(a) * ww * 0.92;
+      B.add(cx, 0.52 + i * 0.30, cz, 0.11, 0.13, 0.05, '#2d3a44');
+      B.add(cx, 0.52 + i * 0.30, cz, 0.15, 0.04, 0.06, '#cdeef5');
+      B.add(cx - side * 0.09, 0.52 + i * 0.30, cz, 0.04, 0.15, 0.05, '#d8d2c4');
+    }
+    /* Corbelled gallery: the underside brackets, then the deck, then the rail.
+     * The deck is only slightly wider than the shaft top — an over-wide gallery
+     * reads as a mushroom cap and hides the lantern room behind its own rail.
+     * It is painted pale grey rather than iron-dark so the dark lantern frame
+     * above it stays legible instead of merging into one silhouette. */
+    for (i = 0; i < 8; i++) {
+      a = i * Math.PI * 0.25;
+      B.add(Math.cos(a) * 0.22, 1.76, Math.sin(a) * 0.22, 0.12, 0.10, 0.12, '#8a98a4');
+    }
+    B.add(0, 1.85, 0, 0.58, 0.09, 0.58, '#b6c0c8');
+    B.add(0, 1.90, 0, 0.52, 0.06, 0.52, '#c4ccd2');
+    for (i = 0; i < 10; i++) {
+      a = i * Math.PI / 5;
+      B.add(Math.cos(a) * 0.27, 2.08, Math.sin(a) * 0.27, 0.04, 0.30, 0.04, '#aab4c0');
+    }
+    for (i = 0; i < 10; i++) {
+      a = i * Math.PI / 5;
+      B.add(Math.cos(a) * 0.27, 2.24, Math.sin(a) * 0.27, 0.08, 0.04, 0.08, '#c8d0d8');
+    }
+    for (i = 0; i < 4; i++) {
+      a = i * Math.PI * 0.5;
+      B.add(Math.cos(a) * 0.27, 2.28, Math.sin(a) * 0.27, 0.56, 0.03, 0.04, '#c8d0d8');
+      B.add(Math.sin(a) * 0.27, 2.28, Math.cos(a) * 0.27, 0.04, 0.03, 0.56, '#c8d0d8');
+    }
+    /* The lantern room: sill, glazing, mullions, and the lamp inside. */
+    B.add(0, 2.34, 0, 0.50, 0.08, 0.50, '#4a5a66');
+    B.add(0, 2.54, 0.23, 0.44, 0.32, 0.05, '#cdeef5');
+    B.add(0, 2.54, -0.23, 0.44, 0.32, 0.05, '#cdeef5');
+    B.add(0.23, 2.54, 0, 0.05, 0.32, 0.44, '#cdeef5');
+    B.add(-0.23, 2.54, 0, 0.05, 0.32, 0.44, '#cdeef5');
+    for (i = -1; i <= 1; i += 2) {
+      B.add(i * 0.14, 2.54, 0.23, 0.03, 0.34, 0.05, '#8a98a4');
+      B.add(i * 0.14, 2.54, -0.23, 0.03, 0.34, 0.05, '#8a98a4');
+      B.add(0.23, 2.54, i * 0.14, 0.05, 0.34, 0.03, '#8a98a4');
+      B.add(-0.23, 2.54, i * 0.14, 0.05, 0.34, 0.03, '#8a98a4');
+    }
+    B.add(0, 2.55, 0, 0.19, 0.26, 0.19, '#ffd98a', true);         // the lamp
+    B.add(0, 2.68, 0, 0.28, 0.04, 0.28, '#fff0c0');               // its hood plate
+    B.add(0, 2.44, 0, 0.32, 0.05, 0.32, '#c9a24a');               // the lamp stand
+    /* Vent cap: a flat roof, a dome in three steps, louvre slits and a finial. */
+    B.add(0, 2.74, 0, 0.56, 0.08, 0.56, '#4a5a66');
+    B.add(0, 2.82, 0, 0.44, 0.07, 0.44, '#3a4a56');
+    B.add(0, 2.89, 0, 0.30, 0.07, 0.30, '#2d3a44');
+    B.add(0, 2.95, 0, 0.16, 0.06, 0.16, '#3a4a56');
+    for (i = 0; i < 4; i++) {
+      a = i * Math.PI * 0.5;
+      B.add(Math.cos(a) * 0.25, 2.82, Math.sin(a) * 0.25, 0.12, 0.05, 0.12, '#5c6b78');
+    }
+    B.add(0, 3.02, 0, 0.06, 0.14, 0.06, '#c9a24a');
+    B.add(0, 3.10, 0, 0.13, 0.06, 0.13, '#e2c078');
+    return B;
+  })();
+  /* --- 市集 — a two-bay market stall. Instead of one counter under one awning
+   * it now has a shared back frame carrying two separate counters, each with its
+   * own awning valance, goods on the shelf, hanging wares above and a crate stack
+   * beside it, plus the signboard across the front. --- */
   var STALL_BOXES = (function () {
-    var B = boxList(), i;
-    B.add(0, 0.52, 0, 1.4, 0.16, 0.9, '#c9a069');               // counter
-    B.add(-0.62, 0.24, 0.36, 0.1, 0.5, 0.1, '#8f6135');
-    B.add(0.62, 0.24, 0.36, 0.1, 0.5, 0.1, '#8f6135');
-    B.add(-0.62, 1.0, -0.36, 0.1, 1.5, 0.1, '#8f6135');          // posts
-    B.add(0.62, 1.0, -0.36, 0.1, 1.5, 0.1, '#8f6135');
-    for (i = 0; i < 5; i++) {                                    // striped awning
-      B.add(-0.56 + i * 0.28, 1.42, 0.05, 0.28, 0.1, 1.0, i % 2 ? '#f6f2e8' : '#e2574c');
+    var B = boxList(), i, j, side;
+    /* Deck planking the stall stands on, so it does not float on the deck. */
+    B.add(0, 0.03, 0, 1.56, 0.06, 1.10, '#b89159');
+    for (i = 0; i < 5; i++) B.add(-0.60 + i * 0.30, 0.07, 0, 0.04, 0.02, 1.06, '#a97f4c');
+    /* Shared back frame: four posts and two head beams. */
+    for (side = -1; side <= 1; side += 2) {
+      B.add(side * 0.68, 0.86, -0.40, 0.11, 1.62, 0.11, '#8f6135');
+      B.add(side * 0.30, 0.86, -0.40, 0.08, 1.54, 0.08, '#9a6b3c');
+      B.add(side * 0.68, 0.40, 0.44, 0.09, 0.72, 0.09, '#8f6135');
     }
-    B.add(0, 1.52, -0.36, 1.4, 0.1, 0.1, '#8f6135');
-    // fruit on the counter
-    B.add(-0.4, 0.68, 0, 0.24, 0.2, 0.24, '#ff9f45');
-    B.add(-0.1, 0.68, 0.05, 0.24, 0.2, 0.24, '#8ec44f');
-    B.add(0.22, 0.68, -0.02, 0.24, 0.2, 0.24, '#e2574c');
-    B.add(0.44, 0.66, 0.22, 0.3, 0.28, 0.3, '#c98d3f');          // crate
-    B.add(-0.55, 1.06, 0.1, 0.2, 0.32, 0.2, '#ffd98a', true);    // hanging lantern
-    return B;
-  })();
-  var WINDMILL_BOXES = (function () {
-    var B = boxList(), i;
-    B.add(0, 0.12, 0, 0.9, 0.24, 0.9, '#8f6135');
-    for (i = 0; i < 4; i++) B.add(0, 0.4 + i * 0.34, 0, 0.72 - i * 0.1, 0.34, 0.72 - i * 0.1, i % 2 ? '#e0c9a0' : '#d8bd90');
-    B.add(0, 1.72, 0, 0.56, 0.16, 0.56, '#8f6135');
-    B.add(0, 1.9, 0, 0.42, 0.3, 0.42, '#a97a4a');
-    B.add(0, 2.1, 0, 0.3, 0.18, 0.3, '#7a5230');
-    B.add(0.3, 0.55, 0.3, 0.16, 0.5, 0.16, '#7a5230');            // little door
-    return B;
-  })();
-  /** The windmill's sails, a separate mesh so they can spin. */
-  var BLADE_BOXES = (function () {
-    var B = boxList();
-    B.add(0, 0, 0, 0.2, 0.2, 0.2, '#5c4028');
-    for (var i = 0; i < 4; i++) {
-      var a = i * Math.PI / 2;
-      var dx = Math.cos(a), dy = Math.sin(a);
-      B.add(dx * 0.45, dy * 0.45, 0, 0.16, 0.16, 0.16, '#7a5230');
-      for (var j = 0; j < 3; j++) {
-        var d = 0.7 + j * 0.38;
-        B.add(dx * d, dy * d, 0.02, dx ? 0.4 : 0.14, dy ? 0.4 : 0.14, 0.06, j % 2 ? '#f6f2e8' : '#e8dcc0');
+    B.add(0, 1.64, -0.40, 1.48, 0.09, 0.10, '#a9784e');            // head beam, back
+    B.add(0, 1.50, 0.44, 1.48, 0.08, 0.09, '#a9784e');             // head beam, front
+    B.add(0, 0.44, -0.40, 1.42, 0.07, 0.09, '#a9784e');            // low back rail
+    /* Two counter bays side by side, each with a top, a front panel and legs. */
+    for (j = 0; j < 2; j++) {
+      var bx = j === 0 ? -0.34 : 0.34;
+      B.add(bx, 0.62, 0.10, 0.62, 0.09, 0.60, '#c9a069');          // counter top
+      B.add(bx, 0.62, 0.10, 0.58, 0.04, 0.56, '#e0b183');          // top highlight
+      B.add(bx, 0.42, 0.10, 0.56, 0.28, 0.52, '#a9784e');          // apron
+      B.add(bx, 0.30, 0.10, 0.50, 0.05, 0.46, '#8f6135');          // kick rail
+      for (i = -1; i <= 1; i += 2) B.add(bx + i * 0.26, 0.30, 0.36, 0.07, 0.58, 0.07, '#8f6135');
+      /* Goods on the counter: three different wares per bay. */
+      B.add(bx - 0.18, 0.72, 0.06, 0.16, 0.14, 0.16, j ? '#8ec44f' : '#ff9f45');
+      B.add(bx + 0.02, 0.71, 0.12, 0.15, 0.12, 0.15, j ? '#ffd166' : '#e2574c');
+      B.add(bx + 0.20, 0.73, 0.02, 0.14, 0.16, 0.14, j ? '#e2574c' : '#8ec44f');
+    }
+    /* Shelf under the back head beam, with pots and baskets on it. */
+    B.add(0, 1.12, -0.32, 1.36, 0.07, 0.26, '#c9a069');
+    for (i = 0; i < 5; i++) {
+      B.add(-0.56 + i * 0.28, 1.24, -0.32, 0.18, 0.17, 0.20,
+            i % 2 ? '#b8785a' : '#c98d3f');
+      B.add(-0.56 + i * 0.28, 1.35, -0.32, 0.14, 0.05, 0.16, i % 2 ? '#a8664a' : '#a8763a');
+    }
+    /* Hanging wares off the front head beam: three strings and their loads. */
+    for (i = 0; i < 3; i++) {
+      B.add(-0.34 + i * 0.34, 1.34, 0.42, 0.04, 0.24, 0.04, '#8a6a44');
+      B.add(-0.34 + i * 0.34, 1.20, 0.42, 0.14, 0.16, 0.12, i === 1 ? '#ffeab0' : '#c98d3f');
+      B.add(-0.34 + i * 0.34, 1.11, 0.42, 0.10, 0.05, 0.09, '#8f6135');
+    }
+    /* Signboard: a plank hung between the two front posts, with its bracket. */
+    B.add(0, 1.24, 0.48, 0.74, 0.26, 0.06, '#e8dcc0');
+    B.add(0, 1.37, 0.48, 0.78, 0.05, 0.08, '#a9784e');
+    B.add(0, 1.10, 0.48, 0.78, 0.05, 0.08, '#a9784e');
+    B.add(-0.18, 1.24, 0.52, 0.24, 0.13, 0.02, '#7a4a28');
+    B.add(0.16, 1.24, 0.52, 0.20, 0.13, 0.02, '#7a4a28');
+    /* Awning: two bays of striped canvas, each with a scalloped valance. */
+    for (j = 0; j < 2; j++) {
+      var ax = j === 0 ? -0.36 : 0.36;
+      for (i = 0; i < 4; i++) {
+        B.add(ax - 0.27 + i * 0.18, 1.58, 0.02, 0.18, 0.08, 0.98, i % 2 ? '#f6f2e8' : '#e2574c');
       }
+      for (i = 0; i < 4; i++) {                                    // valance flaps
+        B.add(ax - 0.27 + i * 0.18, 1.50, 0.50, 0.15, 0.10, 0.04, i % 2 ? '#e2574c' : '#f6f2e8');
+      }
+      B.add(ax, 1.62, 0.02, 0.74, 0.04, 1.02, '#d8d2c4');          // canvas seam
+    }
+    B.add(0, 1.66, -0.40, 1.48, 0.05, 0.10, '#8f6135');            // awning back batten
+    /* Crate stack beside the right counter, and a barrel beside the left. */
+    B.add(0.10, 0.16, 0.52, 0.30, 0.28, 0.30, '#c98d3f');
+    B.add(0.10, 0.32, 0.52, 0.34, 0.05, 0.34, '#a8763a');
+    B.add(0.10, 0.46, 0.50, 0.26, 0.24, 0.26, '#b8803a');
+    B.add(0.10, 0.60, 0.50, 0.29, 0.04, 0.29, '#9a6b30');
+    B.add(-0.30, 0.22, 0.58, 0.26, 0.42, 0.26, '#b07a44');
+    B.add(-0.30, 0.30, 0.58, 0.29, 0.05, 0.29, '#6b4a2c');
+    B.add(-0.30, 0.46, 0.58, 0.29, 0.05, 0.29, '#6b4a2c');
+    /* A hanging lantern off the left post, and a lantern hook. */
+    B.add(-0.62, 1.30, 0.20, 0.05, 0.18, 0.05, '#8a6a44');
+    B.add(-0.62, 1.18, 0.20, 0.16, 0.20, 0.16, '#ffd98a', true);
+    B.add(-0.62, 1.29, 0.20, 0.12, 0.04, 0.12, '#5c6b78');
+    /* A price slate leaning on the left counter edge. */
+    B.add(-0.52, 0.78, 0.44, 0.20, 0.16, 0.03, '#3a4a56');
+    B.add(-0.52, 0.80, 0.45, 0.14, 0.04, 0.02, '#dfe8f0');
+    return B;
+  })();
+  /* --- 风车 — a smock mill: a stone footing, a timber tower that steps inward in
+   * five stages (so the taper is real geometry, not a scale), exposed corner
+   * posts and girts, a wraparound gallery at the curb, a cap with the windshaft
+   * and its bearing block, the tail pole out the back with a vane, and a door
+   * with its own frame. The sails are a separate mesh (BLADE_BOXES) so they spin. --- */
+  var WINDMILL_BOXES = (function () {
+    var B = boxList(), i, side;
+    /* Stone footing: a slab, a step course, and a threshold. */
+    B.add(0, 0.05, 0, 1.00, 0.10, 1.00, '#8a7a6a');
+    B.add(0, 0.14, 0, 0.90, 0.10, 0.90, '#7d6e5e');
+    B.add(0, 0.20, 0.46, 0.34, 0.06, 0.14, '#a9784e');
+    /* Five timber stages, each stepping in and each with its own girt band.
+     * The boards are pale: the tower stands against open sky behind four pale
+     * sails, so a dark body would read as a silhouette with a bright cross. */
+    for (i = 0; i < 5; i++) {
+      var w = 0.78 - i * 0.078, y = 0.26 + i * 0.30;
+      B.add(0, y, 0, w, 0.30, w, i % 2 ? '#efe0c4' : '#e6d4b2');
+      B.add(0, y - 0.04, 0, w + 0.03, 0.07, w + 0.03, '#a9784e');   // girt band
+      /* Corner posts on every stage, chamfered in with the taper. */
+      for (side = -1; side <= 1; side += 2) {
+        B.add(side * (w / 2 - 0.01), y, w / 2 - 0.01, 0.08, 0.30, 0.08, '#9a6b3c');
+        B.add(side * (w / 2 - 0.01), y, -(w / 2 - 0.01), 0.08, 0.30, 0.08, '#9a6b3c');
+      }
+      /* A mid-height belt on the two wider stages, so the wall reads planked. */
+      if (i < 3) B.add(0, y + 0.06, 0, w + 0.02, 0.04, w + 0.02, '#d8c49c');
+    }
+    /* Stage windows: two small openings with pale sills, at two levels. */
+    B.add(0, 0.62, 0.37, 0.16, 0.16, 0.04, '#3a4a56');
+    B.add(0, 0.56, 0.37, 0.22, 0.04, 0.06, '#e8dcc0');
+    B.add(0, 0.60, -0.37, 0.14, 0.14, 0.04, '#3a4a56');
+    B.add(0, 1.14, 0.26, 0.14, 0.14, 0.04, '#3a4a56');
+    B.add(0, 1.08, 0.26, 0.20, 0.04, 0.06, '#e8dcc0');
+    B.add(0.25, 1.14, 0, 0.04, 0.14, 0.14, '#3a4a56');
+    /* Door on the front of the lowest stage: frame, leaf, lintel, lamp, step. */
+    B.add(0, 0.44, 0.40, 0.32, 0.42, 0.06, '#5c4028');
+    B.add(0, 0.44, 0.42, 0.24, 0.34, 0.05, '#7a5230');
+    B.add(0, 0.64, 0.42, 0.34, 0.05, 0.07, '#4a3018');
+    B.add(0.06, 0.44, 0.45, 0.05, 0.05, 0.04, '#c9a24a');
+    B.add(0, 0.76, 0.41, 0.12, 0.08, 0.06, '#ffd98a', true);
+    /* The curb / gallery ring where the cap sits, with a low rail. */
+    B.add(0, 1.78, 0, 0.52, 0.09, 0.52, '#8f6135');
+    B.add(0, 1.84, 0, 0.46, 0.05, 0.46, '#a9784e');
+    for (i = -1; i <= 1; i += 2) {
+      B.add(i * 0.24, 1.90, 0.24, 0.04, 0.16, 0.04, '#7a5230');
+      B.add(i * 0.24, 1.90, -0.24, 0.04, 0.16, 0.04, '#7a5230');
+    }
+    B.add(0, 1.98, 0.24, 0.52, 0.04, 0.04, '#8f6135');
+    B.add(0, 1.98, -0.24, 0.52, 0.04, 0.04, '#8f6135');
+    /* Upper bearing block and the windshaft, which carries the sails. */
+    B.add(0, 1.90, 0.06, 0.22, 0.16, 0.22, '#8a5c30');
+    B.add(0, 1.78, 0.24, 0.12, 0.12, 0.26, '#7a5230');
+    B.add(0, 1.78, 0.36, 0.14, 0.14, 0.10, '#9a6b3c');
+    /* Cap: two roof steps and a ridge, in the same pale timber as the body so
+     * the tower does not go dark exactly where the eye looks for the cap. */
+    B.add(0, 2.00, 0, 0.44, 0.10, 0.44, '#a9784e');
+    B.add(0, 2.08, 0, 0.32, 0.09, 0.32, '#c9a878');
+    B.add(0, 2.15, 0, 0.16, 0.07, 0.16, '#9a6b3c');
+    B.add(0, 2.20, 0, 0.08, 0.10, 0.08, '#c9a24a');
+    /* Tail pole out the back, its brace, and the tail vane on the end. */
+    B.add(0, 1.62, -0.34, 0.07, 0.07, 0.52, '#7a5230');
+    B.add(0, 1.30, -0.30, 0.06, 0.06, 0.48, '#8f6135');
+    B.add(0, 1.44, -0.46, 0.06, 0.42, 0.06, '#7a5230');
+    B.add(0, 1.66, -0.62, 0.05, 0.30, 0.05, '#8f6135');
+    B.add(0, 1.66, -0.72, 0.26, 0.36, 0.04, '#e8dcc0');
+    B.add(0, 1.66, -0.74, 0.30, 0.06, 0.03, '#a9784e');
+    B.add(0, 1.80, -0.74, 0.05, 0.10, 0.04, '#a9784e');
+    /* A millstone leaning against the base, and a sack beside the door. */
+    B.add(0.42, 0.24, 0.34, 0.10, 0.34, 0.34, '#9aa4b0');
+    B.add(0.44, 0.24, 0.34, 0.06, 0.20, 0.20, '#7a8895');
+    B.add(-0.40, 0.22, 0.42, 0.22, 0.26, 0.20, '#c9ad80');
+    B.add(-0.40, 0.34, 0.42, 0.26, 0.05, 0.24, '#a98f66');
+    return B;
+  })();
+  /** The windmill's sails, a separate mesh so they can spin. Each of the four
+   *  arms is a real lattice: a spar out from the hub, and a broad pale sail
+   *  cloth stretched to one side of it with three framing bars across it.
+   *  The cloth is deliberately wider than the bars — at this scale a sail reads
+   *  as cloth only when its pale area dominates, otherwise the lattice turns
+   *  into a dark cross against the brown tower. --- */
+  var BLADE_BOXES = (function () {
+    var B = boxList(), i, j, a, dx, dy, px, py;
+    /* The hub: a boss, a collar plate and four bolt heads. */
+    B.add(0, 0, 0, 0.22, 0.22, 0.22, '#4a3018');
+    B.add(0, 0, 0.05, 0.28, 0.28, 0.06, '#5c4028');
+    for (i = 0; i < 4; i++) {
+      a = i * Math.PI / 2 + Math.PI / 4;
+      B.add(Math.cos(a) * 0.11, Math.sin(a) * 0.11, 0.09, 0.05, 0.05, 0.04, '#8f7a5c');
+    }
+    for (i = 0; i < 4; i++) {
+      a = i * Math.PI / 2;
+      dx = Math.cos(a); dy = Math.sin(a);
+      px = -dy; py = dx;                                    // perpendicular, where the cloth goes
+      /* The spar (whip) running the full length of the arm, tapering at the tip. */
+      B.add(dx * 0.30, dy * 0.30, 0, dx ? 0.38 : 0.09, dy ? 0.38 : 0.09, 0.09, '#a9784e');
+      B.add(dx * 0.63, dy * 0.63, 0, dx ? 0.30 : 0.08, dy ? 0.30 : 0.08, 0.08, '#9a6b3c');
+      B.add(dx * 0.84, dy * 0.84, 0, dx ? 0.16 : 0.07, dy ? 0.16 : 0.07, 0.07, '#8a5c30');
+      B.add(dx * 0.94, dy * 0.94, 0, dx ? 0.08 : 0.05, dy ? 0.08 : 0.05, 0.06, '#6b4a2c');
+      /* The sail cloth: one broad pale panel offset to the leeward side of the
+       * spar, running most of the length of the arm. */
+      var cOff = 0.21, cCen = 0.58, cLen = 0.68, cWid = 0.32;
+      B.add(dx * cCen + px * cOff, dy * cCen + py * cOff, -0.05,
+            dx ? cLen : cWid, dy ? cLen : cWid, 0.03, '#fbf7ec');
+      /* Three framing bars across the cloth, each with a short lacing batten,
+       * then the leech line and a patched corner. */
+      for (j = 0; j < 3; j++) {
+        var dbar = cCen - cLen / 2 + 0.11 + j * 0.23;
+        B.add(dx * dbar + px * cOff, dy * dbar + py * cOff, -0.03,
+              dx ? 0.04 : cWid + 0.04, dy ? 0.04 : cWid + 0.04, 0.05, '#b08a5c');
+        B.add(dx * dbar + px * (cOff + cWid * 0.28), dy * dbar + py * (cOff + cWid * 0.28), -0.02,
+              dx ? 0.04 : 0.11, dy ? 0.04 : 0.11, 0.04, '#c9a878');
+      }
+      B.add(dx * cCen + px * (cOff + cWid / 2), dy * cCen + py * (cOff + cWid / 2), -0.04,
+            dx ? cLen : 0.04, dy ? cLen : 0.04, 0.04, '#c9bd9a');
+      B.add(dx * (cCen + cLen / 2) + px * cOff, dy * (cCen + cLen / 2) + py * cOff, -0.04,
+            dx ? 0.05 : cWid, dy ? 0.05 : cWid, 0.04, '#d8cfbc');
+      B.add(dx * (cCen - cLen / 2 + 0.08) + px * (cOff - cWid * 0.30),
+            dy * (cCen - cLen / 2 + 0.08) + py * (cOff - cWid * 0.30), -0.06,
+            dx ? 0.10 : 0.08, dy ? 0.10 : 0.08, 0.02, '#e4dcc8');
+      /* The little stock that ties the arm back into the hub. */
+      B.add(dx * 0.16, dy * 0.16, 0.01, dx ? 0.20 : 0.10, dy ? 0.20 : 0.10, 0.08, '#b08a5c');
     }
     return B;
   })();
@@ -7343,6 +8616,42 @@ var THREE = __wxRoot.THREE || window.THREE;
   var boostRect = null;    // hit area of the on-screen dash button, refreshed every frame
   var buildBtnRect = null; // hit area of the 建 button, always shown so the list is reachable
   var coachT0 = 0;         // when the onboarding coach started fading in
+  /* --- 成就 / 排行榜面板 ---
+   * achievements.js 与 leaderboard.js 已经把画布绘制写好了（drawPanel / drawTabbed），
+   * 这一层只负责：开关、按键与 HUD 按钮、关闭命中、滚动（拖拽 + 滚轮）。
+   * 面板打开时游戏逻辑与摇杆输入一起冻结 —— 和船只管理 / 建造菜单同一套规矩。
+   * 状态三件套：
+   *   panelOpen  '' | 'ach' | 'lb'   —— 当前开的是哪一块
+   *   panelUI    上次绘制返回的热区（关闭按钮 / tab / 列表），关闭时清空，避免悬空引用
+   *   panelScroll 列表滚动行号（面板自己的 maxScroll 由绘制返回值钳住）
+   * 排行榜还有一个异步数据源（本地榜同步、好友榜异步、全服榜恒不可用），
+   * 用 panelData 缓存，避免每帧重复请求。 */
+  var panelOpen = '', panelUI = null, panelScroll = 0;
+  /* NPC 对话面板 / 寿司店面板：各自的命中区与滚动量。 */
+  var npcPanelOpen = false, npcUI = null, npcHintRect = null;
+  var sushiPanelOpen = false, sushiUI = null, sushiTab = 'menu';
+  function openNpcPanel() { npcPanelOpen = true; npcUI = null; blip(560, 0.1, 'sine', 0.04, 700); }
+  function closeNpcPanel() { npcPanelOpen = false; npcUI = null; }
+  function openSushiPanel() { sushiPanelOpen = true; sushiUI = null; blip(620, 0.1, 'sine', 0.04, 800); }
+  function closeSushiPanel() { sushiPanelOpen = false; sushiUI = null; }
+  /** 寿司店开张：需要小满在船上（设计文档的关键 NPC）。 */
+  function tryOpenSushi() {
+    if (!window.SushiShop) return false;
+    if (window.SushiShop.isOpen()) return true;
+    if (window.NpcDialogue && !window.NpcDialogue.isAboard('xiaoman')) return false;
+    var r = window.SushiShop.unlock();
+    if (r.ok) {
+      addFT('寿司店开张了！按 T 经营', hero.x, hero.z, '#ffd166', 3);
+      fanfare([523, 659, 784, 1047], 0.11, 'triangle', 0.07);
+    }
+    return r.ok;
+  }
+  var panelTab = 'local', panelData = null, panelDrag = null, panelWheelT = 0;
+  var achBtnRect = null, lbBtnRect = null;
+  /* Result of the debug panel self-check, painted over the HUD by
+   * drawSelfCheckOverlay. Declared here, next to the panel state it describes,
+   * because start() writes it before the later declarations would run. */
+  var selfCheckResult = null;
   /* 12c. DIVING — the dive module takes over the same 2D context while active.
    * It is optional: when prototype/dive/dive-canvas.js is not loaded the game
    * simply never offers a dive. */
@@ -7384,6 +8693,11 @@ var THREE = __wxRoot.THREE || window.THREE;
     food = Math.min(maxFood, food + gainedFood);
     score += Math.min(6, Math.max(1, Math.round((loot.value || 0) / 20)));
     var n = loot.items ? loot.items.length : 0;
+    // The catch also goes into the sushi shop's larder, which is what closes the
+    // "dive -> ingredients -> shop -> coins" loop.
+    if (window.SushiShop && window.SushiShop.isOpen()) {
+      try { window.SushiShop.addFromDive(loot); } catch (e) { /* ignore */ }
+    }
     addFT('带回 ' + n + ' 件 · 食物 +' + gainedFood, hero.x, hero.z, '#9fe0ff', 2);
     fanfare([659, 880, 1047], 0.09, 'triangle', 0.06);
   }
@@ -7729,13 +9043,27 @@ var THREE = __wxRoot.THREE || window.THREE;
     /* --- The round-button column, bottom-right ---
      * One shared layout so the buttons can never overlap: they are stacked
      * upward from the dash button with a fixed pitch, and each one only takes a
-     * slot if it is currently active. Order from the bottom: 冲刺, 建, 船, 潜.
-     */
-    var BR = 26;                                   // button radius
-    var bpitch = BR * 2 + 20;                      // vertical spacing
+     * slot if it is currently active. Order from the bottom: 冲刺, 建, 船, 潜,
+     * 成, 榜 (six slots — the last two are the achievements and leaderboard).
+     *
+     * Six buttons at the old 72px pitch need 360px of height, which does not fit
+     * a landscape WeChat screen (390px tall: 榜 would run off the top under the
+     * capsule button). The pitch and radius therefore shrink together on short
+     * screens, computed from the height actually available above the dash
+     * button — so the column always ends below the WeChat capsule. */
+    var DASH_BOTTOM = h - m - 30 - 10;
+    var SLOT_COUNT = 6;
+    var BR = 26, bpitch = BR * 2 + 20;
+    var topRoom = DASH_BOTTOM - (cap && typeof cap.bottom === 'number' && cap.bottom > 0 ? cap.bottom + 8 : m) - 16;
+    var wanted = bpitch * (SLOT_COUNT - 1) + BR;         // room the full column wants
+    if (topRoom < wanted) {
+      var squeeze = Math.max(0.55, topRoom / wanted);    // never shrink past legibility
+      BR = Math.max(18, Math.round(26 * squeeze));
+      bpitch = Math.round((BR * 2 + 20) * squeeze);
+    }
     var bx0 = w - m - BR - 10;
-    var slotY = [h - m - 30 - 10];                 // dash sits lowest
-    for (var sN = 1; sN < 5; sN++) slotY.push(slotY[sN - 1] - bpitch);
+    var slotY = [DASH_BOTTOM];                          // dash sits lowest
+    for (var sN = 1; sN < SLOT_COUNT + 1; sN++) slotY.push(slotY[sN - 1] - bpitch);
 
     /* --- Dock / cast-off, and the on-deck fishing action ---
      * Placed along the bottom-centre so they read as "things you do with the
@@ -7862,6 +9190,46 @@ var THREE = __wxRoot.THREE || window.THREE;
       hudCtx.fillText('下潜', dbx, dby - BR - font * 0.3);
       hudCtx.textAlign = 'left';
     } else diveBtnRect = null;
+
+    /* 成 — the achievements panel. Slot 4. Only when the module is inlined. */
+    if (window.Achievements && phase === 'playing' && !buildOffer) {
+      var abx = bx0, aby = slotY[4];
+      achBtnRect = { x: abx, y: aby, r: BR + 8 };
+      var achOn = panelOpen === 'ach';
+      var achPct = 0;
+      try { achPct = window.Achievements.overallProgress(); } catch (e) { achPct = 0; }
+      hudCtx.fillStyle = achOn ? 'rgba(70,60,20,0.88)' : 'rgba(14,18,40,0.6)';
+      hudCtx.beginPath(); hudCtx.arc(abx, aby, BR, 0, Math.PI * 2); hudCtx.fill();
+      hudCtx.strokeStyle = achOn ? 'rgba(255,226,168,0.95)' : 'rgba(255,226,168,0.6)';
+      hudCtx.lineWidth = achOn ? 3 : 2; hudCtx.stroke();
+      hudCtx.fillStyle = '#ffe2a8';
+      hudCtx.font = '800 ' + (BR * 0.84) + 'px ' + FONT;
+      hudCtx.textAlign = 'center';
+      hudCtx.fillText('成', abx, aby + BR * 0.3);
+      hudCtx.font = '700 ' + (font * 0.58) + 'px ' + FONT;
+      hudCtx.fillStyle = 'rgba(255,226,168,0.9)';
+      hudCtx.fillText(achPct + '%', abx, aby - BR - font * 0.3);
+      hudCtx.textAlign = 'left';
+    } else achBtnRect = null;
+
+    /* 榜 — the leaderboard panel. Slot 5. */
+    if (window.Leaderboard && phase === 'playing' && !buildOffer) {
+      var lbx = bx0, lby = slotY[5];
+      lbBtnRect = { x: lbx, y: lby, r: BR + 8 };
+      var lbOn = panelOpen === 'lb';
+      hudCtx.fillStyle = lbOn ? 'rgba(24,56,80,0.9)' : 'rgba(14,18,40,0.6)';
+      hudCtx.beginPath(); hudCtx.arc(lbx, lby, BR, 0, Math.PI * 2); hudCtx.fill();
+      hudCtx.strokeStyle = lbOn ? 'rgba(159,240,184,0.95)' : 'rgba(159,240,184,0.62)';
+      hudCtx.lineWidth = lbOn ? 3 : 2; hudCtx.stroke();
+      hudCtx.fillStyle = '#dfffe8';
+      hudCtx.font = '800 ' + (BR * 0.84) + 'px ' + FONT;
+      hudCtx.textAlign = 'center';
+      hudCtx.fillText('榜', lbx, lby + BR * 0.3);
+      hudCtx.font = '700 ' + (font * 0.58) + 'px ' + FONT;
+      hudCtx.fillStyle = 'rgba(200,240,255,0.9)';
+      hudCtx.fillText('L', lbx, lby - BR - font * 0.3);
+      hudCtx.textAlign = 'left';
+    } else lbBtnRect = null;
     /* The workbench build list: one card per step whose prerequisites stand.
      * Same card language as the town blueprint choice, drawn in Canvas 2D. */
     /* --- Ship management panel: every structure on the raft, with a demolish
@@ -7923,6 +9291,38 @@ var THREE = __wxRoot.THREE || window.THREE;
       hudCtx.fillText('拆除返还一半材料 · 点击面板外或按 V 关闭', w / 2, pY + pH - font * 0.9);
       hudCtx.textAlign = 'left';
     } else manageRects = null;
+    /* --- 成就 / 排行榜面板 ---
+     * 两个模块自己把卡片、进度条、列表、关闭按钮画好，并返回热区矩形。
+     * 这里只负责：给它们当前滚动值、把返回值存进 panelUI（下一帧的指针命中
+     * 就靠它）、以及在关闭时把 panelUI 清空。
+     * 面板画在建造卡片之前，所以建 / 蓝图那层浮层不会盖住它 —— 但打开面板时
+     * 建造菜单已经被 closeBuildMenu() 收掉了，两层不会同时出现。 */
+    if (panelOpen && phase === 'playing') {
+      /* The two modules lay their rows out at 2.5x the font they are handed:
+       * within a row, the description sits at 1.6f and the progress bar at
+       * 1.88f - 4, so below f = 16 those two collide and the text bleeds into
+       * the bar. That is very visible on a 390px-tall WeChat screen, so the
+       * floor here is 16 and the size tracks the shorter screen edge. Fewer
+       * rows fit at 16 on a short screen, which the panels' own scrolling
+       * already handles. */
+      var panelFont = clamp(Math.min(w, h) * 0.030, 16, 21);
+      panelUI = null;
+      try {
+        if (panelOpen === 'ach' && window.Achievements && window.Achievements.drawPanel) {
+          panelUI = window.Achievements.drawPanel(hudCtx, w, h, {
+            font: panelFont, fontFamily: FONT, scroll: panelScroll,
+            state: window.__gameState()
+          });
+        } else if (panelOpen === 'lb' && window.Leaderboard && window.Leaderboard.drawTabbed) {
+          panelUI = window.Leaderboard.drawTabbed(hudCtx, w, h, {
+            tab: panelTab, data: panelData || {}, font: panelFont,
+            fontFamily: FONT, scroll: panelScroll
+          });
+        }
+      } catch (e) { panelUI = null; /* 面板画挂了也不能让整帧黑掉 */ }
+      // 面板自己算出的 maxScroll 比我们记的大/小了，就把行号钳回去。
+      if (panelUI) panelScroll = Math.max(0, Math.min(panelScroll, panelUI.maxScroll || 0));
+    } else if (!panelOpen) panelUI = null;
     if (buildOpen && phase === 'playing') {
       var sPool = offerableSteps();
       var sCardW = Math.min(w * 0.27, 168), sCardH = sCardW * 0.72;
@@ -8015,11 +9415,34 @@ var THREE = __wxRoot.THREE || window.THREE;
       hudCtx.fillText(cardData.hint, w / 2, cy + ch - font * 1.1);
       hudCtx.textAlign = 'left';
     }
+    /* Debug-only building gallery (see drawGalleryOverlay). No-op unless the
+     * debugGallery rule is set, so normal play and WeChat never see it. */
+    if (R.debugGallery) {
+      try { drawGalleryOverlay(hudCtx, w, h); } catch (e) { /* debug art must not break a frame */ }
+    }
+    /* Debug-only panel self-check readout (see panelSelfCheck). */
+    if (R.debugPanel === 'selfcheck') {
+      try { drawSelfCheckOverlay(hudCtx, w, h); } catch (e) { /* debug art must not break a frame */ }
+    }
     /* Achievement unlock banner, drawn last so it floats above everything. */
     if (window.Achievements) {
       try {
         window.Achievements.drawToast(hudCtx, w, h, { font: font, fontFamily: FONT });
       } catch (e) { /* a HUD extra must never break the frame */ }
+    }
+    /* NPC 对话提示气泡 + 面板（有人有话要说时才出现）。 */
+    if (window.NpcDialogue && !npcPanelOpen && !sushiPanelOpen && !panelOpen && phase === 'playing') {
+      try { npcHintRect = window.NpcDialogue.drawHint(hudCtx, w, h, { font: font }); }
+      catch (e) { npcHintRect = null; }
+    } else if (!npcPanelOpen) npcHintRect = null;
+    if (npcPanelOpen && window.NpcDialogue) {
+      try { npcUI = window.NpcDialogue.drawDialogue(hudCtx, w, h, { font: Math.max(15, font) }); }
+      catch (e) { npcUI = null; }
+    }
+    /* 寿司店面板（开店后才可用）。 */
+    if (sushiPanelOpen && window.SushiShop) {
+      try { sushiUI = window.SushiShop.drawPanel(hudCtx, w, h, { font: Math.max(15, font), tab: sushiTab }); }
+      catch (e) { sushiUI = null; }
     }
   }
 
@@ -8110,6 +9533,9 @@ var THREE = __wxRoot.THREE || window.THREE;
       if (Math.hypot(c.x - hero.x, c.z - hero.z) > SHIP_HALF_LEN + 3.5) continue;
       recruited.push(c.def);
       applyPerk(c.def);
+      // Mirror into the dialogue module so this NPC can talk to the player and
+      // carry affinity across runs.
+      if (window.NpcDialogue) { try { window.NpcDialogue.recruit(c.def.id); } catch (e) { /* ignore */ } }
       addFT(c.def.name + ' 上船了！' + c.def.perk, hero.x, hero.z, '#9ff0b8', 2.6);
       fanfare([523, 659, 784, 1047], 0.09, 'triangle', 0.07);
       scene.remove(c.node); scene.remove(c.ring);
@@ -8195,6 +9621,59 @@ var THREE = __wxRoot.THREE || window.THREE;
   }
   function openManage() { if (!manageOpen) { manageOpen = true; manageSel = 0; blip(560, 0.1, 'sine', 0.04, 720); } }
   function closeManage() { manageOpen = false; manageRects = null; }
+  /* --- 成就 / 排行榜面板的开合与数据 -----------------------------------
+   * 面板是「独占」的：打开时把管理面板、建造菜单、蓝图选择一起收掉，这样同一
+   * 时刻只有一个浮层在吃指针事件，命中判断不会互相打架。
+   * 关闭时统一走 closePanel()，把 panelUI / panelData 置空 —— 这是内存管理的
+   * 关键：面板的热区对象里挂着 close / tabs / 列表矩形数组，不置空就会一直留着
+   * （每帧重绘还会再生成一份，旧的那份没人回收）。 */
+  function closePanel() {
+    if (!panelOpen) return;
+    panelOpen = ''; panelUI = null; panelData = null; panelScroll = 0; panelDrag = null;
+    achBtnRect = null; lbBtnRect = null;
+  }
+  /** 成就面板打开：成就模块自己算行、自己画，我们只给滚动和状态。 */
+  function openAchievePanel() {
+    if (panelOpen === 'ach') { closePanel(); return; }
+    if (!window.Achievements || !window.Achievements.drawPanel) return;
+    closeManage(); closeBuildMenu();
+    panelOpen = 'ach'; panelUI = null; panelData = null; panelScroll = 0; panelDrag = null;
+    blip(660, 0.1, 'sine', 0.04, 880);
+  }
+  /** 排行榜打开：本地榜是同步的，好友榜 / 全服榜是 Promise，先缓存再刷新。 */
+  function openLeaderPanel() {
+    if (panelOpen === 'lb') { closePanel(); return; }
+    if (!window.Leaderboard || !window.Leaderboard.drawTabbed) return;
+    closeManage(); closeBuildMenu();
+    panelOpen = 'lb'; panelUI = null; panelScroll = 0; panelDrag = null;
+    panelData = { local: null, friend: null, server: null };
+    refreshPanelData();
+    blip(660, 0.1, 'sine', 0.04, 880);
+  }
+  /** Pull the data each tab needs. Local is synchronous; the other two resolve
+   *  later (or report themselves unavailable — the panel says so out loud). */
+  function refreshPanelData() {
+    var LB = window.Leaderboard;
+    if (!LB) return;
+    if (!panelData) panelData = {};
+    try { panelData.local = LB.fetchTop(50, 'build'); } catch (e) { panelData.local = null; }
+    try {
+      LB.fetchFriends('build').then(function (r) { if (panelOpen === 'lb') panelData.friend = r; })
+        .catch(function () { if (panelOpen === 'lb') panelData.friend = null; });
+    } catch (e) { panelData.friend = null; }
+    try {
+      LB.fetchServerTop(50).then(function (r) { if (panelOpen === 'lb') panelData.server = r; })
+        .catch(function () { if (panelOpen === 'lb') panelData.server = null; });
+    } catch (e) { panelData.server = null; }
+  }
+  /** 滚动：面板自己算 maxScroll，这里只钳制；返回值是钳完的行号。 */
+  function scrollPanel(delta) {
+    if (!panelOpen || !panelUI) return 0;
+    var max = Math.max(0, panelUI.maxScroll || 0);
+    panelScroll = clamp(panelScroll + delta, 0, max);
+    if (panelScroll !== (panelUI.scroll || 0)) blip(420, 0.04, 'sine', 0.02, 520);
+    return panelScroll;
+  }
   var magnet = 0, tradeBonus = 0, shieldBonus = 0;
   /* The build choice: two blueprints on offer, the player picks one. */
   var buildOffer = null, buildOfferT = 0, offerCooldown = 6, buildSel = 0, buildCardRects = null;
@@ -8574,6 +10053,8 @@ var THREE = __wxRoot.THREE || window.THREE;
   }
   function start() {
     clearEntities();
+    // 面板全部关掉，避免上一局的面板残留到新一局
+    closeNpcPanel(); closeSushiPanel();
     buildings.forEach(function (b) { hero.node.userData.body.remove(b); });
     buildings = [];
     survivalModels.forEach(function (b) { hero.node.userData.body.remove(b); });
@@ -8590,6 +10071,8 @@ var THREE = __wxRoot.THREE || window.THREE;
     starveT = 0; foodDropT = 0; selfSustainT = 0; townReady = false; townReadyBanner = 0;
     buildOffer = null; buildSel = 0; buildOfferT = 0; offerCooldown = 5;
     manageOpen = false; manageRects = null; manageSel = 0;
+    // 面板状态一起复位：不把上一局的面板 / 滚动 / 缓存数据带进新一局。
+    closePanel(); panelTab = 'local';
     docked = false; dockX = 0; dockZ = 0; fishTimer = 0; fishReady = false;
     castaways.forEach(function (c) { scene.remove(c.node); scene.remove(c.ring); });
     castaways = []; recruited = [];
@@ -8604,6 +10087,26 @@ var THREE = __wxRoot.THREE || window.THREE;
     addEnemy();   // one shark to start; the spawn timer brings the rest
     blip(520, 0.12, 'triangle', 0.07, 780);
     setPhase('playing');
+    /* Debug-only: R.debugPanel opens a panel for screenshots (see DEFAULTS).
+     * The two -Key variants go through the real keyboard handlers with a
+     * synthetic key event, so the A / L bindings themselves are proven — not
+     * just the open function the other two values call directly. */
+    if (R.debugPanel === 'ach') openAchievePanel();
+    else if (R.debugPanel === 'lb') openLeaderPanel();
+    else if (R.debugPanel === 'achKey' || R.debugPanel === 'lbKey') {
+      try {
+        var code = R.debugPanel === 'achKey' ? 'KeyA' : 'KeyL';
+        window.dispatchEvent(new KeyboardEvent('keydown', { code: code }));
+        window.dispatchEvent(new KeyboardEvent('keyup', { code: code }));
+      } catch (e) { /* no KeyboardEvent (older WeChat): the hook is debug-only */ }
+    } else if (R.debugPanel === 'selfcheck') {
+      /* Run the panel self-check once the round is live, then leave the result
+       * for drawSelfCheckOverlay to paint over the HUD. */
+      try { selfCheckResult = panelSelfCheck(); } catch (e) {
+        selfCheckResult = { passed: false, total: 1, passedCount: 0,
+                            items: [{ name: '自检抛异常', ok: false, detail: String(e && e.message || e) }] };
+      }
+    }
   }
   function finish(result) {
     if (score > best) { best = score; try { window.localStorage.setItem('dsh-game-studio:drift-town:best', String(best)); } catch (e) { /* sandboxed */ } }
@@ -8631,9 +10134,60 @@ var THREE = __wxRoot.THREE || window.THREE;
   /* 9. INPUT — screen-aligned: right is +x, up is -z (the camera never turns). */
   var keys = {};
   var KEYMAP = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', Space: 'boost', KeyJ: 'boost' };
+  /* --- A 键的双重身份 ---
+   * README 里 A 是 WASD 的左移，任务又要求 A 打开成就面板。两个都要，用
+   * 「点按 / 长按」区分：轻点一下 A（< 260ms，且期间没按别的方向键）= 开面板；
+   * 按住 A = 正常的左移。L 键本来没被占用，直接当排行榜键。
+   * 这样 WASD 不会失效，面板也摸得到 —— 代价是轻点开面板会让角色向左蹭一下，
+   * 移动是插值到速度的，260ms 内的位移小到看不出来。 */
+  var PANEL_TAP_MS = 260;
+  var panelAT0 = 0, panelACombo = false;
+  function panelTapCheck() {
+    return phase === 'playing' && !paused && !panelOpen && !buildOpen && !buildOffer && !manageOpen
+      && !(dive && dive.active());
+  }
   window.addEventListener('keydown', function (event) {
     if (event.code === 'KeyM') { muted = !muted; return; }
+    /* --- 成就 / 排行榜面板是模态的：开着的时候它吃掉所有按键，
+     * Esc 关闭、再按同一个键也关闭、↑↓ / PgUp PgDn 滚动。放在最前面，
+     * 免得角色在面板下面偷偷走动。 --- */
+    if (panelOpen) {
+      if (event.code === 'Escape') { closePanel(); event.preventDefault(); return; }
+      if (event.code === (panelOpen === 'ach' ? 'KeyA' : 'KeyL')) { closePanel(); event.preventDefault(); return; }
+      if (event.code === (panelOpen === 'ach' ? 'KeyL' : 'KeyA')) {
+        // 两块面板之间直接切换，不用先关再开
+        if (panelOpen === 'ach') openLeaderPanel(); else openAchievePanel();
+        event.preventDefault(); return;
+      }
+      if (event.code === 'ArrowDown' || event.code === 'PageDown' || event.code === 'KeyS')
+        { scrollPanel(1); event.preventDefault(); return; }
+      if (event.code === 'ArrowUp' || event.code === 'PageUp' || event.code === 'KeyW')
+        { scrollPanel(-1); event.preventDefault(); return; }
+      event.preventDefault();
+      return;
+    }
     if (phase === 'playing' && event.code === 'KeyP') { paused = !paused; showPause(); return; }
+    /* L — leaderboard. Nothing else claims it, so it is a plain toggle. */
+    if (event.code === 'KeyL' && phase === 'playing' && !paused) {
+      openLeaderPanel(); event.preventDefault(); return;
+    }
+    /* E — 和船上的人说话（NPC 对话面板）。T — 寿司店（上架/结算）。 */
+    if (event.code === 'KeyE' && phase === 'playing' && !paused) {
+      if (npcPanelOpen) { closeNpcPanel(); } else if (window.NpcDialogue && window.NpcDialogue.availableEvent()) { openNpcPanel(); }
+      event.preventDefault(); return;
+    }
+    if (event.code === 'KeyT' && phase === 'playing' && !paused) {
+      if (sushiPanelOpen) { closeSushiPanel(); }
+      else if (window.SushiShop && window.SushiShop.isOpen()) { openSushiPanel(); }
+      event.preventDefault(); return;
+    }
+    /* A — 既是 WASD 的左移，也是成就面板键（见上面的说明）。这里只记下按下的
+     * 时刻；真正的判定在 keyup：短按且期间没按别的键，就当「点按」。 */
+    if (event.code === 'KeyA' && !event.repeat && phase === 'playing') {
+      panelAT0 = performance.now(); panelACombo = false;
+    } else if (panelAT0 && KEYMAP[event.code] && event.code !== 'KeyA') {
+      panelACombo = true;   // 同时按了别的方向键 —— 这是在走位，不是在开面板
+    }
     // The workbench build list: ← / → pick, Enter builds, B / Esc closes.
     if (buildOpen) {
       var pool = offerableSteps();
@@ -8664,8 +10218,18 @@ var THREE = __wxRoot.THREE || window.THREE;
     if (KEYMAP[event.code]) { keys[KEYMAP[event.code]] = true; event.preventDefault(); }
     if (phase !== 'playing' && canRestart()) start();
   });
-  window.addEventListener('keyup', function (event) { if (KEYMAP[event.code]) keys[KEYMAP[event.code]] = false; });
-  window.addEventListener('blur', function () { keys = {}; });
+  window.addEventListener('keyup', function (event) {
+    /* A 的「点按开成就面板」判定：按下到松开 < PANEL_TAP_MS，且期间没按别的
+     * 方向键，就当成点按。长按 A 仍然是左移（松开时早就超过阈值了）。 */
+    if (event.code === 'KeyA' && panelAT0) {
+      var held = performance.now() - panelAT0;
+      var wasTap = held < PANEL_TAP_MS && !panelACombo;
+      panelAT0 = 0; panelACombo = false;
+      if (wasTap && panelTapCheck()) { openAchievePanel(); }
+    }
+    if (KEYMAP[event.code]) keys[KEYMAP[event.code]] = false;
+  });
+  window.addEventListener('blur', function () { keys = {}; panelAT0 = 0; panelACombo = false; });
   function showPause() {
     if (paused) showCard('已暂停', '按 P 继续', '');
     else clearCard();
@@ -8690,6 +10254,61 @@ var THREE = __wxRoot.THREE || window.THREE;
       return;
     }
     if (phase !== 'playing') { if (canRestart()) start(); return; }
+    /* --- NPC 对话面板：点选项 / 点关闭 / 点别处关 --- */
+    if (npcPanelOpen) {
+      if (npcUI) {
+        if (npcUI.close && event.clientX >= npcUI.close.x && event.clientX <= npcUI.close.x + npcUI.close.w
+            && event.clientY >= npcUI.close.y && event.clientY <= npcUI.close.y + npcUI.close.h) {
+          closeNpcPanel(); return;
+        }
+        for (var nci = 0; nci < npcUI.choices.length; nci++) {
+          var nc = npcUI.choices[nci];
+          if (event.clientX >= nc.x && event.clientX <= nc.x + nc.w
+              && event.clientY >= nc.y && event.clientY <= nc.y + nc.h) {
+            var res = window.NpcDialogue.choose(nc.index);
+            if (res && res.ok) {
+              addFT(res.npc.name + ' · ' + (res.affinityDelta >= 0 ? '+' : '') + res.affinityDelta + ' 好感',
+                hero.x, hero.z, res.affinityDelta >= 0 ? '#9ff0b8' : '#ffb4a0', 2.4);
+              fanfare(res.affinityDelta >= 0 ? [659, 880] : [330, 220], 0.1, 'sine', 0.05);
+              // 小满上船 + 好感够 → 可以开寿司店
+              tryOpenSushi();
+            }
+            npcUI = null;
+            closeNpcPanel();
+            return;
+          }
+        }
+      }
+      closeNpcPanel();
+      return;
+    }
+    /* --- 寿司店面板：点菜品上架/下架，点关闭 --- */
+    if (sushiPanelOpen) {
+      if (sushiUI) {
+        if (sushiUI.close && event.clientX >= sushiUI.close.x && event.clientX <= sushiUI.close.x + sushiUI.close.w
+            && event.clientY >= sushiUI.close.y && event.clientY <= sushiUI.close.y + sushiUI.close.h) {
+          closeSushiPanel(); return;
+        }
+        for (var sri = 0; sri < sushiUI.rows.length; sri++) {
+          var sr = sushiUI.rows[sri];
+          if (event.clientX >= sr.x && event.clientX <= sr.x + sr.w
+              && event.clientY >= sr.y && event.clientY <= sr.y + sr.h) {
+            var tr = window.SushiShop.toggleMenu(sr.id);
+            if (tr && tr.ok) blip(tr.action === 'added' ? 760 : 420, 0.1, 'triangle', 0.05, 560);
+            sushiUI = null;
+            return;
+          }
+        }
+      }
+      closeSushiPanel();
+      return;
+    }
+    // NPC 对话提示气泡：点它就开面板。
+    if (npcHintRect
+        && event.clientX >= npcHintRect.x && event.clientX <= npcHintRect.x + npcHintRect.w
+        && event.clientY >= npcHintRect.y && event.clientY <= npcHintRect.y + npcHintRect.h) {
+      openNpcPanel(); return;
+    }
     // Ship management panel: demolish buttons, or tap outside to close.
     if (manageOpen) {
       if (manageRects) {
@@ -8703,6 +10322,34 @@ var THREE = __wxRoot.THREE || window.THREE;
         }
       }
       closeManage();
+      return;
+    }
+    /* --- 成就 / 排行榜面板：模态，先吃指针 ---
+     * 命中顺序：关闭按钮 → 排行榜 tab → 面板内（开始拖拽滚动）→ 面板外（关闭）。
+     * 排行榜用模块自己的 hitTest()，它认 ui.close / ui.tabs / 列表行 / outside，
+     * 这样「关闭」「切 tab」的语义跟模块画的一致，不会两边各写一套。 */
+    if (panelOpen) {
+      var pUI = panelUI, px0 = event.clientX, py0 = event.clientY;
+      if (!pUI) { closePanel(); return; }
+      var hit = 'inside';
+      if (panelOpen === 'lb' && window.Leaderboard && window.Leaderboard.hitTest) {
+        try { hit = window.Leaderboard.hitTest(pUI, px0, py0); } catch (e) { hit = 'inside'; }
+      } else {
+        // 成就面板没有 hitTest：关闭按钮 + 矩形在这里自己判。
+        var cR = pUI.close;
+        if (cR && px0 >= cR.x && px0 <= cR.x + cR.w && py0 >= cR.y && py0 <= cR.y + cR.h) hit = 'close';
+        else if (px0 < pUI.x || px0 > pUI.x + pUI.w || py0 < pUI.y || py0 > pUI.y + pUI.h) hit = 'outside';
+      }
+      if (hit === 'close' || hit === 'outside') { closePanel(); return; }
+      if (hit === 'local' || hit === 'friend' || hit === 'server') {
+        // 切 tab：滚动回到顶部，数据已经有了（本地同步、另两个异步/不可用）
+        panelTab = hit; panelScroll = 0;
+        blip(600, 0.06, 'sine', 0.03, 700);
+        return;
+      }
+      // 面板内：按下开始拖拽滚动，松手时按位移换算行数。
+      panelDrag = { id: event.pointerId, startY: py0, start: panelScroll, moved: 0 };
+      try { canvas.setPointerCapture(event.pointerId); } catch (e) { /* not captured */ }
       return;
     }
     // Dock / cast off, and the on-deck fishing action.
@@ -8721,6 +10368,15 @@ var THREE = __wxRoot.THREE || window.THREE;
     if (manageBtnRect) {
       var smx = event.clientX - manageBtnRect.x, smy = event.clientY - manageBtnRect.y;
       if (smx * smx + smy * smy <= manageBtnRect.r * manageBtnRect.r) { openManage(); return; }
+    }
+    // Achievements button (成) and leaderboard button (榜): same round hit area.
+    if (achBtnRect) {
+      var abx2 = event.clientX - achBtnRect.x, aby2 = event.clientY - achBtnRect.y;
+      if (abx2 * abx2 + aby2 * aby2 <= achBtnRect.r * achBtnRect.r) { openAchievePanel(); return; }
+    }
+    if (lbBtnRect) {
+      var lbx2 = event.clientX - lbBtnRect.x, lby2 = event.clientY - lbBtnRect.y;
+      if (lbx2 * lbx2 + lby2 * lby2 <= lbBtnRect.r * lbBtnRect.r) { openLeaderPanel(); return; }
     }
     // Recruit the drifter in reach.
     if (recruitRect
@@ -8777,12 +10433,32 @@ var THREE = __wxRoot.THREE || window.THREE;
   });
   canvas.addEventListener('pointermove', function (event) {
     if (dive && dive.active()) { dive.pointerMove(event.pointerId, event.clientX, event.clientY); return; }
+    /* 面板拖拽滚动：行高从绘制返回值里拿（ach 与 lb 都给 rowH），按「拖过几行
+     * 的高度」换算成行数。向上拖内容往上走 = 行号变大。 */
+    if (panelDrag && event.pointerId === panelDrag.id) {
+      var dyP = event.clientY - panelDrag.startY;
+      panelDrag.moved = dyP;
+      var rowHP = panelUI && panelUI.rowH ? panelUI.rowH : 40;
+      var rowsP = Math.round(-dyP / Math.max(16, rowHP * 1.15));
+      var maxP = panelUI ? (panelUI.maxScroll || 0) : 0;
+      panelScroll = clamp(panelDrag.start + rowsP, 0, maxP);
+      return;
+    }
     if (!drag || event.pointerId !== drag.id) return;
     drag.dx = event.clientX - drag.x;
     drag.dy = event.clientY - drag.y;
   });
+  /* Wheel / trackpad scrolling while a panel is open (desktop). */
+  canvas.addEventListener('wheel', function (event) {
+    if (!panelOpen) return;
+    var d = event.deltaY > 0 ? 1 : (event.deltaY < 0 ? -1 : 0);
+    if (!d) return;
+    scrollPanel(d);
+    event.preventDefault();
+  }, { passive: false });
   function endDrag(event) {
     if (dive && dive.active()) { dive.pointerUp(event.pointerId); return; }
+    if (panelDrag && event.pointerId === panelDrag.id) { panelDrag = null; return; }
     if (drag && event.pointerId === drag.id) drag = null;
   }
   canvas.addEventListener('pointerup', endDrag);
@@ -8822,7 +10498,7 @@ var THREE = __wxRoot.THREE || window.THREE;
   /* 10. UPDATE */
   function update(dt, now) {
     // A blueprint on offer freezes the action: the choice is the decision point.
-    if (phase === 'playing' && !paused && !buildOffer && !buildOpen) {
+    if (phase === 'playing' && !paused && !buildOffer && !buildOpen && !panelOpen && !npcPanelOpen && !sushiPanelOpen) {
       elapsed += dt;
       timeLeft = Math.max(0, timeLeft - dt);
       invulnerable = Math.max(0, invulnerable - dt);
@@ -9386,6 +11062,92 @@ var THREE = __wxRoot.THREE || window.THREE;
     return out;
   }
   window.__renderSlots = renderSlots;
+  /* --- 建筑特写 ---
+   * 城镇 6 座建筑不在贴图槽里（它们不是 hero/enemy/pickup），studio 的
+   * characters 特写拍不到它们。这个函数把 6 座建筑各渲染一张透明背景的
+   * 特写，一次调用返回 { 名称: dataURL }，用来肉眼核对精修效果。
+   * 和 renderSlots 一样只用于调试与截图，正常玩不会调用。 */
+  function renderBuildings(size) {
+    size = size || 256;
+    if (!renderer3) {
+      var c = document.createElement('canvas');
+      renderer3 = new THREE.WebGLRenderer({ canvas: c, antialias: true, alpha: true, preserveDrawingBuffer: true });
+      renderer3.setClearColor(0x000000, 0);
+      renderer3.toneMapping = renderer.toneMapping;
+      renderer3.toneMappingExposure = renderer.toneMappingExposure;
+    }
+    renderer3.setPixelRatio(1);
+    renderer3.setSize(size, size, false);
+    var out = {};
+    for (var bi = 0; bi < BUILDING_BOXES.length; bi++) {
+      var stage = new THREE.Scene();
+      stage.add(new THREE.HemisphereLight('#c9d2ff', '#5b4434', 1.6));
+      var key = new THREE.DirectionalLight('#ffe2c4', 2.2);
+      key.position.set(-3, 5, 4);
+      stage.add(key);
+      var model = voxelModel(BUILDING_BOXES[bi], true);
+      // The windmill carries its sails as a separate mesh; add it in the same
+      // place the game puts it, so the close-up is the finished building.
+      if (bi === BUILDING_BOXES.length - 1) {
+        var bl = voxelModel(BLADE_BOXES);
+        bl.position.set(0, 1.78, 0.34);
+        model.add(bl);
+      }
+      stage.add(model);
+      var box = new THREE.Box3().setFromObject(model);
+      var center = box.getCenter(new THREE.Vector3()), extent = box.getSize(new THREE.Vector3());
+      var cam = new THREE.PerspectiveCamera(30, 1, 0.1, 500);
+      var distance = Math.max(extent.x, extent.y, extent.z) / (2 * Math.tan(15 * Math.PI / 180)) * 1.22;
+      cam.position.copy(center).add(new THREE.Vector3(0.6, 0.42, 1).normalize().multiplyScalar(distance));
+      cam.lookAt(center);
+      renderer3.render(stage, cam);
+      out[BUILDING_NAMES[bi]] = renderer3.domElement.toDataURL('image/png');
+      model.traverse(function (node) { if (node.geometry) node.geometry.dispose(); if (node.material) node.material.dispose(); });
+    }
+    return out;
+  }
+  window.__renderBuildings = renderBuildings;
+  /* Debug-only gallery overlay: when R.debugGallery is on, the six town
+   * buildings are rendered once and tiled over the HUD, so an unattended
+   * playtest screenshot shows them without anyone clicking anything.
+   * Gated on a rule that is empty in game.json, so the shipped game — and
+   * WeChat, which has no Image/DOM — never walks this path. */
+  var galleryTiles = null, galleryTried = false;
+  function drawGalleryOverlay(ctx, w, h) {
+    if (!R.debugGallery) return;
+    if (!galleryTried) {
+      galleryTried = true;
+      try {
+        var renders = renderBuildings(200);
+        galleryTiles = [];
+        Object.keys(renders).forEach(function (name) {
+          var img = new Image();
+          img.src = renders[name];
+          galleryTiles.push({ name: name, img: img });
+        });
+      } catch (e) { galleryTiles = null; }
+    }
+    if (!galleryTiles || !galleryTiles.length) return;
+    var cols = 3, rows = 2;
+    var tileW = Math.min((w - 40) / cols, 210), tileH = Math.min((h - 120) / rows, 170);
+    var gw = tileW * cols, gh = tileH * rows;
+    var gx = (w - gw) / 2, gy = (h - gh) / 2;
+    ctx.save();
+    ctx.fillStyle = 'rgba(8,14,26,0.93)';
+    ctx.fillRect(gx - 12, gy - 12, gw + 24, gh + 40);
+    ctx.strokeStyle = 'rgba(255,214,140,0.6)'; ctx.lineWidth = 2;
+    ctx.strokeRect(gx - 12, gy - 12, gw + 24, gh + 40);
+    for (var i = 0; i < galleryTiles.length; i++) {
+      var t = galleryTiles[i], cx = gx + (i % cols) * tileW, cy = gy + Math.floor(i / cols) * tileH;
+      try { if (t.img.width) ctx.drawImage(t.img, cx + 4, cy + 4, tileW - 8, tileH - 30); } catch (e) { /* not decoded yet */ }
+      ctx.fillStyle = '#ffe2a8';
+      ctx.font = '700 15px ' + FONT;
+      ctx.textAlign = 'center';
+      ctx.fillText(t.name, cx + tileW / 2, cy + tileH - 8);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+  }
   // Tell the studio sidebar how the characters look in this build.
   setTimeout(function () {
     if (!parentWindow) return;
@@ -9404,6 +11166,10 @@ var THREE = __wxRoot.THREE || window.THREE;
       offerable: offerableSteps().map(function (s) { return s.id; }),
       buildBtnVisible: !!buildBtnRect, buildOpen: buildOpen,
       diveBtnVisible: !!diveBtnRect, manageBtnVisible: !!manageBtnRect, manageOpen: manageOpen,
+      /* Panels: which one is open, and whether its two HUD buttons are on screen. */
+      panelOpen: panelOpen, panelScroll: panelScroll,
+      achBtnVisible: !!achBtnRect, lbBtnVisible: !!lbBtnRect,
+      leaderTab: panelOpen === 'lb' ? panelTab : null,
       shipParts: shipParts().map(function (p) { return p.name; }),
       castaways: castaways.map(function (c) { return { name: c.def.name, perk: c.def.perk }; }),
       recruited: recruited.map(function (r) { return r.name; }),
@@ -9514,6 +11280,161 @@ var THREE = __wxRoot.THREE || window.THREE;
     return out;
   };
   window.__debugManage = function () { openManage(); return manageOpen; };
+  /* --- 成就 / 排行榜面板的调试钩子 ---
+   * 两个面板平时要点 HUD 圆钮或按 A / L 才出来，自动化验证不好点。这两个钩子
+   * 直接打开面板（并返回打开后的状态），给 playtest 用。 */
+  window.__debugAchievePanel = function () {
+    if (!panelOpen) openAchievePanel();
+    panelOpen = 'ach';
+    return {
+      open: panelOpen, hasUI: !!panelUI,
+      rows: panelUI && panelUI.visible ? panelUI.visible : 0,
+      maxScroll: panelUI ? (panelUI.maxScroll || 0) : 0,
+      scroll: panelScroll,
+      unlocked: window.Achievements ? window.Achievements.unlockedCount() : 0,
+      total: window.Achievements && window.Achievements.ACHIEVEMENTS
+        ? window.Achievements.ACHIEVEMENTS.length : 0
+    };
+  };
+  window.__debugLeaderPanel = function () {
+    if (!panelOpen) openLeaderPanel();
+    panelOpen = 'lb';
+    return {
+      open: panelOpen, hasUI: !!panelUI, tab: panelTab,
+      maxScroll: panelUI ? (panelUI.maxScroll || 0) : 0,
+      scroll: panelScroll,
+      localItems: panelData && panelData.local && panelData.local.items
+        ? panelData.local.items.length : 0
+    };
+  };
+  /** 关掉当前面板（验证关闭路径用）。 */
+  window.__debugClosePanel = function () { closePanel(); return panelOpen; };
+  /** 面板滚到某一行，验证滚动是否被 maxScroll 钳住。 */
+  window.__debugPanelScroll = function (rows) {
+    var r = scrollPanel(typeof rows === 'number' ? rows : 1);
+    return { scroll: r, maxScroll: panelUI ? (panelUI.maxScroll || 0) : 0 };
+  };
+  /* --- 面板自检 ---
+   * 开合 / 滚动钳制 / tab 切换 / 内存清空，在浏览器里跑一遍并返回逐条结果。
+   * 也支持把结果画到画布上（R.debugPanel === 'selfcheck'），这样自动试玩的
+   * 截图就能验收，不用人开控制台。 */
+  function panelSelfCheck() {
+    var out = [], before;
+    function check(name, ok, detail) { out.push({ name: name, ok: !!ok, detail: detail || '' }); }
+    /* The panel hot zones are produced by drawHUD, which needs a live 2D context.
+     * Re-drawing the whole HUD inside the check would re-enter the frame loop, so
+     * the check drives the two module draw calls directly against the same
+     * context and dimensions drawHUD uses. That keeps the check independent of
+     * render-loop ordering (which is exactly what made the first version fail). */
+    var w = window.innerWidth || 1, h = window.innerHeight || 1;
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    hudCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var chkFont = clamp(Math.min(w, h) * 0.030, 16, 21);
+    // 1. 打开成就面板并画出热区
+    closePanel(); panelScroll = 0;
+    openAchievePanel();
+    check('成就面板可打开', panelOpen === 'ach', 'panelOpen=' + panelOpen);
+    panelUI = window.Achievements.drawPanel(hudCtx, w, h, {
+      font: chkFont, fontFamily: FONT, scroll: panelScroll, state: window.__gameState()
+    });
+    check('成就面板返回热区', !!panelUI, panelUI ? ('maxScroll=' + panelUI.maxScroll) : 'null');
+    // 2. 滚动钳制：往下推远超上界的行数，必须停在 maxScroll
+    var maxA = panelUI ? (panelUI.maxScroll || 0) : 0;
+    check('成就列表可滚动', maxA > 0, 'maxScroll=' + maxA);
+    panelScroll = maxA + 500;                       // 模拟「推过头」
+    panelScroll = clamp(panelScroll, 0, maxA);
+    check('滚动被 maxScroll 钳住', panelScroll === maxA, panelScroll + '/' + maxA);
+    panelScroll = -50;
+    panelScroll = clamp(panelScroll, 0, maxA);
+    check('滚动不为负', panelScroll === 0, String(panelScroll));
+    // 3. 关闭后热区必须清空（内存）
+    closePanel();
+    check('关闭后清空热区', panelOpen === '' && panelUI === null && panelData === null,
+          'open=' + panelOpen + ' ui=' + panelUI + ' data=' + panelData);
+    // 4. 排行榜：三个 tab 都能切换，且本地榜有数据形状
+    openLeaderPanel();
+    check('排行榜可打开', panelOpen === 'lb', 'panelOpen=' + panelOpen);
+    panelUI = window.Leaderboard.drawTabbed(hudCtx, w, h, {
+      tab: panelTab, data: panelData || {}, font: chkFont, fontFamily: FONT, scroll: panelScroll
+    });
+    check('排行榜热区含关闭按钮', !!(panelUI && panelUI.close), panelUI ? 'ok' : 'null');
+    var tabsSeen = [];
+    if (panelUI && panelUI.tabs) {
+      for (var t = 0; t < panelUI.tabs.length; t++) {
+        panelTab = panelUI.tabs[t].id; panelScroll = 0;
+        panelUI = window.Leaderboard.drawTabbed(hudCtx, w, h, {
+          tab: panelTab, data: panelData || {}, font: chkFont, fontFamily: FONT, scroll: panelScroll
+        });
+        tabsSeen.push(panelTab + (panelUI && panelUI.tab === panelTab ? '' : '(mismatch)'));
+      }
+    }
+    check('三个 tab 可切换', tabsSeen.length === 3 && tabsSeen.join(',').indexOf('mismatch') < 0,
+          tabsSeen.join(','));
+    // 5. Leaderboard.hitTest 的四个语义都要能命中
+    panelTab = 'local'; panelScroll = 0;
+    panelUI = window.Leaderboard.drawTabbed(hudCtx, w, h, {
+      tab: panelTab, data: panelData || {}, font: chkFont, fontFamily: FONT, scroll: 0
+    });
+    var hitClose = window.Leaderboard.hitTest(panelUI, panelUI.close.x + 2, panelUI.close.y + 2);
+    var hitOutside = window.Leaderboard.hitTest(panelUI, 1, 1);
+    var hitTab = window.Leaderboard.hitTest(panelUI, panelUI.tabs[1].x + 2, panelUI.tabs[1].y + 2);
+    check('hitTest: 关闭/外部/tab', hitClose === 'close' && hitOutside === 'outside' && hitTab === 'friend',
+          hitClose + '/' + hitOutside + '/' + hitTab);
+    // 6. 两个键互切
+    closePanel(); openAchievePanel();
+    openLeaderPanel();                              // 从成就面板直接开排行榜
+    check('成就→排行榜直接切换', panelOpen === 'lb', 'panelOpen=' + panelOpen);
+    openAchievePanel();
+    check('排行榜→成就直接切换', panelOpen === 'ach', 'panelOpen=' + panelOpen);
+    // 7. 游戏逻辑确实被面板冻住（时间不该在面板开着时流逝）。
+    //    timeLeft 要等一帧真更新才有意义，所以自己先给一个已知起点。
+    closePanel();
+    var t0 = 30;
+    timeLeft = t0;
+    panelOpen = 'ach'; update(0.5, 0);
+    var frozen = timeLeft === t0;
+    panelOpen = ''; update(0.5, 0);
+    check('面板期间游戏时间冻结', frozen, t0 + ' → ' + timeLeft + '（开面板时不动）');
+    check('面板关掉后时间恢复', timeLeft < t0, t0 + ' → ' + timeLeft + '（关面板后前进）');
+    var passed = 0;
+    for (var i = 0; i < out.length; i++) if (out[i].ok) passed++;
+    return { passed: passed === out.length, total: out.length, passedCount: passed, items: out };
+  }
+  window.__panelSelfCheck = panelSelfCheck;
+  /** 把自检结果画在画布上，供无头截图验收。
+   *  只在回合内跑：标题界面上 phase 还不是 'playing'，update() 不推进时钟，
+   *  那条「关掉面板后时间恢复」会假失败。真正的自检在 start() 里跑一次。 */
+  function drawSelfCheckOverlay(ctx, w, h) {
+    if (phase !== 'playing') return;
+    if (!selfCheckResult) {
+      try { selfCheckResult = panelSelfCheck(); } catch (e) {
+        selfCheckResult = { passed: false, total: 1, passedCount: 0,
+                            items: [{ name: '自检抛异常', ok: false, detail: String(e && e.message || e) }] };
+      }
+    }
+    var r = selfCheckResult;
+    var lineH = 20, padX = 22;
+    var boxW = Math.min(w - 40, 620), boxH = 56 + lineH * r.items.length;
+    var bx = (w - boxW) / 2, by = (h - boxH) / 2;
+    ctx.save();
+    ctx.fillStyle = 'rgba(8,14,26,0.95)';
+    ctx.fillRect(bx, by, boxW, boxH);
+    ctx.strokeStyle = r.passed ? 'rgba(159,240,184,0.85)' : 'rgba(255,140,120,0.9)';
+    ctx.lineWidth = 2; ctx.strokeRect(bx, by, boxW, boxH);
+    ctx.textAlign = 'left';
+    ctx.font = '800 17px ' + FONT;
+    ctx.fillStyle = r.passed ? '#9ff0b8' : '#ff9a96';
+    ctx.fillText('面板自检 ' + r.passedCount + '/' + r.total + (r.passed ? ' PASS' : ' FAIL'), bx + padX, by + 30);
+    ctx.font = '700 14px ' + FONT;
+    for (var i = 0; i < r.items.length; i++) {
+      var it = r.items[i];
+      ctx.fillStyle = it.ok ? '#c8f0d0' : '#ffb4a0';
+      ctx.fillText((it.ok ? 'OK   ' : 'FAIL ') + it.name + (it.detail ? '   ' + it.detail : ''),
+                   bx + padX, by + 56 + i * lineH);
+    }
+    ctx.textAlign = 'left';
+    ctx.restore();
+  }
   window.__debugParts = function () { return shipParts().map(function (p) { return p.name; }); };
   window.__debugSpawnCastaway = function () { spawnCastaway(); return castaways.length; };
   window.__debugRecruit = function () { return tryRecruit() ? true : false; };
@@ -9521,5 +11442,18 @@ var THREE = __wxRoot.THREE || window.THREE;
   window.__debugCast = function () { castLine(); return fishTimer; };
   window.__debugReel = function () { return reelIn(); };
   window.__debugExitDive = function () { exitDive(); return !(dive && dive.active()); };
+  /* Debug hooks for the NPC / sushi panels. */
+  window.__debugNpc = function () {
+    if (window.NpcDialogue && window.NpcDialogue.availableEvent()) { openNpcPanel(); return true; }
+    return false;
+  };
+  window.__debugSushi = function () { tryOpenSushi(); openSushiPanel(); return sushiPanelOpen; };
+  window.__debugRecruitNpc = function (id) {
+    var r = window.NpcDialogue ? window.NpcDialogue.recruit(id) : { ok: false };
+    if (r.ok && recruited.indexOf(r.npc) < 0) {
+      recruited.push({ id: id, name: r.npc.name, perk: r.npc.perk });
+    }
+    return r.ok;
+  };
 })();
 

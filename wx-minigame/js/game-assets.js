@@ -92,6 +92,8 @@ window.GAME = Object.assign(window.GAME || {}, {
     },
     "worldSize": 34,
     "seed": 7,
+    "debugPanel": "",
+    "debugGallery": false,
     "palette": {
       "skyTop": "#79c4ef",
       "skyBottom": "#ffedc4",
