@@ -1,0 +1,32 @@
+{
+  "description": "漂流小镇 — WeChat Mini Game exported by dsh-game-studio",
+  "setting": {
+    "urlCheck": true,
+    "es6": false,
+    "enhance": false,
+    "minified": true,
+    "uglifyFileName": false,
+    "enhanceWithBabel": false
+  },
+  "compileType": "game",
+  "libVersion": "3.5.8",
+  "appid": "wxba1f256457da7469",
+  "projectname": "drift-town",
+  "condition": {},
+  "packOptions": {
+    "ignore": [
+      {
+        "type": "file",
+        "value": ".studio-wx-manifest.json"
+      },
+      {
+        "type": "file",
+        "value": "WECHAT_SUBMISSION_DRAFT.md"
+      },
+      {
+        "type": "glob",
+        "value": "**/*.md"
+      }
+    ]
+  }
+}

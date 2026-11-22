@@ -1,0 +1,13 @@
+# 构建产物可以由源码重建，但 dist/index.html 已提交以便直接双击游玩
+# .studio/ 是 Game Studio 编辑器元数据与试玩截图缓存
+.studio/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
+
+# 依赖（本项目无 npm 依赖，保留以防将来添加）
+node_modules/

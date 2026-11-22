@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "template": "voxel",
+  "title": "漂流小镇",
+  "runtime": [
+    "three"
+  ],
+  "slots": {
+    "hero": {
+      "file": "assets/hero.svg",
+      "label": "小木筏",
+      "size": [
+        256,
+        256
+      ],
+      "transparent": true
+    },
+    "enemy": {
+      "file": "assets/enemy.svg",
+      "label": "鲨鱼",
+      "size": [
+        256,
+        256
+      ],
+      "transparent": true
+    },
+    "pickup": {
+      "file": "assets/pickup.svg",
+      "label": "漂浮垃圾",
+      "size": [
+        256,
+        256
+      ],
+      "transparent": true
+    }
+  },
+  "rules": {
+    "duration": 85,
+    "hearts": 4,
+    "heroSpeed": 8.0,
+    "enemySpeed": 1.6,
+    "enemySpeedGrowth": 0.02,
+    "enemySpawnEvery": 14,
+    "maxEnemies": 2,
+    "maxPickups": 16,
+    "heroSize": 3.0,
+    "enemySize": 1.15,
+    "pickupSize": 1.7,
+    "shield": {
+      "enabled": true,
+      "every": 5,
+      "seconds": 4
+    },
+    "target": 26,
+    "buildEvery": 5,
+    "dash": {
+      "cooldown": 3,
+      "speed": 15,
+      "time": 0.4
+    },
+    "comboWindow": 5,
+    "specialEvery": 10,
+    "autoBuild": false,
+    "worldSize": 34,
+    "seed": 7,
+    "palette": {
+      "skyTop": "#79c4ef",
+      "skyBottom": "#ffedc4",
+      "fog": "#cfeaf2",
+      "grass": "#7cc46a",
+      "dirt": "#a8814f",
+      "sand": "#f2e2ae",
+      "water": "#2fb9cf",
+      "accent": "#ffd166"
+    }
+  },
+  "style": "明亮卡通低多边形海洋世界，湛蓝海面泛着波光，色彩明快清新，类似独立游戏 Flotsam 的可爱画风",
+  "orientation": "landscape"
+}
