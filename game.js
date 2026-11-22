@@ -6903,54 +6903,119 @@
    * WeChat caps the package at 4 MB.
    */
   var GRAIN_ATLAS = (function buildGrainAtlas() {
-    // 4 tiles across, 64px each: 0 wood, 1 stone, 2 metal, 3 cloth.
+    // 8 tiles across, 64px each. Unlike the old near-white scratch texture,
+    // these have visible patterns so the materials actually read as materials:
+    //   0 wood planks  1 stone bricks  2 metal plate  3 cloth
+    //   4 roof tiles   5 glass window  6 sand        7 painted hull
     var S = 64, c = document.createElement('canvas');
-    c.width = S * 4; c.height = S;
+    c.width = S * 8; c.height = S;
     var g = c.getContext('2d');
     var rnd = mulberry32(90210);
-    function tile(i, base, streakColour, streaks, horizontal) {
-      g.fillStyle = base;
-      g.fillRect(i * S, 0, S, S);
-      for (var k = 0; k < streaks; k++) {
-        g.strokeStyle = streakColour;
-        g.globalAlpha = 0.06 + rnd() * 0.14;
-        g.lineWidth = 1 + rnd() * 1.6;
-        g.beginPath();
-        if (horizontal) {
-          var y = rnd() * S;
-          g.moveTo(i * S, y);
-          g.bezierCurveTo(i * S + S * 0.3, y + (rnd() - 0.5) * 6, i * S + S * 0.7, y + (rnd() - 0.5) * 6, i * S + S, y + (rnd() - 0.5) * 5);
-        } else {
-          var x = i * S + rnd() * S;
-          g.moveTo(x, 0);
-          g.bezierCurveTo(x + (rnd() - 0.5) * 6, S * 0.3, x + (rnd() - 0.5) * 6, S * 0.7, x + (rnd() - 0.5) * 5, S);
-        }
-        g.stroke();
+    function bg(i, col) { g.fillStyle = col; g.fillRect(i * S, 0, S, S); }
+    function line(i, x1, y1, x2, y2, col, w) {
+      g.strokeStyle = col; g.lineWidth = w || 2; g.beginPath();
+      g.moveTo(i * S + x1, y1); g.lineTo(i * S + x2, y2); g.stroke();
+    }
+
+    // 0 — wooden planks: dark seams every 16px, grain lines, nail heads.
+    bg(0, '#e8d3a8');
+    for (var p = 0; p < 4; p++) {
+      var py = p * 16;
+      g.fillStyle = 'rgba(120,80,40,0.55)';
+      g.fillRect(0, py, S * 8, 0); // no-op guard
+      for (var k = 0; k < 3; k++) {
+        line(0, 0, py + 3 + k * 4, S, py + 3 + k * 4, 'rgba(150,105,55,0.30)', 1);
       }
-      g.globalAlpha = 1;
-      // A few knots / speckles for tooth.
-      for (var d = 0; d < 26; d++) {
-        g.fillStyle = 'rgba(0,0,0,' + (0.02 + rnd() * 0.05).toFixed(3) + ')';
-        g.fillRect(i * S + rnd() * S, rnd() * S, 1 + rnd() * 2, 1 + rnd() * 2);
+      line(0, 0, py, S, py, 'rgba(90,60,30,0.75)', 2);
+      g.fillStyle = 'rgba(80,55,30,0.6)';
+      g.fillRect(0 + 6, py + 6, 2, 2); g.fillRect(0 + 54, py + 6, 2, 2);
+    }
+
+    // 1 — stone bricks: offset rows, mortar lines.
+    bg(1, '#cfcbc2');
+    for (var by = 0; by < 4; by++) {
+      var yy = by * 16, off = (by % 2) * 16;
+      line(1, 0, yy, S, yy, 'rgba(90,88,84,0.8)', 2);
+      for (var bx = -1; bx < 3; bx++) {
+        var xx = bx * 32 + off;
+        line(1, xx, yy, xx, yy + 16, 'rgba(90,88,84,0.8)', 2);
+      }
+      for (var sp = 0; sp < 6; sp++) {
+        g.fillStyle = 'rgba(255,255,255,0.25)';
+        g.fillRect(off + rnd() * S, yy + rnd() * 14, 3, 2);
       }
     }
-    tile(0, '#ffffff', '#000000', 9, true);    // wood: horizontal grain
-    tile(1, '#ffffff', '#000000', 5, false);   // stone: vertical cracks
-    tile(2, '#ffffff', '#ffffff', 6, true);    // metal: bright streaks
-    tile(3, '#ffffff', '#000000', 3, false);   // cloth: faint weave
+
+    // 2 — metal plate: horizontal brushed lines + rivets.
+    bg(2, '#c9d2da');
+    for (var ml = 2; ml < S; ml += 4) line(2, 0, ml, S, ml, 'rgba(255,255,255,0.35)', 1);
+    line(2, 0, 0, S, 0, 'rgba(80,95,110,0.6)', 2);
+    line(2, 0, 62, S, 62, 'rgba(80,95,110,0.6)', 2);
+    [[6, 6], [58, 6], [6, 58], [58, 58]].forEach(function (rv) {
+      g.fillStyle = 'rgba(90,105,120,0.9)';
+      g.beginPath(); g.arc(2 * S + rv[0], rv[1], 2.2, 0, Math.PI * 2); g.fill();
+    });
+
+    // 3 — cloth / canvas: woven crosshatch.
+    bg(3, '#e7dfd0');
+    for (var cw = 0; cw < S; cw += 5) {
+      line(3, cw, 0, cw, S, 'rgba(160,145,120,0.35)', 1);
+      line(3, 0, cw, S, cw, 'rgba(160,145,120,0.35)', 1);
+    }
+
+    // 4 — roof tiles: overlapping scalloped rows.
+    bg(4, '#b8654f');
+    for (var ty = 0; ty < 4; ty++) {
+      var y4 = ty * 16;
+      for (var tx = 0; tx < 4; tx++) {
+        var x4 = tx * 16 + (ty % 2 ? 8 : 0);
+        g.fillStyle = (tx + ty) % 2 ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.10)';
+        g.fillRect(x4, y4, 15, 15);
+        line(4, x4, y4 + 15, x4 + 16, y4 + 15, 'rgba(80,30,20,0.7)', 2);
+      }
+    }
+
+    // 5 — glass window: pale blue with a cross frame and a highlight.
+    bg(5, '#a9d8e6');
+    g.fillStyle = 'rgba(255,255,255,0.35)';
+    g.beginPath(); g.moveTo(5 * S + 6, 4); g.lineTo(5 * S + 26, 4); g.lineTo(5 * S + 14, 60); g.lineTo(5 * S + 2, 60); g.fill();
+    line(5, 32, 0, 32, S, 'rgba(240,248,250,0.9)', 3);
+    line(5, 0, 32, S, 32, 'rgba(240,248,250,0.9)', 3);
+    line(5, 0, 0, S, 0, 'rgba(70,110,130,0.8)', 3);
+    line(5, 0, 63, S, 63, 'rgba(70,110,130,0.8)', 3);
+
+    // 6 — sand: speckles.
+    bg(6, '#e4d6a8');
+    for (var sd = 0; sd < 220; sd++) {
+      g.fillStyle = rnd() > 0.5 ? 'rgba(160,135,80,0.4)' : 'rgba(255,250,220,0.5)';
+      g.fillRect(6 * S + rnd() * S, rnd() * S, 1.5, 1.5);
+    }
+
+    // 7 — painted hull: horizontal strakes with a fine seam.
+    bg(7, '#dde4ea');
+    for (var hy = 0; hy < 4; hy++) {
+      line(7, 0, hy * 16, S, hy * 16, 'rgba(110,125,140,0.55)', 2);
+      line(7, 0, hy * 16 + 3, S, hy * 16 + 3, 'rgba(255,255,255,0.6)', 1);
+    }
+
     var tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
     return tex;
   })();
-  /** Pick an atlas tile from the colour: wood-ish -> 0, stone -> 1, etc. */
+  /** Pick one of the 8 tiles from a box's colour. Vertex colour still tints it,
+   *  so one atlas serves every building while each keeps its own hue. */
   function grainTileFor(hex) {
     var r = parseInt(hex.slice(1, 3), 16), g2 = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
-    if (r > g2 + 18 && g2 > b + 8) return 0;              // warm brown/orange = wood
-    if (Math.abs(r - g2) < 16 && Math.abs(g2 - b) < 16) return 1; // grey = stone
-    if (b > r + 10) return 1;                              // blue-grey = stone/metal
-    return 3;                                              // everything else = cloth
+    if (r > 150 && g2 < 130 && b < 120 && r > g2 + 40) return 4;   // red/orange roof
+    if (b > r + 25 && b > g2 + 5) return 5;                         // blue glass / water
+    if (r > g2 + 18 && g2 > b + 8) return 0;                        // warm brown = wood
+    if (r > 190 && g2 > 180 && b < 170) return 6;                    // pale sand
+    if (Math.abs(r - g2) < 18 && Math.abs(g2 - b) < 18) return 2;   // grey = metal
+    if (r > 200 && g2 > 200 && b > 200) return 7;                    // near-white = hull
+    return 1;                                                         // everything else = stone
   }
   function voxelModel(boxes, textured) {
     var parts = [[], []];
@@ -6967,6 +7032,9 @@
         var pos = geo.attributes.position, nor = geo.attributes.normal, base = positions.length / 3;
         var tint = color(box[6]);
         var tile = grainTileFor(box[6]);
+        // 贴图已经是彩色的；顶点色只做温和的色调偏移，否则乘完会发暗、把
+        // 木纹/砖缝盖掉。往白提 0.55 让图案清晰可见，仍保留物体间的色差。
+        if (useTex) tint.lerp(color('#ffffff'), 0.55);
         // How many atlas repeats this box spans: bigger boxes get more grain.
         var ru = Math.max(0.5, box[3] * 1.4), rv = Math.max(0.5, box[4] * 1.4);
         var uvAttr = geo.attributes.uv;
@@ -6975,9 +7043,9 @@
           normals.push(nor.getX(v), nor.getY(v), nor.getZ(v));
           colors.push(tint.r, tint.g, tint.b);
           if (useTex) {
-            // Map into the tile's horizontal band, tiled within it.
+            // Map into one of the 8 tiles; repeat the pattern within the tile.
             var u = (uvAttr ? uvAttr.getX(v) : 0), vv = (uvAttr ? uvAttr.getY(v) : 0);
-            uvs.push((tile + (u * ru % 1)) / 4, vv * rv % 1);
+            uvs.push((tile + (u * ru % 1)) / 8, vv * rv % 1);
           }
         }
         var index = geo.index.array;
@@ -8642,7 +8710,7 @@
   /* Docking: anchoring the raft turns it into a town you can stand on. */
   var docked = false, dockX = 0, dockZ = 0, deckBobT = 0;
   var fishTimer = 0, fishReady = false;
-  var dockBtnRect = null, fishBtnRect = null;
+  var dockBtnRect = null, fishBtnRect = null, townViewBtnRect = null;
   function makeDive() {
     if (dive || !window.DiveGame || !window.DiveGame.create) return;
     try {
@@ -8727,6 +8795,7 @@
       addFT('已下锚 · 船变成了小镇', hero.x, hero.z, '#9ff0b8', 2.6);
       fanfare([440, 554], 0.12, 'sine', 0.05);
     } else {
+      townView = false;   // 起锚时自动回到航行视角
       addFT('起锚出航', hero.x, hero.z, '#ffe2a8', 1.8);
       blip(520, 0.18, 'triangle', 0.05, 760);
     }
@@ -8975,22 +9044,24 @@
     // The blueprint choice: two cards, pick with ← / → or a tap.
     if (buildOffer) {
       buildOfferT += 1 / 60;
-      var cardW = Math.min(w * 0.36, 210), cardH = cardW * 0.62;
+      var cardW = Math.min(w * 0.36, 210), cardH = Math.min(cardW * 0.62, h * 0.3);
       var gap = 18, totalW = cardW * buildOffer.length + gap * (buildOffer.length - 1);
-      var startX = (w - totalW) / 2, cy2 = h * 0.66;
+      // Centre the cards vertically so they are always fully on screen (a
+      // 390px-tall WeChat landscape viewport used to push them off the bottom).
+      var startX = (w - totalW) / 2, cy2 = Math.min(h * 0.6, h - cardH - font * 2.5);
       hudCtx.fillStyle = 'rgba(8,14,26,0.35)';
       hudCtx.fillRect(0, 0, w, h);
       hudCtx.textAlign = 'center';
       hudCtx.font = '800 ' + (font * 1.1) + 'px ' + FONT;
       hudCtx.fillStyle = '#ffe2a8';
       hudCtx.fillText('选一张图纸（← → 或点击）', w / 2, cy2 - font * 1.2);
-      buildCardRects = [];
+      townCardRects = [];
       for (var bo = 0; bo < buildOffer.length; bo++) {
         var si = buildOffer[bo], sp3 = BUILDING_SPECS[si];
         var cxp = startX + bo * (cardW + gap), cyp = cy2;
         var afford = canAfford(sp3);
         var isSel = bo === buildSel;
-        buildCardRects.push({ x: cxp, y: cyp, w: cardW, h: cardH, index: bo });
+        townCardRects.push({ x: cxp, y: cyp, w: cardW, h: cardH, index: bo });
         hudCtx.fillStyle = afford ? 'rgba(24,46,66,0.94)' : 'rgba(40,26,26,0.9)';
         roundRect(cxp, cyp, cardW, cardH, 14); hudCtx.fill();
         hudCtx.strokeStyle = isSel && afford ? '#ffd166' : 'rgba(255,255,255,0.2)';
@@ -9007,7 +9078,7 @@
         hudCtx.fillText('民+' + sp3.pop + '  ' + sp3.desc, cxp + cardW / 2, cyp + cardH - font * 0.75);
       }
       hudCtx.textAlign = 'left';
-    } else buildCardRects = null;
+    } else townCardRects = null;
     // Dash button (touch) — dimmed and swept dark while recharging.
     var br = 30, bx = w - m - br - 10, by = h - m - br - 10;
     boostRect = { x: bx, y: by, r: br + 10 };
@@ -9071,25 +9142,36 @@
       hudCtx.fillText(docked ? '起锚出航' : '下锚停船', dkX + dkW / 2, dkY + dkH * 0.66);
       hudCtx.textAlign = 'left';
       // Fishing, only while anchored.
+      var extraY = dkY - font * 1.9 - 10;
       if (docked) {
-        var fW = Math.min(w * 0.26, 150), fH = font * 1.9;
-        var fX = w / 2 - fW / 2, fY = dkY - fH - 10;
-        fishBtnRect = { x: fX, y: fY, w: fW, h: fH };
+        // 「上镇」和「钓鱼」并排，下锚后才有 — 这是「能进入城镇」的入口。
+        var twoW = Math.min(w * 0.16, 108), twoH = font * 1.9, twoGap = 10;
+        var tFightX = w / 2 - twoW - twoGap / 2;
+        var tTownX = w / 2 + twoGap / 2;
+        fishBtnRect = { x: tFightX, y: extraY, w: twoW, h: twoH };
+        townViewBtnRect = { x: tTownX, y: extraY, w: twoW, h: twoH };
         var ready = fishReady;
         hudCtx.globalAlpha = ready ? 0.85 + Math.sin(performance.now() / 180) * 0.15 : 1;
         hudCtx.fillStyle = ready ? 'rgba(40,110,70,0.95)' : (fishTimer > 0 ? 'rgba(40,50,70,0.8)' : 'rgba(20,44,64,0.85)');
-        roundRect(fX, fY, fW, fH, fH / 2); hudCtx.fill();
+        roundRect(tFightX, extraY, twoW, twoH, twoH / 2); hudCtx.fill();
         hudCtx.strokeStyle = ready ? 'rgba(170,255,200,1)' : 'rgba(150,220,255,0.6)';
         hudCtx.lineWidth = ready ? 3 : 2;
-        roundRect(fX, fY, fW, fH, fH / 2); hudCtx.stroke();
+        roundRect(tFightX, extraY, twoW, twoH, twoH / 2); hudCtx.stroke();
         hudCtx.globalAlpha = 1;
         hudCtx.fillStyle = ready ? '#eaffef' : '#dff2ff';
-        hudCtx.font = '800 ' + (font * 0.84) + 'px ' + FONT;
+        hudCtx.font = '800 ' + (font * 0.8) + 'px ' + FONT;
         hudCtx.textAlign = 'center';
-        hudCtx.fillText(ready ? '收竿！' : (fishTimer > 0 ? '等鱼上钩…' : '钓鱼'), fX + fW / 2, fY + fH * 0.66);
+        hudCtx.fillText(ready ? '收竿！' : (fishTimer > 0 ? '等鱼…' : '钓鱼'), tFightX + twoW / 2, extraY + twoH * 0.66);
+        // 上镇按钮
+        hudCtx.fillStyle = townView ? 'rgba(200,140,60,0.92)' : 'rgba(24,60,80,0.9)';
+        roundRect(tTownX, extraY, twoW, twoH, twoH / 2); hudCtx.fill();
+        hudCtx.strokeStyle = 'rgba(255,214,140,0.85)'; hudCtx.lineWidth = 2;
+        roundRect(tTownX, extraY, twoW, twoH, twoH / 2); hudCtx.stroke();
+        hudCtx.fillStyle = '#ffe9c8';
+        hudCtx.fillText(townView ? '回航行' : '上镇 G', tTownX + twoW / 2, extraY + twoH * 0.66);
         hudCtx.textAlign = 'left';
-      } else fishBtnRect = null;
-    } else { dockBtnRect = null; fishBtnRect = null; }
+      } else { fishBtnRect = null; townViewBtnRect = null; }
+    } else { dockBtnRect = null; fishBtnRect = null; townViewBtnRect = null; }
     /* Recruit prompt: when a drifter is within reach, a bright button appears
      * near the bottom centre. Tapping it recruits them. */
     var recruitNow = inRecruitRange();
@@ -9665,6 +9747,7 @@
   var magnet = 0, tradeBonus = 0, shieldBonus = 0;
   /* The build choice: two blueprints on offer, the player picks one. */
   var buildOffer = null, buildOfferT = 0, offerCooldown = 6, buildSel = 0, buildCardRects = null;
+  var townCardRects = null;   // 城镇图纸卡片的独立命中区（勿与 buildCardRects 共用）
   var surgeT = 0, surgeShowT = 0, waterDry = 0, waterDropT = 0, guardT = 0;
   function canAfford(spec) {
     return res.wood >= spec.cost.wood && res.plastic >= spec.cost.plastic && res.metal >= spec.cost.metal;
@@ -10329,6 +10412,8 @@
     }
     if (event.code === 'KeyB' && phase === 'playing' && !paused) { openBuildMenu(); event.preventDefault(); return; }
     if (event.code === 'KeyV' && phase === 'playing' && !paused && !manageOpen) { openManage(); event.preventDefault(); return; }
+    // G — 上甲板进镇 / 回航行视角（需先下锚）
+    if (event.code === 'KeyG' && phase === 'playing' && !paused) { toggleTownView(); event.preventDefault(); return; }
     // Escape also backs out of a dive.
     if (event.code === 'Escape' && dive && dive.active()) { exitDive(); event.preventDefault(); return; }
     if (event.code === 'Escape' && manageOpen) { closeManage(); event.preventDefault(); return; }
@@ -10378,6 +10463,20 @@
       return;
     }
     if (phase !== 'playing') { if (canRestart()) start(); return; }
+    /* --- 城镇图纸选择：最高优先级模态。独立使用 townCardRects（不与工作台
+     * 建造菜单的 buildCardRects 共用，否则后者会在 drawHUD 里把它清空，导致
+     * 「选图纸点击没反应」这个 bug）。 ---
+     */
+    if (buildOffer && townCardRects) {
+      for (var bc = 0; bc < townCardRects.length; bc++) {
+        var rc = townCardRects[bc];
+        if (event.clientX >= rc.x && event.clientX <= rc.x + rc.w
+            && event.clientY >= rc.y && event.clientY <= rc.y + rc.h) {
+          pickBuild(rc.index); return;
+        }
+      }
+      return; // 选图纸期间，卡片外的点击全部忽略
+    }
     /* --- NPC 对话面板：点选项 / 点关闭 / 点别处关 --- */
     if (npcPanelOpen) {
       if (npcUI) {
@@ -10488,6 +10587,12 @@
       if (fishReady) reelIn(); else castLine();
       return;
     }
+    if (townViewBtnRect
+        && event.clientX >= townViewBtnRect.x && event.clientX <= townViewBtnRect.x + townViewBtnRect.w
+        && event.clientY >= townViewBtnRect.y && event.clientY <= townViewBtnRect.y + townViewBtnRect.h) {
+      toggleTownView();
+      return;
+    }
     // Ship management button.
     if (manageBtnRect) {
       var smx = event.clientX - manageBtnRect.x, smy = event.clientY - manageBtnRect.y;
@@ -10534,17 +10639,6 @@
     if (buildBtnRect) {
       var bbx = event.clientX - buildBtnRect.x, bby = event.clientY - buildBtnRect.y;
       if (bbx * bbx + bby * bby <= buildBtnRect.r * buildBtnRect.r) { openBuildMenu(); return; }
-    }
-    // Tapping a blueprint card picks it; the run is paused behind the offer.
-    if (buildOffer && buildCardRects) {
-      for (var bc = 0; bc < buildCardRects.length; bc++) {
-        var rc = buildCardRects[bc];
-        if (event.clientX >= rc.x && event.clientX <= rc.x + rc.w
-            && event.clientY >= rc.y && event.clientY <= rc.y + rc.h) {
-          pickBuild(rc.index); return;
-        }
-      }
-      return; // taps outside the cards are ignored while choosing
     }
     if (boostRect) {
       var bdx = event.clientX - boostRect.x, bdy = event.clientY - boostRect.y;
@@ -11072,9 +11166,19 @@
   var PITCH = 45 * Math.PI / 180;
   var CAM_DISTANCE = 46;
   var focus = new THREE.Vector3(0, floatY(0, 0), 0);
+  /* 进镇视角：下锚后可以「走上甲板」，把相机拉近、压低俯角，让建好的
+   * 建筑以侧面立起来，而不是永远从高空俯视一艘扁平的船。 */
+  var townView = false;
+  function toggleTownView() {
+    if (!docked) { addFT('先下锚停船，才能上镇', hero.x, hero.z, '#ffb4a0', 1.8); return; }
+    townView = !townView;
+    addFT(townView ? '已上镇 · 走近看看你的小镇' : '回到航行视角', hero.x, hero.z, '#9ff0b8', 2);
+    blip(townView ? 560 : 420, 0.15, 'sine', 0.05, townView ? 760 : 300);
+  }
   function cameraDistance() {
     var aspect = camera.aspect;
-    return aspect >= 1 ? CAM_DISTANCE : CAM_DISTANCE + (1 - aspect) * 34;
+    var dist = townView ? 20 : CAM_DISTANCE;   // 上镇时贴近甲板
+    return aspect >= 1 ? dist : dist + (1 - aspect) * (townView ? 18 : 34);
   }
   function placeCamera(dt) {
     // Follow the hero all the way to the shore; narrow portrait screens would otherwise lose it.
@@ -11082,10 +11186,11 @@
     focus.z = lerp(focus.z, hero.z, Math.min(1, dt * 5));
     focus.y = lerp(focus.y, hero.y, Math.min(1, dt * 4));
     var distance = cameraDistance();
-    // Aim above the waterline so the whole hull + superstructure is framed; on
-    // the result screen bias further down so the card does not cover the town.
-    var lift = phase === 'playing' ? R.heroSize * 0.55 : R.heroSize * 0.20;
-    camera.position.set(focus.x, focus.y + Math.sin(PITCH) * distance, focus.z + Math.cos(PITCH) * distance);
+    // 上镇时把镜头压低（俯角 20°）并聚焦到甲板高度，建筑就有了立体侧面；
+    // 航行/结算时保持俯视 45° 以看到整艘船。
+    var pitch = townView ? 20 * Math.PI / 180 : PITCH;
+    var lift = townView ? 3.0 : (phase === 'playing' ? R.heroSize * 0.55 : R.heroSize * 0.20);
+    camera.position.set(focus.x, focus.y + Math.sin(pitch) * distance, focus.z + Math.cos(pitch) * distance);
     if (shake > 0) {
       camera.position.x += (Math.random() - 0.5) * shake * 0.9;
       camera.position.y += (Math.random() - 0.5) * shake * 0.6;
@@ -11302,6 +11407,7 @@
       recruitAvailable: !!inRecruitRange(),
       docked: docked, fishReady: fishReady, fishTimer: Math.round(fishTimer * 10) / 10,
       dockBtnVisible: !!dockBtnRect, fishBtnVisible: !!fishBtnRect,
+      townViewBtnVisible: !!townViewBtnRect, townView: townView,
       diveExitVisible: !!diveExitRect, diveExitBanner: Math.round(diveExitBanner * 10) / 10,
       canOpenBuild: typeof openBuildMenu === 'function',
       selfSustain: Math.round(selfSustainT * 10) / 10, townReady: townReady, buildOpen: buildOpen,
@@ -11371,6 +11477,16 @@
   };
   window.__debugOpenBuild = function () { openBuildMenu(); return buildOpen; };
   window.__debugBuild = function (id) { return pickSurvival(id); };
+  /* Force the town blueprint offer (bypasses townReady) for click regression. */
+  window.__debugOfferTown = function () {
+    townReady = true;
+    res.wood = 999; res.plastic = 999; res.metal = 999;
+    var saved = R.autoBuild; R.autoBuild = false;   // force the card UI
+    offerBuild();
+    R.autoBuild = saved;
+    return buildOffer ? buildOffer.slice() : null;
+  };
+  window.__debugTownRects = function () { return townCardRects; };
   /* Build every structure at once, for verifying that the whole town lands on
    * the ship's decks (and for screenshots of a finished liner). */
   window.__debugBuildAll = function () {
