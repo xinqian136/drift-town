@@ -27,7 +27,7 @@ window.GAME = Object.assign(window.GAME || {}, {
     "enemySpawnEvery": 14,
     "maxEnemies": 2,
     "maxPickups": 16,
-    "heroSize": 3,
+    "heroSize": 4.6,
     "enemySize": 1.15,
     "pickupSize": 1.7,
     "shield": {

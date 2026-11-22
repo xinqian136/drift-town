@@ -3296,6 +3296,2517 @@ var THREE = __wxRoot.THREE || window.THREE;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
 
 })();
+
+/* --- inlined from achievements.js --- */
+(function () {
+/* 漂流小镇 · 成就系统 achievements.js
+ * ===========================================================================
+ * 一个文件、零依赖、零 DOM：浏览器与微信小游戏通用。
+ *
+ * 职责
+ *   1. 定义 21 个成就（打捞 5 / 建造 5 / 生存 4 / 社交 3 / 探索 4）
+ *   2. 用一个「累计统计器」把每帧的 __gameState() 快照折算成跨局累计值
+ *   3. 解锁判定 + localStorage 持久化 + 解锁队列（给游戏弹提示用）
+ *   4. 成就面板 / 解锁横幅的 Canvas 2D 绘制（传入 ctx，不碰 DOM）
+ *
+ * 为什么要有统计器
+ *   __gameState() 给的是「本局当前值」：score 是本局分，combo 是当前连击，
+ *   pickups 是场上还没捞的物件数组。成就需要的是「累计捞了 200 件」这类
+ *   跨局总量，所以必须由本模块 tick() 每帧累加并落盘。tick() 是幂等的：
+ *   同一份快照喂两次不会重复计数（用「本局已计入的件数」做水位线）。
+ *
+ * 硬约束
+ *   - 不加载 Node 模块、不读写文件、不请求网络、不操作 DOM
+ *   - 不使用彩色 emoji（微信 Canvas 会渲染成方块）
+ *   - 所有 check/progress 必须防御性：字段缺失、类型错误、null 都不能抛
+ *
+ * 用法（游戏侧）
+ *   Achievements.load();                              // 读存档
+ *   // 在 update(dt) 里，拿到 state 之后：
+ *   Achievements.tick(state, dt);
+ *   // HUD 里（ctx 已经是 dpr 变换过的 2D 上下文）：
+ *   Achievements.drawPanel(ctx, w, h, font, fontFamily);
+ *   Achievements.drawToast(ctx, w, h, font, fontFamily);
+ * ===========================================================================
+ */
+(function (root, factory) {
+  'use strict';
+  var api = factory();
+  if (root) root.Achievements = api;
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+})(typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : this), function () {
+  'use strict';
+
+  var MODULE_VERSION = '1.0.0';
+  var STORE_KEY = 'dsh-game-studio:drift-town:achievements:v1';
+
+  /* === 1. 常量与枚举值 ================================================== */
+
+  /* game.js 的 6 座城镇建筑（BUILDING_SPECS 的名字，顺序即建造顺序）。
+   * 不引用 game.js 的常量：这是独立的验收副本，game.js 改了名字这里会红。 */
+  var TOWN_BUILDINGS = ['小屋', '水塔', '温室', '灯塔', '市集', '风车'];
+
+  /* game.js 的 6 个生存步骤 id（SURVIVAL_STEPS[].id）。 */
+  var SURVIVAL_IDS = ['workbench', 'shelter', 'rainCatcher', 'fishBasket', 'scoopNet', 'purifier'];
+
+  /* game.js 的 5 位可招募漂流者（CASTAWAY_DEFS[].name）。 */
+  var CASTAWAY_NAMES = ['老陈', '阿海', '小满', '铁匠波', '莉莉'];
+
+  /* 潜水深度层数：dive-canvas.js 里 depth 1=浅水 2=中层 3=深水。 */
+  var DEEP_LAYER = 3;
+
+  /* 自持解锁城镇所需的秒数（game.json rules.survival.selfSustainSec）。 */
+  var SELF_SUSTAIN_SEC = 60;
+
+  /* === 2. 工具函数（全部防御性） ======================================== */
+
+  function isObj(v) { return !!v && typeof v === 'object'; }
+
+  /** 读一个数字字段；缺失 / NaN / 字符串 / null 都退化成 fallback。 */
+  function num(v, fallback) {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string' && v !== '' && isFinite(Number(v))) return Number(v);
+    return typeof fallback === 'number' ? fallback : 0;
+  }
+
+  /** 读一个数组字段；非数组一律当空数组。 */
+  function arr(v) { return Object.prototype.toString.call(v) === '[object Array]' ? v : []; }
+
+  /** 把 v 钳到 [lo, hi]，并把非数字变成 lo。 */
+  function clamp(v, lo, hi) {
+    var n = num(v, lo);
+    if (n < lo) return lo;
+    if (n > hi) return hi;
+    return n;
+  }
+
+  /** 百分比进度：四舍五入到整数，恒在 0-100。 */
+  function pct(current, target) {
+    var t = num(target, 0);
+    if (t <= 0) return 100;              // 没有目标视为已完成，避免 NaN
+    return Math.round(clamp(num(current, 0) / t * 100, 0, 100));
+  }
+
+  /** progress 的统一形状：{ current, target, pct }。target<=0 时 pct=100。 */
+  function prog(current, target) {
+    var c = num(current, 0), t = num(target, 0);
+    return { current: c, target: t, pct: t > 0 ? pct(c, t) : 100 };
+  }
+
+  /** 统计器里一个「只增不减」的累计项。 */
+  function bump(stats, key, value) {
+    var v = num(value, 0);
+    if (!isFinite(v) || v <= 0) return;
+    stats[key] = num(stats[key], 0) + v;
+  }
+
+  /** 把 stats[key] 抬到至少 value（用于「本局最高值」这类取最大值的水位线）。 */
+  function raise(stats, key, value) {
+    var v = num(value, 0);
+    if (v > num(stats[key], 0)) stats[key] = v;
+  }
+
+  /* 从 state 里安全地取潜水状态。__gameState().diveState 可能为 null。 */
+  function diveStateOf(state) {
+    if (!isObj(state)) return null;
+    var d = state.diveState;
+    return isObj(d) ? d : null;
+  }
+
+  /* === 3. 成就定义 ======================================================
+   * 每个成就：
+   *   id        稳定标识（存档用，不要改）
+   *   name      中文名（≤6 字，HUD 一行放得下）
+   *   desc      解锁条件的人话描述
+   *   category  打捞 / 建造 / 生存 / 社交 / 探索
+   *   hidden    未解锁时在面板里是否隐藏描述（隐藏成就不剧透）
+   *   check(state, stats) -> boolean
+   *   progress(state, stats) -> { current, target, pct }
+   *
+   * 约定：check 与 progress 必须用同一套口径，测试会逐条交叉验证
+   *        「progress.pct === 100  <=>  check === true」（对非 0/1 型成就）。
+   * ------------------------------------------------------------------- */
+
+  var ACHIEVEMENTS = [
+    /* --- 打捞类 5 个 --- */
+    {
+      id: 'salvage_first',
+      name: '第一件漂流物',
+      desc: '打捞出第一件垃圾',
+      category: '打捞', hidden: false,
+      check: function (s, st) { return num(st.salvaged) >= 1; },
+      progress: function (s, st) { return prog(num(st.salvaged), 1); }
+    },
+    {
+      id: 'salvage_50',
+      name: '熟练的捞手',
+      desc: '累计打捞 50 件',
+      category: '打捞', hidden: false,
+      check: function (s, st) { return num(st.salvaged) >= 50; },
+      progress: function (s, st) { return prog(num(st.salvaged), 50); }
+    },
+    {
+      id: 'salvage_200',
+      name: '海上清道夫',
+      desc: '累计打捞 200 件',
+      category: '打捞', hidden: false,
+      check: function (s, st) { return num(st.salvaged) >= 200; },
+      progress: function (s, st) { return prog(num(st.salvaged), 200); }
+    },
+    {
+      id: 'combo_10',
+      name: '手感来了',
+      desc: '单局连击达到 10',
+      category: '打捞', hidden: false,
+      check: function (s, st) { return num(st.bestCombo) >= 10; },
+      progress: function (s, st) { return prog(num(st.bestCombo), 10); }
+    },
+    {
+      id: 'score_300',
+      name: '满载而归',
+      desc: '单局得分达到 300',
+      category: '打捞', hidden: false,
+      check: function (s, st) { return num(st.bestScore) >= 300; },
+      progress: function (s, st) { return prog(num(st.bestScore), 300); }
+    },
+
+    /* --- 建造类 5 个 --- */
+    {
+      id: 'build_workbench',
+      name: '动手的人',
+      desc: '造出工作台',
+      category: '建造', hidden: false,
+      check: function (s) { return hasSurvival(s, 'workbench'); },
+      progress: function () { return prog(0, 1); } // 见下方 progressForBuild 覆盖
+    },
+    {
+      id: 'build_shelter',
+      name: '有了个家',
+      desc: '造出庇护所',
+      category: '建造', hidden: false,
+      check: function (s) { return hasSurvival(s, 'shelter'); },
+      progress: function () { return prog(0, 1); }
+    },
+    {
+      id: 'build_all_survival',
+      name: '生存装备齐备',
+      desc: '造齐 6 件生存装备',
+      category: '建造', hidden: false,
+      check: function (s) { return survivalCount(s) >= SURVIVAL_IDS.length; },
+      progress: function (s) { return prog(survivalCount(s), SURVIVAL_IDS.length); }
+    },
+    {
+      id: 'build_town_4',
+      name: '小镇成形',
+      desc: '建成 4 座城镇建筑',
+      category: '建造', hidden: false,
+      check: function (s, st) { return num(st.bestTown) >= 4; },
+      progress: function (s, st) { return prog(num(st.bestTown), 4); }
+    },
+    {
+      id: 'build_town_all',
+      name: '六座齐了',
+      desc: '建成全部 6 座城镇建筑',
+      category: '建造', hidden: false,
+      check: function (s, st) { return num(st.bestTown) >= TOWN_BUILDINGS.length; },
+      progress: function (s, st) { return prog(num(st.bestTown), TOWN_BUILDINGS.length); }
+    },
+
+    /* --- 生存类 4 个 --- */
+    {
+      id: 'survive_selfsustain',
+      name: '可以住下来了',
+      desc: '首次达成生存自持',
+      category: '生存', hidden: false,
+      check: function (s) { return selfSustainOf(s) >= 3 || townReadyOf(s); },
+      progress: function (s) {
+        // selfSustain 是「已连续自持多少秒」，3 秒起步算入门。
+        // townReady 时至少已经自持满 60 秒，当然也满足 3 秒。
+        return prog(townReadyOf(s) ? 3 : selfSustainOf(s), 3);
+      }
+    },
+    {
+      id: 'survive_town_ready',
+      name: '可以建立城镇了',
+      desc: '自持满 60 秒，解锁城镇',
+      category: '生存', hidden: false,
+      check: function (s) { return townReadyOf(s); },
+      progress: function (s) {
+        // 这一项的唯一权威判据是 townReady（game.js 在自持满 60 秒时置 true）。
+        // 因此 progress 也以它为口径：townReady 就是 60/60，否则按实际计时。
+        // 注意 selfSustain 在 townReady 之前不会达到 60（到 60 就置 true 了），
+        // 所以这里对 selfSustain 再钳一次上限 59，保证「pct 100 ⟺ townReady」。
+        if (townReadyOf(s)) return prog(SELF_SUSTAIN_SEC, SELF_SUSTAIN_SEC);
+        return prog(Math.min(selfSustainOf(s), SELF_SUSTAIN_SEC - 1), SELF_SUSTAIN_SEC);
+      }
+    },
+    {
+      id: 'survive_all_hearts',
+      name: '一滴血没掉',
+      desc: '单局满血通关',
+      category: '生存', hidden: false,
+      check: function (s, st) { return num(st.flawlessRuns) >= 1; },
+      progress: function (s, st) { return prog(num(st.flawlessRuns), 1); }
+    },
+    {
+      id: 'survive_dry_run',
+      name: '滴水未进',
+      desc: '水壶见底后仍活过 3 秒',
+      category: '生存', hidden: true,
+      check: function (s, st) { return num(st.bestDryRun) >= 3; },
+      progress: function (s, st) { return prog(num(st.bestDryRun), 3); }
+    },
+
+    /* --- 社交类 3 个 --- */
+    {
+      id: 'social_first',
+      name: '不是一个人',
+      desc: '招募第一位漂流者',
+      category: '社交', hidden: false,
+      check: function (s, st) { return num(st.bestRecruited) >= 1; },
+      progress: function (s, st) { return prog(num(st.bestRecruited), 1); }
+    },
+    {
+      id: 'social_all',
+      name: '全员到齐',
+      desc: '招募全部 5 位漂流者',
+      category: '社交', hidden: false,
+      check: function (s, st) { return num(st.bestRecruited) >= CASTAWAY_NAMES.length; },
+      progress: function (s, st) { return prog(num(st.bestRecruited), CASTAWAY_NAMES.length); }
+    },
+    {
+      id: 'social_fish',
+      name: '钓上一条',
+      desc: '第一次在甲板上钓到鱼',
+      category: '社交', hidden: false,
+      check: function (s, st) { return num(st.fishCaught) >= 1; },
+      progress: function (s, st) { return prog(num(st.fishCaught), 1); }
+    },
+
+    /* --- 探索类 4 个 --- */
+    {
+      id: 'explore_dive_first',
+      name: '第一次下潜',
+      desc: '完成第一次潜水',
+      category: '探索', hidden: false,
+      check: function (s, st) { return num(st.divesStarted) >= 1; },
+      progress: function (s, st) { return prog(num(st.divesStarted), 1); }
+    },
+    {
+      id: 'explore_dive_deep',
+      name: '深海来客',
+      desc: '到达深水层（第 3 层）',
+      category: '探索', hidden: false,
+      check: function (s) { return deepestLayerOf(s) >= DEEP_LAYER; },
+      progress: function (s) { return prog(deepestLayerOf(s), DEEP_LAYER); }
+    },
+    {
+      id: 'explore_dive_loot',
+      name: '论筐称重',
+      desc: '单次潜水带回 5 件以上食材',
+      category: '探索', hidden: false,
+      check: function (s) { return diveLootOf(s) >= 5; },
+      progress: function (s) { return prog(diveLootOf(s), 5); }
+    },
+    {
+      id: 'explore_zone',
+      name: '闯进鲨鱼的地盘',
+      desc: '进入过鲨鱼巡逻区',
+      category: '探索', hidden: true,
+      check: function (s, st) { return num(st.zoneVisits) >= 1; },
+      progress: function (s, st) { return prog(num(st.zoneVisits), 1); }
+    }
+  ];
+
+  /* --- 两个建造成就的 progress 需要专用逻辑，单独赋值，避免上面写重复 --- */
+  (function patchBuildProgress() {
+    for (var i = 0; i < ACHIEVEMENTS.length; i++) {
+      var a = ACHIEVEMENTS[i];
+      if (a.id === 'build_workbench') {
+        a.progress = function (s) { return prog(hasSurvival(s, 'workbench') ? 1 : 0, 1); };
+      } else if (a.id === 'build_shelter') {
+        a.progress = function (s) { return prog(hasSurvival(s, 'shelter') ? 1 : 0, 1); };
+      }
+    }
+  })();
+
+  /* === 4. 从 state 读数的适配层 ======================================== */
+  /* 全部字段都从 __gameState() 的实际返回值来；任何一处缺失都退化成 0。 */
+
+  /** 已建成的生存装备 id 列表（state.survival 是 id 字符串数组）。 */
+  function survivalList(s) {
+    if (!isObj(s)) return [];
+    var raw = arr(s.survival), out = [], i;
+    for (i = 0; i < raw.length; i++) {
+      if (typeof raw[i] === 'string') out.push(raw[i]);
+      else if (isObj(raw[i]) && typeof raw[i].id === 'string') out.push(raw[i].id);
+    }
+    return out;
+  }
+
+  function hasSurvival(s, id) { return survivalList(s).indexOf(id) >= 0; }
+
+  /** 自持计时（秒）。game.js 里 selfSustain 是「已连续自持多久」，上限就是
+   *  game.json rules.survival.selfSustainSec = 60 秒（到点即 townReady）。
+   *  这里钳到 60：一来字段可能是脏数据（1e9 之类），二来保持
+   *  「pct 满 ⟺ 真的解锁」的口径一致——自持满 60 就等价于 townReady。 */
+  function selfSustainOf(s) {
+    if (!isObj(s)) return 0;
+    var v = Math.max(0, num(s.selfSustain, 0));
+    return Math.min(v, SELF_SUSTAIN_SEC);
+  }
+
+  /** 城镇是否已解锁（自持满 60 秒）。只认 === true，'yes' 这类不算。 */
+  function townReadyOf(s) {
+    return isObj(s) && s.townReady === true;
+  }
+
+  /** 到过的最深潜水层：取「历史最深」与「当前这一帧的层数」的较大者。
+   *  这样即使成就还没被 tick() 记账，只要眼下正处在深水层也能判对。 */
+  function deepestLayerOf(s) {
+    var fromStats = num(_stats.deepestLayer, 0);
+    var ds = diveStateOf(s);
+    var fromState = ds ? num(ds.depth, 0) : 0;
+    return Math.max(fromStats, fromState);
+  }
+
+  /** 单次潜水带回的件数：历史最好与当前这趟的较大者。
+   *  diveState.collected 在 game.js 里被折算成件数（数字）；也兼容传数组。 */
+  function diveLootOf(s) {
+    var fromStats = num(_stats.bestDiveLoot, 0);
+    var fromState = 0;
+    var ds = diveStateOf(s);
+    if (ds) {
+      if (Object.prototype.toString.call(ds.collected) === '[object Array]') fromState = ds.collected.length;
+      else fromState = num(ds.collected, 0);
+    }
+    return Math.max(fromStats, fromState);
+  }
+
+  /** 已建成的生存装备件数（只数 SURVIVAL_IDS 里认识的，防止未知 id 灌水）。 */
+  function survivalCount(s) {
+    var list = survivalList(s), n = 0, i;
+    for (i = 0; i < SURVIVAL_IDS.length; i++) {
+      if (list.indexOf(SURVIVAL_IDS[i]) >= 0) n++;
+    }
+    return n;
+  }
+
+  /** 本局城镇建筑数。state.buildings 是数字（buildings.length）；
+   *  也兼容它被传成数组的畸形情况。同时用 state.town 兜底。 */
+  function townCount(s) {
+    if (!isObj(s)) return 0;
+    if (Array.isArray(s.buildings)) {
+      var n = 0, i;
+      for (i = 0; i < s.buildings.length; i++) {
+        // 生存装备也可能混在数组里，只数不认识 SURVIVAL_IDS 的
+        var id = isObj(s.buildings[i]) ? s.buildings[i].id : s.buildings[i];
+        if (typeof id === 'string' && SURVIVAL_IDS.indexOf(id) < 0) n++;
+      }
+      return n;
+    }
+    var b = num(s.buildings, -1);
+    if (b >= 0) return b;
+    // state.town 里含庇护所（game.js: townCount() = buildings + 是否有庇护所），
+    // 所以要把庇护所减回去，保持与 buildings 同口径。
+    var t = num(s.town, 0);
+    return Math.max(0, t - (hasSurvival(s, 'shelter') ? 1 : 0));
+  }
+
+  /** 本局已招募人数。state.recruited 是名字数组。 */
+  function recruitedCount(s) {
+    if (!isObj(s)) return 0;
+    var r = arr(s.recruited), n = 0, i;
+    for (i = 0; i < r.length; i++) {
+      if (typeof r[i] === 'string' || isObj(r[i])) n++;
+    }
+    return n;
+  }
+
+  /** 本局得分。优先 score，退化到 best（重开瞬间 score 会归零）。 */
+  function scoreOf(s) {
+    if (!isObj(s)) return 0;
+    return Math.max(0, num(s.score, 0));
+  }
+
+  /** 本局连击。 */
+  function comboOf(s) {
+    if (!isObj(s)) return 0;
+    return Math.max(0, num(s.combo, 0));
+  }
+
+  /** 本局是否在「鲨鱼巡逻区」里。state.zone 是 {x,z,r}，state.hero 是 {x,y}。
+   *  注意 hero.y 是 world z，zone.z 也是 world z（见 __gameState 注释）。 */
+  function inZoneNow(s) {
+    if (!isObj(s) || !isObj(s.zone) || !isObj(s.hero)) return false;
+    var r = num(s.zone.r, 0);
+    if (r <= 0) return false;
+    var dx = num(s.hero.x, 0) - num(s.zone.x, 0);
+    var dz = num(s.hero.y, 0) - num(s.zone.z, 0);
+    return (dx * dx + dz * dz) <= r * r;
+  }
+
+  /* === 5. 累计统计器 =================================================== */  /* 存档结构：
+   * {
+   *   v: 1,
+   *   unlocked: { <achievementId>: <unix ms> },
+   *   stats: { salvaged, bestCombo, ... },
+   *   run:   { pieces, recruited, town, flawless, diveLoot, ... }   // 本局水位线
+   * }
+   * run 里的值是「本局已经计入 stats 的水位线」，用来让 tick() 幂等。
+   */
+
+  function freshRun() {
+    return {
+      pieces: 0,          // 本局已计入的累计打捞件数
+      recruited: 0,       // 本局已计入的招募人数
+      town: 0,            // 本局已计入的城镇建筑数
+      survival: 0,        // 本局已计入的生存装备件数
+      diveLoot: 0,        // 本局上一次看到的潜水收获件数
+      diveStarted: false, // 本局是否已经计过一次「开始潜水」
+      dryRun: 0,          // 本局连续缺水秒数
+      lastScore: 0,       // 上一帧的 score（打捞事件代理的水位线）
+      prevHearts: null,   // 上一帧血量，用来判定「没掉过血」
+      tookDamage: false,  // 本局是否掉过血
+      wasInZone: false,   // 上一帧是否在巡逻区
+      prevFishReady: false, // 上一帧 fishReady
+      endCounted: false,  // 本局的结算是否已经记过（防同局多次结算重复计）
+      lastPhase: null     // 上一帧 phase
+    };
+  }
+
+  function freshStats() {
+    return {
+      salvaged: 0,        // 累计打捞件数
+      bestCombo: 0,       // 历史单局最高连击
+      bestScore: 0,       // 历史单局最高分
+      bestTown: 0,        // 历史单局最多城镇建筑
+      bestRecruited: 0,   // 历史单局最多招募人数
+      bestDiveLoot: 0,    // 历史单次潜水最多收获件数
+      deepestLayer: 0,    // 到过的最深潜水层
+      flawlessRuns: 0,    // 满血通关次数
+      bestDryRun: 0,      // 最长缺水存活秒数
+      fishCaught: 0,      // 累计钓鱼次数（用收竿跳变计）
+      divesStarted: 0,    // 累计开始潜水次数
+      zoneVisits: 0,      // 累计进入巡逻区次数（按「从外到内」跳变计）
+      runs: 0             // 累计开局次数
+    };
+  }
+
+  /* === 6. 存储层（localStorage / wx 存储，特性检测） ==================== */
+
+  function storage() {
+    // 微信小游戏：本地存储走 wx.setStorageSync，容量与 key 规则和 Web 一致。
+    if (typeof wx !== 'undefined' && wx && typeof wx.setStorageSync === 'function'
+        && typeof wx.getStorageSync === 'function') {
+      return {
+        get: function (k) { try { return wx.getStorageSync(k); } catch (e) { return null; } },
+        set: function (k, v) { try { wx.setStorageSync(k, v); return true; } catch (e) { return false; } }
+      };
+    }
+    // Web / 浏览器：localStorage（可能被无痕模式或沙箱禁掉，全部 try 包住）
+    try {
+      var ls = typeof localStorage !== 'undefined' ? localStorage : null;
+      if (ls && typeof ls.getItem === 'function' && typeof ls.setItem === 'function') {
+        return {
+          get: function (k) { try { return ls.getItem(k); } catch (e) { return null; } },
+          set: function (k, v) { try { ls.setItem(k, v); return true; } catch (e) { return false; } }
+        };
+      }
+    } catch (e) { /* 沙箱里访问 localStorage 会抛，忽略 */ }
+    // 内存兜底：不持久化，但保证功能可跑完这一局。
+    var mem = {};
+    return {
+      get: function (k) { return Object.prototype.hasOwnProperty.call(mem, k) ? mem[k] : null; },
+      set: function (k, v) { mem[k] = v; return true; },
+      memoryOnly: true
+    };
+  }
+
+  /* === 7. 模块状态 ===================================================== */
+
+  var _store = null;          // 存储后端（惰性初始化）
+  var _unlocked = {};         // { id: unlockMs }
+  var _stats = freshStats();
+  var _run = freshRun();
+  var _queue = [];            // 待弹提示的解锁队列 [{ id, name, desc, at }]
+  var _toast = null;          // 当前正在显示的提示 { id, name, desc, t, max }
+  var _loaded = false;
+  var _dirty = false;
+  var _levelUpSink = null;    // 可选回调：解锁时通知外部
+
+  function store() {
+    if (!_store) _store = storage();
+    return _store;
+  }
+
+  /** 读存档。坏 JSON / 版本不符 / 缺字段都不能抛，一律回落到空存档。 */
+  function load() {
+    var raw = null;
+    try { raw = store().get(STORE_KEY); } catch (e) { raw = null; }
+
+    var data = null;
+    if (typeof raw === 'string' && raw) {
+      try { data = JSON.parse(raw); } catch (e) { data = null; }
+    } else if (isObj(raw)) {
+      // 某些实现会自动反序列化（微信的 storage 就会存对象）
+      data = raw;
+    }
+
+    _unlocked = {};
+    _stats = freshStats();
+    _run = freshRun();
+
+    if (isObj(data)) {
+      // unlocked：只接受字符串 key，值统一成数字时间戳
+      if (isObj(data.unlocked)) {
+        for (var k in data.unlocked) {
+          if (!Object.prototype.hasOwnProperty.call(data.unlocked, k)) continue;
+          if (typeof k === 'string' && k) _unlocked[k] = num(data.unlocked[k], Date.now());
+        }
+      }
+      // stats：只接受已知 key，值必须是有限数字（防止存档被手改成字符串）
+      if (isObj(data.stats)) {
+        var defs = freshStats();
+        for (var sk in defs) {
+          if (!Object.prototype.hasOwnProperty.call(defs, sk)) continue;
+          if (Object.prototype.hasOwnProperty.call(data.stats, sk)) {
+            var v = data.stats[sk];
+            if (typeof v === 'number' && isFinite(v) && v >= 0) defs[sk] = v;
+          }
+        }
+        _stats = defs;
+      }
+    }
+    _loaded = true;
+    _dirty = false;
+    return snapshot(false);
+  }
+
+  /** 落盘。失败（存储满 / 被禁）不抛，只记 dirty 等下次再试。 */
+  function save() {
+    if (!_loaded) load();
+    var payload = {
+      v: 1,
+      unlocked: _unlocked,
+      stats: _stats,
+      savedAt: Date.now()
+    };
+    var ok = false;
+    try { ok = store().set(STORE_KEY, JSON.stringify(payload)); } catch (e) { ok = false; }
+    _dirty = !ok;
+    return ok;
+  }
+
+  /* === 8. tick —— 每帧把 state 折进累计值 ============================== */
+
+  /**
+   * 每帧调用。dt 单位秒，可省略（省略时按 0 处理，只做不依赖时间的累加）。
+   * 返回本帧新解锁的成就数组（通常为空）。
+   *
+   * 幂等性：同一份 state 重复喂不会重复计数——所有「本局计数」都走
+   * run.* 水位线比较，只有 state 的值比水位线更高时才把差值累加进 stats。
+   */
+  function tick(state, dt) {
+    if (!_loaded) load();
+    var s = isObj(state) ? state : {};
+    var step = num(dt, 0);
+    if (step < 0) step = 0;
+    if (step > 1) step = 1;   // 掉帧 / 切后台回来时不要一次跳太多
+
+    /* --- 8.0 换局检测：必须放在所有计数之前。
+     * 否则「本局水位线重置」会把紧接着刚累加的那一步抹掉，
+     * 导致同一份快照被重复计数（测试实测到过这个 bug）。 --- */
+    var ph = typeof s.phase === 'string' ? s.phase : '';
+    if (ph && ph !== _run.lastPhase) {
+      var wasEnded = _run.lastPhase === 'won' || _run.lastPhase === 'lost';
+      var startingFresh = ph === 'playing' && (_run.lastPhase === null || _run.lastPhase === 'title' || wasEnded);
+      if (startingFresh) _run = freshRun();
+      _run.lastPhase = ph;
+    }
+
+    /* --- 8.1 打捞件数：__gameState() 里没有「本局累计件数」字段
+     * （game.js 内部有 pieces，但没暴露出来）。
+     *
+     * 降级口径（默认）：数「得分跳变的次数」，而不是得分增量。
+     *   game.js 里每次拾取都会执行 score += ...（至少 +1），所以一次拾取
+     *   对应一次 score 上涨；数事件数比加增量更接近真实件数
+     *   （一次拾取 +1~6 分，加增量会把件数放大好几倍）。
+     *   误差来源：同一帧里同时拾取多件只会计 1 次——这是保守的少计，
+     *   不会让成就提前解锁。
+     *
+     * 精确口径（推荐游戏侧启用）：在真正的拾取点调用
+     *   Achievements.note({ picked: 1 })   或   note({ pieces: 本局pieces })
+     * 一旦启用，下面的得分代理永久停用。 */
+    if (!_exactPieces) {
+      var sc = scoreOf(s);
+      if (sc > num(_run.lastScore, 0)) {
+        bump(_stats, 'salvaged', 1);              // 一次上涨 = 一次打捞事件
+        _run.pieces = num(_run.pieces, 0) + 1;
+        _run.lastScore = sc;
+      } else if (sc < num(_run.lastScore, 0)) {
+        _run.lastScore = sc;                       // 重开，水位线跟着回落
+      }
+    }
+
+    /* --- 8.2 单局最高值：连击 / 分数 / 建筑 / 招募 / 潜水收获 --- */
+    raise(_stats, 'bestCombo', comboOf(s));
+    raise(_stats, 'bestScore', scoreOf(s));
+
+    var tCount = townCount(s);
+    raise(_stats, 'bestTown', tCount);
+    raise(_run, 'town', tCount);
+
+    var rCount = recruitedCount(s);
+    raise(_stats, 'bestRecruited', rCount);
+    raise(_run, 'recruited', rCount);
+
+    var sCount = survivalCount(s);
+    raise(_run, 'survival', sCount);
+
+    /* --- 8.3 生存：缺水存活 / 满血 --- */
+    var maxWaterVal = num(s.maxWater, 0), waterVal = num(s.water, 0);
+    if (maxWaterVal > 0 && waterVal <= 0) {
+      _run.dryRun = num(_run.dryRun, 0) + step;
+      raise(_stats, 'bestDryRun', _run.dryRun);
+    } else {
+      _run.dryRun = 0;
+    }
+
+    var hearts = num(s.hearts, -1);
+    if (hearts >= 0) {
+      // 「没掉过血」：看血量相对上一帧是否下降。保命道具回血不影响判定。
+      if (_run.prevHearts !== null && hearts < _run.prevHearts) _run.tookDamage = true;
+      _run.prevHearts = hearts;
+    }
+    /* 满血通关：phase 从 playing 变成 won，且全程血量没下降过。
+     * game.js 的 finish() 把 town/partial 记成 won、其它记成 lost。
+     * 换局检测在 8.0 已经做完了，这里直接看本帧阶段。
+     * endCounted 保证同一局的结算只记一次（结算画面会连续 tick 很多帧）。 */
+    if ((ph === 'won' || ph === 'lost') && !_run.endCounted) {
+      _run.endCounted = true;
+      if (ph === 'won' && !_run.tookDamage) bump(_stats, 'flawlessRuns', 1);
+    }
+
+    /* --- 8.4 潜水：开始次数 / 最深到达 / 单次收获 --- */
+    var ds = diveStateOf(s);
+    var diveActive = s.diving === true || (ds && ds.phase && ds.phase !== 'title');    if (diveActive && !_run.diveStarted) {
+      _run.diveStarted = true;
+      bump(_stats, 'divesStarted', 1);
+      _run.diveLoot = 0;
+    }
+    if (!diveActive && _run.diveStarted) {
+      // 潜水结束（结算或退出）：记录这一趟的收获
+      raise(_stats, 'bestDiveLoot', num(_run.diveLoot, 0));
+      _run.diveStarted = false;
+      _run.diveLoot = 0;
+    }
+    if (ds) {
+      var layer = num(ds.depth, 0);
+      raise(_stats, 'deepestLayer', layer);
+      var loot = num(ds.collected, Array.isArray(ds.collected) ? ds.collected.length : 0);
+      if (loot > num(_run.diveLoot, 0)) _run.diveLoot = loot;
+      raise(_stats, 'bestDiveLoot', loot);
+    }
+
+    /* --- 8.5 巡逻区：从外面进入里面算一次 --- */
+    var inZone = inZoneNow(s);
+    if (inZone && !_run.wasInZone) bump(_stats, 'zoneVisits', 1);
+    _run.wasInZone = inZone;
+
+    /* --- 8.6 钓鱼：__gameState() 给了 fishReady（有鱼咬钩）/ fishTimer
+     * （距离咬钩还有几秒），但「收竿成功」这一事件没有独立标志位。
+     * 从 fishReady: true → false 且 fishTimer 同时归零，可以推断收竿成功，
+     * 但「玩家点了收竿」和「鱼脱钩」在这个信号上无法区分，所以这里只做
+     * 保守推断：把 fishReady 的 true→false 跳变记一次「收竿」。
+     * 想要精确口径请在 game.js 的 reelIn() 里调用 Achievements.note({ fished: 1 })，
+     * 此时下面的推断自动停用（_exactFishing）。 */
+    if (!_exactFishing) {
+      var fr = s.fishReady === true;
+      if (_run.prevFishReady === true && !fr && s.docked === true) {
+        bump(_stats, 'fishCaught', 1);
+      }
+      _run.prevFishReady = fr;
+    }
+
+    /* --- 8.7 判定解锁 --- */
+    var newly = [];
+    for (var i = 0; i < ACHIEVEMENTS.length; i++) {
+      var a = ACHIEVEMENTS[i];
+      if (_unlocked[a.id]) continue;
+      var ok = false;
+      try { ok = a.check(s, _stats) === true; } catch (e) { ok = false; }
+      if (ok) {
+        _unlocked[a.id] = Date.now();
+        var entry = { id: a.id, name: a.name, desc: a.desc, at: _unlocked[a.id] };
+        newly.push(entry);
+        _queue.push(entry);
+      }
+    }
+    if (newly.length) {
+      save();
+      for (var q = 0; q < newly.length; q++) {
+        if (typeof _levelUpSink === 'function') {
+          try { _levelUpSink(newly[q]); } catch (e) { /* 外部回调不能拖垮游戏 */ }
+        }
+      }
+    } else if (_dirty) {
+      save();
+    }
+    return newly;
+  }
+
+  /* 精确计数开关：游戏侧调用 note() 后自动打开，代理推断随之停用。 */
+  var _exactPieces = false;
+  var _exactFishing = false;
+
+  /**
+   * 精确事件上报。游戏侧在真正的拾取点 / 钓鱼点调用，比 tick 的代理推断准。
+   *   Achievements.note({ picked: 1 })            // 精确 +1 件
+   *   Achievements.note({ pieces: gamePieces })   // 直接给本局件数（幂等）
+   *   Achievements.note({ fished: 1 })            // 钓上来一条
+   */
+  function note(ev) {
+    if (!_loaded) load();
+    if (!isObj(ev)) return false;
+    var changed = false;
+    if (typeof ev.picked === 'number' && isFinite(ev.picked) && ev.picked > 0) {
+      _exactPieces = true;
+      bump(_stats, 'salvaged', ev.picked);
+      // picked 与 pieces 共用同一个本局水位线，否则两种口径混用会双计
+      _run.pieces = num(_run.pieces, 0) + ev.picked;
+      changed = true;
+    }
+    if (typeof ev.pieces === 'number' && isFinite(ev.pieces) && ev.pieces >= 0) {
+      _exactPieces = true;
+      var delta = ev.pieces - num(_run.pieces, 0);
+      if (delta > 0) { bump(_stats, 'salvaged', delta); _run.pieces = ev.pieces; changed = true; }
+    }
+    if (typeof ev.fished === 'number' && isFinite(ev.fished) && ev.fished > 0) {
+      _exactFishing = true;
+      bump(_stats, 'fishCaught', ev.fished);
+      changed = true;
+    }
+    if (typeof ev.bestCombo === 'number' && isFinite(ev.bestCombo)) {
+      raise(_stats, 'bestCombo', ev.bestCombo); changed = true;
+    }
+    if (typeof ev.bestScore === 'number' && isFinite(ev.bestScore)) {
+      raise(_stats, 'bestScore', ev.bestScore); changed = true;
+    }
+    if (changed) {
+      _dirty = true;
+      // 只跑解锁判定，不跑整个 tick()：tick 会消费 state 的水位线，
+      // 拿 null 调会把本局的 lastPhase / 潜水状态等打断。
+      evaluateStatsOnly();
+      save();
+    }
+    return changed;
+  }
+
+  /** 只用统计器判定一次解锁（不碰 state）。note() 内部用。 */
+  function evaluateStatsOnly() {
+    var empty = {};
+    for (var i = 0; i < ACHIEVEMENTS.length; i++) {
+      var a = ACHIEVEMENTS[i];
+      if (_unlocked[a.id]) continue;
+      var ok = false;
+      try { ok = a.check(empty, _stats) === true; } catch (e) { ok = false; }
+      if (ok) {
+        _unlocked[a.id] = Date.now();
+        var entry = { id: a.id, name: a.name, desc: a.desc, at: _unlocked[a.id] };
+        _queue.push(entry);
+        if (typeof _levelUpSink === 'function') {
+          try { _levelUpSink(entry); } catch (e2) { /* 外部回调不能拖垮游戏 */ }
+        }
+      }
+    }
+  }
+
+  /** 一局开始 / 结束时的重置。game.js 的 start() 里调用。 */
+  function resetRun() {
+    _run = freshRun();
+    bump(_stats, 'runs', 1);
+    _dirty = true;
+    save();
+    return snapshot(false);
+  }
+
+  /* === 9. 查询接口 ===================================================== */
+
+  function list() {
+    var out = [], i;
+    for (i = 0; i < ACHIEVEMENTS.length; i++) {
+      var a = ACHIEVEMENTS[i];
+      out.push({
+        id: a.id,
+        name: a.name,
+        desc: a.desc,
+        category: a.category,
+        hidden: a.hidden === true,
+        unlocked: !!_unlocked[a.id],
+        unlockedAt: num(_unlocked[a.id], 0)
+      });
+    }
+    return out;
+  }
+
+  /** 一个成就的进度。永远返回合法对象，绝不抛。 */
+  function progressOf(id, state) {
+    var a = byId(id);
+    if (!a) return { id: String(id), unknown: true, current: 0, target: 1, pct: 0 };
+    var s = isObj(state) ? state : {};
+    var p = null;
+    try { p = a.progress(s, _stats); } catch (e) { p = null; }
+    if (!isObj(p)) p = prog(0, 1);
+    return {
+      id: a.id,
+      name: a.name,
+      current: num(p.current, 0),
+      target: num(p.target, 1),
+      pct: clamp(p.pct !== undefined ? p.pct : pct(p.current, p.target), 0, 100),
+      unlocked: !!_unlocked[a.id]
+    };
+  }
+
+  function byId(id) {
+    for (var i = 0; i < ACHIEVEMENTS.length; i++) {
+      if (ACHIEVEMENTS[i].id === id) return ACHIEVEMENTS[i];
+    }
+    return null;
+  }
+
+  /** 总体成就进度（0-100 整数），给排行榜用。 */
+  function overallProgress() {
+    if (!ACHIEVEMENTS.length) return 0;
+    return Math.round(Object.keys(_unlocked).length / ACHIEVEMENTS.length * 100);
+  }
+
+  function unlockedCount() {
+    var n = 0;
+    for (var i = 0; i < ACHIEVEMENTS.length; i++) if (_unlocked[ACHIEVEMENTS[i].id]) n++;
+    return n;
+  }
+
+  /** 面板要显示的行：[{ id, name, desc, category, hidden, unlocked, pct, current, target }] */
+  function panelRows(state) {
+    var out = [], raw = list(), i;
+    for (i = 0; i < raw.length; i++) {
+      var r = raw[i];
+      var p = progressOf(r.id, state);
+      out.push({
+        id: r.id, name: r.name,
+        // 隐藏成就在解锁前不给描述，只给「??」
+        desc: (r.hidden && !r.unlocked) ? '隐藏成就' : r.desc,
+        category: r.category,
+        hidden: r.hidden,
+        unlocked: r.unlocked,
+        current: p.current, target: p.target,
+        pct: r.unlocked ? 100 : p.pct
+      });
+    }
+    return out;
+  }
+
+  function snapshot(includeState) {
+    return {
+      version: MODULE_VERSION,
+      loaded: _loaded,
+      memoryOnly: !!store().memoryOnly,
+      total: ACHIEVEMENTS.length,
+      unlocked: unlockedCount(),
+      overall: overallProgress(),
+      stats: copyObj(_stats),
+      unlockedIds: Object.keys(_unlocked)
+    };
+  }
+
+  function copyObj(o) {
+    var out = {}, k;
+    for (k in o) if (Object.prototype.hasOwnProperty.call(o, k)) out[k] = o[k];
+    return out;
+  }
+
+  /* === 10. 解锁提示队列 ================================================ */
+
+  /** 弹出下一条提示（游戏在拿到 newly 后可以直接推）。返回是否还在显示。 */
+  function showToast(entry, seconds) {
+    if (!entry) return false;
+    _toast = { id: entry.id, name: entry.name || String(entry.id), desc: entry.desc || '',
+               t: 0, max: num(seconds, 3.2) };
+    return true;
+  }
+
+  /** 从队列里取一条待弹提示（游戏侧每帧调用一次即可）。 */
+  function nextToast() {
+    if (_toast) return null;
+    if (!_queue.length) return null;
+    var e = _queue.shift();
+    showToast(e);
+    return e;
+  }
+
+  /** 推进提示的生命周期。dt 秒。 */
+  function updateToast(dt) {
+    if (!_toast) return false;
+    _toast.t += num(dt, 0);
+    if (_toast.t >= _toast.max) { _toast = null; return false; }
+    return true;
+  }
+
+  function activeToast() { return _toast ? copyObj(_toast) : null; }
+
+  /* === 11. Canvas 2D 绘制（零 DOM；ctx 由调用方给） ====================
+   * 风格对齐 game.js 的 drawPill / roundRect：半透明深色药丸 + 极细白描边，
+   * 只用 rgba 与 #hex 颜色，不用彩色 emoji。
+   * ------------------------------------------------------------------- */
+
+  var FONT_DEFAULT = 'system-ui, "PingFang SC", "Microsoft YaHei", sans-serif';
+
+  function drawRoundRect(ctx, x, y, w, h, r) {
+    var rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
+  /** 提前退出：ctx 不像 Canvas 2D 上下文时直接不画，绝不让 UI 拖垮游戏。 */
+  function usable(ctx) {
+    return !!ctx && typeof ctx.fillText === 'function' && typeof ctx.measureText === 'function';
+  }
+
+  /** 一条进度条。返回高度，方便面板往下排。 */
+  function drawProgressBar(ctx, x, y, w, h, percent, colorOn, colorOff) {
+    if (!usable(ctx)) return h;
+    var frac = clamp(percent, 0, 100) / 100;
+    ctx.fillStyle = 'rgba(14,18,40,0.6)';
+    drawRoundRect(ctx, x, y, w, h, h / 2); ctx.fill();
+    if (frac > 0) {
+      ctx.fillStyle = colorOn || '#8fd86a';
+      drawRoundRect(ctx, x + 1, y + 1, Math.max(0, (w - 2) * frac), Math.max(1, h - 2), (h - 2) / 2);
+      ctx.fill();
+    }
+    ctx.strokeStyle = colorOff || 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 1;
+    drawRoundRect(ctx, x, y, w, h, h / 2); ctx.stroke();
+    return h;
+  }
+
+  /**
+   * 成就面板。居中大卡片，按类别分组，每行「名称 · 描述 · 进度条 · 百分比」。
+   *   ctx    Canvas 2D 上下文（调用方负责 setTransform 的 dpr 缩放）
+   *   w, h   逻辑宽高（CSS 像素）
+   *   opts   { font, fontFamily, scroll, rows }
+   * 返回 { x, y, w, h } 面板矩形，供点击命中判断；不可绘制时返回 null。
+   */
+  function drawPanel(ctx, w, h, opts) {
+    if (!usable(ctx)) return null;
+    var o = isObj(opts) ? opts : {};
+    var W = num(w, 0), H = num(h, 0);
+    if (W <= 0 || H <= 0) return null;
+    var font = Math.max(11, num(o.font, Math.max(14, Math.min(22, Math.min(W, H) * 0.024))));
+    var FONT = typeof o.fontFamily === 'string' && o.fontFamily ? o.fontFamily : FONT_DEFAULT;
+    var scroll = num(o.scroll, 0);
+
+    var pW = Math.min(W * 0.86, 640), pH = Math.min(H * 0.82, 720);
+    var pX = (W - pW) / 2, pY = (H - pH) / 2;
+
+    ctx.save();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    // 遮罩
+    ctx.fillStyle = 'rgba(8,14,26,0.62)';
+    ctx.fillRect(0, 0, W, H);
+    // 卡片
+    ctx.fillStyle = 'rgba(18,26,44,0.97)';
+    drawRoundRect(ctx, pX, pY, pW, pH, 16); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,214,140,0.45)';
+    ctx.lineWidth = 2;
+    drawRoundRect(ctx, pX, pY, pW, pH, 16); ctx.stroke();
+
+    // 标题
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffe2a8';
+    ctx.font = '800 ' + (font * 1.25) + 'px ' + FONT;
+    ctx.fillText('成就', W / 2, pY + font * 1.7);
+    ctx.font = '700 ' + (font * 0.74) + 'px ' + FONT;
+    ctx.fillStyle = 'rgba(223,242,255,0.8)';
+    var done = unlockedCount(), total = ACHIEVEMENTS.length;
+    ctx.fillText('已解锁 ' + done + '/' + total + ' · ' + overallProgress() + '%', W / 2, pY + font * 2.75);
+
+    // 列表区
+    var listX = pX + font * 1.2;
+    var listW = pW - font * 2.4;
+    var listTop = pY + font * 3.4;
+    var listBottom = pY + pH - font * 1.6;
+    var rowH = font * 2.5;
+    var rows = panelRows(o.state);
+    var visible = Math.max(1, Math.floor((listBottom - listTop) / rowH));
+    var maxScroll = Math.max(0, rows.length - visible);
+    var sc = clamp(scroll, 0, maxScroll);
+
+    // 裁剪列表区，避免滚出卡片
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(listX - 4, listTop - 4, listW + 8, listBottom - listTop + 8);
+    ctx.clip();
+
+    var lastCat = null, yy = listTop;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (i < sc) { lastCat = r.category; continue; }
+      if (yy + rowH > listBottom + rowH) break;
+
+      // 类别分隔标题
+      if (r.category !== lastCat) {
+        lastCat = r.category;
+        ctx.textAlign = 'left';
+        ctx.fillStyle = 'rgba(255,226,168,0.85)';
+        ctx.font = '700 ' + (font * 0.72) + 'px ' + FONT;
+        ctx.fillText('— ' + r.category + ' —', listX + 2, yy + font * 0.7);
+        yy += font * 1.05;
+        if (yy + rowH > listBottom) break;
+      }
+
+      // 行底色
+      ctx.fillStyle = r.unlocked ? 'rgba(120,200,140,0.10)' : 'rgba(255,255,255,0.045)';
+      drawRoundRect(ctx, listX, yy, listW, rowH - 4, 8); ctx.fill();
+      if (r.unlocked) {
+        ctx.strokeStyle = 'rgba(150,235,180,0.35)';
+        ctx.lineWidth = 1;
+        drawRoundRect(ctx, listX, yy, listW, rowH - 4, 8); ctx.stroke();
+      }
+
+      // 名称
+      ctx.textAlign = 'left';
+      ctx.fillStyle = r.unlocked ? '#dfffe8' : '#ffffff';
+      ctx.font = '700 ' + (font * 0.88) + 'px ' + FONT;
+      ctx.fillText(r.name, listX + 10, yy + font * 0.95);
+
+      // 状态徽标（右对齐）
+      ctx.textAlign = 'right';
+      ctx.font = '700 ' + (font * 0.7) + 'px ' + FONT;
+      if (r.unlocked) {
+        ctx.fillStyle = '#9ff0b8';
+        ctx.fillText('已解锁', listX + listW - 10, yy + font * 0.95);
+      } else {
+        ctx.fillStyle = 'rgba(200,230,255,0.7)';
+        ctx.fillText(r.pct + '%', listX + listW - 10, yy + font * 0.95);
+      }
+
+      // 描述
+      ctx.textAlign = 'left';
+      ctx.fillStyle = r.unlocked ? 'rgba(200,240,210,0.72)' : 'rgba(200,230,255,0.6)';
+      ctx.font = '600 ' + (font * 0.68) + 'px ' + FONT;
+      var descText = r.desc;
+      // 按宽度截断，加省略号（Canvas 没有 text-overflow，只能自己截）
+      var badgeW = font * 3.4;
+      var maxDescW = listW - 20 - badgeW;
+      if (ctx.measureText(descText).width > maxDescW) {
+        var cut = descText;
+        while (cut.length > 1 && ctx.measureText(cut + '…').width > maxDescW) cut = cut.slice(0, -1);
+        descText = cut + '…';
+      }
+      ctx.fillText(descText, listX + 10, yy + font * 1.6);
+
+      // 进度条
+      var barW = listW - 20, barH = font * 0.34;
+      drawProgressBar(ctx, listX + 10, yy + rowH - 4 - barH - font * 0.28, barW, barH,
+                      r.unlocked ? 100 : r.pct,
+                      r.unlocked ? '#8fd86a' : '#5fb6d8');
+
+      yy += rowH;
+    }
+    ctx.restore();
+
+    // 底部提示
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,226,168,0.8)';
+    ctx.font = '700 ' + (font * 0.7) + 'px ' + FONT;
+    var hint = maxScroll > 0 ? ('上下滑动浏览 · 共 ' + rows.length + ' 项 · 解锁即存档')
+                             : ('共 ' + rows.length + ' 项 · 解锁即存档');
+    ctx.fillText(hint, W / 2, pY + pH - font * 0.6);
+
+    // 右上角小关闭提示（圆形 X 的纯文本版），返回矩形给命中用
+    var cxW = font * 2.2, cxH = font * 1.6;
+    var cxX = pX + pW - cxW - font * 0.8, cxY = pY + font * 0.7;
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    drawRoundRect(ctx, cxX, cxY, cxW, cxH, cxH / 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = '700 ' + (font * 0.78) + 'px ' + FONT;
+    ctx.textAlign = 'center';
+    ctx.fillText('关闭', cxX + cxW / 2, cxY + cxH * 0.72);
+
+    ctx.restore();
+    return { x: pX, y: pY, w: pW, h: pH, close: { x: cxX, y: cxY, w: cxW, h: cxH },
+             scroll: sc, rowH: rowH, visible: visible, maxScroll: maxScroll };
+  }
+
+  /**
+   * 解锁横幅：顶部居中的一条药丸，滑入 / 停留 / 滑出都由 _toast.t 驱动。
+   * 不显示时不画任何东西。
+   */
+  function drawToast(ctx, w, h, opts) {
+    if (!usable(ctx) || !_toast) return null;
+    var o = isObj(opts) ? opts : {};
+    var W = num(w, 0), H = num(h, 0);
+    if (W <= 0 || H <= 0) return null;
+    var font = Math.max(11, num(o.font, Math.max(14, Math.min(22, Math.min(W, H) * 0.024))));
+    var FONT = typeof o.fontFamily === 'string' && o.fontFamily ? o.fontFamily : FONT_DEFAULT;
+
+    var max = Math.max(0.1, num(_toast.max, 3.2));
+    var t = num(_toast.t, 0);
+    // 0→0.28s 滑入，末尾 0.5s 滑出
+    var enter = Math.min(1, t / 0.28);
+    var exit = Math.min(1, Math.max(0, (max - t) / 0.5));
+    var ease = Math.min(enter, exit);
+    if (ease <= 0) return null;
+
+    var pillW = Math.min(W * 0.9, font * 20);
+    var pillH = font * 3.5;
+    var x = (W - pillW) / 2;
+    var y = -pillH + (pillH + font * 0.9) * ease;   // 从屏幕上方滑下来
+
+    ctx.save();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = 'rgba(20,46,30,0.94)';
+    drawRoundRect(ctx, x, y, pillW, pillH, 12); ctx.fill();
+    ctx.strokeStyle = 'rgba(150,235,180,0.75)';
+    ctx.lineWidth = 2;
+    drawRoundRect(ctx, x, y, pillW, pillH, 12); ctx.stroke();
+
+    // 左侧色块（代替 emoji 图标）
+    ctx.fillStyle = '#9ff0b8';
+    drawRoundRect(ctx, x + font * 0.55, y + pillH / 2 - font * 0.5, font * 0.22, font, font * 0.11);
+    ctx.fill();
+
+    ctx.fillStyle = '#cfffe0';
+    ctx.font = '800 ' + (font * 0.64) + 'px ' + FONT;
+    ctx.fillText('成就解锁', x + font * 1.15, y + font * 1.15);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 ' + (font * 0.95) + 'px ' + FONT;
+    ctx.fillText(_toast.name, x + font * 1.15, y + font * 2.2);
+    if (_toast.desc) {
+      ctx.fillStyle = 'rgba(200,240,210,0.78)';
+      ctx.font = '600 ' + (font * 0.66) + 'px ' + FONT;
+      var d = _toast.desc;
+      var maxW = pillW - font * 2.2;
+      if (ctx.measureText(d).width > maxW) {
+        while (d.length > 1 && ctx.measureText(d + '…').width > maxW) d = d.slice(0, -1);
+        d = d + '…';
+      }
+      ctx.fillText(d, x + font * 1.15, y + font * 3.0);
+    }
+    ctx.restore();
+    return { x: x, y: y, w: pillW, h: pillH, alpha: ease };
+  }
+
+  /* === 12. 自检（node 与游戏内都能跑） ================================= */
+
+  /** 三个畸形快照跑一遍全部 check/progress，报告任何异常。 */
+  function selfTest() {
+    var problems = [];
+    var malformed = [
+      {},
+      null,
+      undefined,
+      { survival: 'not-an-array', recruited: 42, buildings: 'x', zone: [], hero: null,
+        diveState: 'nope', phase: 3, score: NaN, combo: 'abc', hearts: {}, water: null },
+      { survival: [null, undefined, 7, { id: 'workbench' }, 'shelter'],
+        buildings: [null, { id: 'cabin' }, 'shed'], recruited: [null, {}, 'x'],
+        selfSustain: 'long', townReady: 'yes', pickups: 'x', diveState: { depth: 'deep', collected: 'x' } }
+    ];
+    for (var m = 0; m < malformed.length; m++) {
+      for (var i = 0; i < ACHIEVEMENTS.length; i++) {
+        var a = ACHIEVEMENTS[i];
+        try {
+          var c = a.check(malformed[m], freshStats());
+          if (typeof c !== 'boolean') problems.push(a.id + '.check 返回非 boolean：' + typeof c);
+        } catch (e) { problems.push(a.id + '.check 抛异常：' + (e && e.message)); }
+        try {
+          var p = a.progress(malformed[m], freshStats());
+          if (!isObj(p)) problems.push(a.id + '.progress 返回非对象');
+          else {
+            if (typeof p.current !== 'number' || !isFinite(p.current)) problems.push(a.id + '.progress.current 非法');
+            if (typeof p.target !== 'number' || !isFinite(p.target)) problems.push(a.id + '.progress.target 非法');
+            if (typeof p.pct !== 'number' || p.pct < 0 || p.pct > 100) problems.push(a.id + '.progress.pct 越界：' + p.pct);
+          }
+        } catch (e) { problems.push(a.id + '.progress 抛异常：' + (e && e.message)); }
+      }
+    }
+    // 唯一性
+    var seen = {};
+    for (var u = 0; u < ACHIEVEMENTS.length; u++) {
+      if (seen[ACHIEVEMENTS[u].id]) problems.push('成就 id 重复：' + ACHIEVEMENTS[u].id);
+      seen[ACHIEVEMENTS[u].id] = 1;
+    }
+    return { passed: problems.length === 0, problems: problems };
+  }
+
+  /* === 13. 导出 ======================================================== */
+
+  var api = {
+    VERSION: MODULE_VERSION,
+    STORE_KEY: STORE_KEY,
+    ACHIEVEMENTS: ACHIEVEMENTS,
+    TOWN_BUILDINGS: TOWN_BUILDINGS,
+    SURVIVAL_IDS: SURVIVAL_IDS,
+    CASTAWAY_NAMES: CASTAWAY_NAMES,
+
+    load: load,
+    save: save,
+    tick: tick,
+    note: note,
+    resetRun: resetRun,
+
+    list: list,
+    byId: byId,
+    progressOf: progressOf,
+    overallProgress: overallProgress,
+    unlockedCount: unlockedCount,
+    panelRows: panelRows,
+    snapshot: snapshot,
+    selfTest: selfTest,
+
+    drawPanel: drawPanel,
+    drawToast: drawToast,
+    showToast: showToast,
+    nextToast: nextToast,
+    updateToast: updateToast,
+    activeToast: activeToast,
+
+    /* 测试与调试用：直接塞一份统计器（不改存档，除非随后 save()） */
+    _setStats: function (stats) {
+      if (isObj(stats)) { _stats = stats; _dirty = true; }
+    },
+    _getStats: function () { return copyObj(_stats); },
+    _resetAll: function () {
+      _unlocked = {}; _stats = freshStats(); _run = freshRun();
+      _queue = []; _toast = null; _loaded = true; _dirty = true;
+      save();
+    },
+    _unlockedMap: function () { return copyObj(_unlocked); }
+  };
+
+  return api;
+});
+
+})();
+
+/* --- inlined from leaderboard.js --- */
+(function () {
+/* 漂流小镇 · 排行榜 leaderboard.js
+ * ===========================================================================
+ * 一个文件、零依赖、零 DOM：浏览器与微信小游戏通用。
+ *
+ * ## 先说清楚能力边界（这一段是整个模块最重要的部分）
+ *
+ * 本项目是**纯前端单文件游戏，没有后端服务器**。所以：
+ *
+ * | 榜单                 | 状态       | 真实程度 |
+ * |----------------------|-----------|---------|
+ * | 本地排行（我的成绩）  | 真能用     | 本机 localStorage 存档，跨局、跨天都在，能排序、能算名次 |
+ * | 微信好友排行          | 真能用*    | `wx.getFriendCloudStorage` + 开放数据域，**运营方必须在微信后台配置开放数据域并发布，否则跑不起来** |
+ * | 全服排行（所有玩家）   | **做不到** | 没有后端就没有「所有玩家」这个集合。本模块**不提供**假的实现 |
+ *
+ * 关于「全服排行」的处理：
+ *   本模块提供一个 `createServerAdapter()` 的**空壳适配器**，它的每一个方法
+ *   都返回 `{ ok:false, unavailable:true, reason:'no-backend' }`，并带一句人话
+ *   说明「需要后端才能跑」。它不会返回任何伪造的排名数据。
+ *   这样 UI 可以正确地显示「全服排行 · 需后端接入」，而不是显示一个骗人的榜单。
+ *
+ * 将来接后端时要改的地方（只有这三处）：
+ *   1. `SERVER_BASE` 常量 → 你的服务器地址
+ *   2. `submitToServer()` → 换成真实 POST
+ *   3. `fetchTopFromServer()` → 换成真实 GET
+ *   其余逻辑（排序、平分规则、本地兜底、绘制）都不用动。
+ *
+ * ## 硬约束
+ *   - 不加载 Node 模块、不读写文件、不请求网络、不操作 DOM
+ *   - 不使用彩色 emoji（微信 Canvas 会渲染成方块）
+ *   - 微信 API 全部特性检测：`typeof wx !== 'undefined' && typeof wx.xxx === 'function'`
+ *
+ * ## 用法（游戏侧）
+ *   Leaderboard.submit({ playerId:'p1', nickname:'我', buildProgress:4, achievementProgress:60, score:120 });
+ *   var local = Leaderboard.fetchTop(10);       // 同步，立刻有值
+ *   var friends = await Leaderboard.fetchFriends();  // 异步；微信环境才有真实数据
+ *   var server = await Leaderboard.fetchServerTop(10); // 恒为 unavailable（无后端）
+ *   Leaderboard.draw(ctx, w, h, { tab:'local', font:16 });   // Canvas 2D 界面
+ * ===========================================================================
+ */
+(function (root, factory) {
+  'use strict';
+  var api = factory();
+  if (root) root.Leaderboard = api;
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+})(typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : this), function () {
+  'use strict';
+
+  var MODULE_VERSION = '1.0.0';
+  var STORE_KEY = 'dsh-game-studio:drift-town:leaderboard:v1';
+  var MAX_LOCAL_RECORDS = 100;      // 本地最多留 100 条，够看个人历史曲线
+  var MAX_TOP = 50;                 // fetchTop 单次上限
+
+  /* 将来接后端：把这里换成你的服务地址即可。空字符串 = 未配置。 */
+  var SERVER_BASE = '';
+
+  /* === 1. 工具 ========================================================= */
+
+  function isObj(v) { return !!v && typeof v === 'object'; }
+
+  function num(v, fallback) {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string' && v !== '' && isFinite(Number(v))) return Number(v);
+    return typeof fallback === 'number' ? fallback : 0;
+  }
+
+  function clamp(v, lo, hi) {
+    var n = num(v, lo);
+    if (n < lo) return lo;
+    if (n > hi) return hi;
+    return n;
+  }
+
+  function copyObj(o) {
+    var out = {}, k;
+    if (!isObj(o)) return out;
+    for (k in o) if (Object.prototype.hasOwnProperty.call(o, k)) out[k] = o[k];
+    return out;
+  }
+
+  /* === 2. 存储层（localStorage / wx 存储 / 内存兜底） =================== */
+
+  function storage() {
+    if (typeof wx !== 'undefined' && wx
+        && typeof wx.setStorageSync === 'function' && typeof wx.getStorageSync === 'function') {
+      return {
+        get: function (k) { try { return wx.getStorageSync(k); } catch (e) { return null; } },
+        set: function (k, v) { try { wx.setStorageSync(k, v); return true; } catch (e) { return false; } },
+        backend: 'wx'
+      };
+    }
+    try {
+      var ls = typeof localStorage !== 'undefined' ? localStorage : null;
+      if (ls && typeof ls.getItem === 'function' && typeof ls.setItem === 'function') {
+        return {
+          get: function (k) { try { return ls.getItem(k); } catch (e) { return null; } },
+          set: function (k, v) { try { ls.setItem(k, v); return true; } catch (e) { return false; } },
+          backend: 'localStorage'
+        };
+      }
+    } catch (e) { /* 沙箱 / 无痕会抛，落到内存兜底 */ }
+    var mem = {};
+    return {
+      get: function (k) { return Object.prototype.hasOwnProperty.call(mem, k) ? mem[k] : null; },
+      set: function (k, v) { mem[k] = v; return true; },
+      backend: 'memory',
+      memoryOnly: true
+    };
+  }
+
+  /* === 3. 记录规范化与排序 =============================================
+   * 一条记录：
+   * {
+   *   playerId   string   稳定 id（本地记录用随机串，接后端后换账号 id）
+   *   nickname   string   显示名
+   *   avatarUrl  string   头像（微信好友排行会给，本地记录为空）
+   *   score      number   综合分（排序主键）
+   *   buildProgress  number 0-100 城镇建设进度
+   *   achievementProgress number 0-100 成就进度
+   *   achievementCount number 已解锁成就数
+   *   townCount  number   城镇建筑数
+   *   salvaged   number   累计打捞件数
+   *   at         number   提交时间（unix ms）
+   *   source     'local' | 'friend' | 'server'
+   * }
+   *
+   * 排序规则（必须在任何地方都一致，测试会验证）：
+   *   1. buildProgress 降序   ← 用户明确要求「排行榜显示建造进度」
+   *   2. achievementProgress 降序
+   *   3. score 降序
+   *   4. at 升序（先达成的排前面）—— 这条保证平分时名次是确定的，不是随机的
+   *   5. playerId 升序（字符串比较）—— 最后一道确定性的保险
+   * 名次：同分（前 4 项全等）并列同名次，下一名跳号（1,1,3 而不是 1,1,2）。
+   */
+
+  function normalizeRecord(raw, source) {
+    var r = isObj(raw) ? raw : {};
+    var pid = typeof r.playerId === 'string' && r.playerId ? r.playerId : '';
+    var nick = typeof r.nickname === 'string' && r.nickname ? r.nickname : (pid || '无名');
+    return {
+      playerId: pid,
+      nickname: nick,
+      avatarUrl: typeof r.avatarUrl === 'string' ? r.avatarUrl : '',
+      score: clamp(num(r.score, 0), 0, 1e9),
+      buildProgress: clamp(num(r.buildProgress, 0), 0, 100),
+      achievementProgress: clamp(num(r.achievementProgress, 0), 0, 100),
+      achievementCount: clamp(num(r.achievementCount, 0), 0, 9999),
+      townCount: clamp(num(r.townCount, 0), 0, 999),
+      salvaged: clamp(num(r.salvaged, 0), 0, 1e7),
+      at: Math.max(0, Math.floor(num(r.at, Date.now()))),
+      source: typeof r.source === 'string' ? r.source
+              : (typeof source === 'string' ? source : 'local')
+    };
+  }
+
+  /** 比较函数：负 = a 排前面。 */
+  function compareRecords(a, b) {
+    if (b.buildProgress !== a.buildProgress) return b.buildProgress - a.buildProgress;
+    if (b.achievementProgress !== a.achievementProgress) return b.achievementProgress - a.achievementProgress;
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.at !== b.at) return a.at - b.at;
+    if (a.playerId < b.playerId) return -1;
+    if (a.playerId > b.playerId) return 1;
+    return 0;
+  }
+
+  /** 并列判定：只看玩家「看得见的三个数」。
+   *  建造进度 / 成就进度 / 分数三者全等 → 同名次。
+   *  at 与 playerId 只用来给并列者排先后（保证顺序确定），不参与并列判定
+   *  —— 否则两个屏幕上一模一样的成绩会显示成第 1 名和第 2 名，读起来像 bug。 */
+  function isTie(a, b) {
+    return a.buildProgress === b.buildProgress
+        && a.achievementProgress === b.achievementProgress
+        && a.score === b.score;
+  }
+
+  /** 排序 + 打名次。返回新数组，不改入参。每条记录多一个 rank 字段。 */
+  function rank(list) {
+    return rankBy(list, 'build');
+  }
+
+  /**
+   * 按指定口径排序并打名次。
+   * @param list    记录数组（畸形项会被 normalizeRecord 规整，不会抛）
+   * @param sortBy  'build'（默认，建造进度）| 'achievement' | 'score'
+   *
+   * 排序规则：
+   *   主键 = sortBy 指定的那个指标；
+   *   其余两个可见指标按 build > achievement > score 依次比较；
+   *   最后 at 升序、playerId 升序，保证「同样输入永远同样输出」。
+   * 名次：三个可见指标全等 → 并列同名次，下一名跳号（1,1,3 而不是 1,1,2）。
+   */
+  function rankBy(list, sortBy) {
+    var input = Object.prototype.toString.call(list) === '[object Array]' ? list : [];
+    var key = normalizeSortBy(sortBy);
+    var arr = [];
+    for (var i = 0; i < input.length; i++) arr.push(normalizeRecord(input[i]));
+
+    /* 把 sortBy 指定的指标提到第一优先级，其余两个保持默认次序。 */
+    var order = {
+      build: ['buildProgress', 'achievementProgress', 'score'],
+      achievement: ['achievementProgress', 'buildProgress', 'score'],
+      score: ['score', 'buildProgress', 'achievementProgress']
+    }[key];
+
+    arr.sort(function (a, b) {
+      for (var o = 0; o < order.length; o++) {
+        var f = order[o];
+        if (b[f] !== a[f]) return b[f] - a[f];   // 降序
+      }
+      if (a.at !== b.at) return a.at - b.at;      // 先达成的排前面
+      if (a.playerId < b.playerId) return -1;     // 最后一道确定性保险
+      if (a.playerId > b.playerId) return 1;
+      return 0;
+    });
+
+    var out = [], prev = null, prevRank = 0;
+    for (var j = 0; j < arr.length; j++) {
+      var rec = arr[j];
+      var rk;
+      if (prev && isTie(prev, rec)) rk = prevRank;   // 并列
+      else { rk = j + 1; prevRank = rk; }            // 跳号
+      var item = copyObj(rec);
+      item.rank = rk;
+      out.push(item);
+      prev = rec;
+    }
+    return out;
+  }
+
+  /* === 4. 本地排行（真能用） =========================================== */
+
+  var _store = null;
+  var _records = null;      // 惰性加载的本地记录数组
+  var _myPlayerId = '';
+
+  function store() { if (!_store) _store = storage(); return _store; }
+
+  function loadLocal() {
+    if (_records) return _records;
+    var raw = null;
+    try { raw = store().get(STORE_KEY); } catch (e) { raw = null; }
+    var data = null;
+    if (typeof raw === 'string' && raw) {
+      try { data = JSON.parse(raw); } catch (e) { data = null; }
+    } else if (isObj(raw)) { data = raw; }
+
+    _records = [];
+    if (isObj(data)) {
+      var list = Object.prototype.toString.call(data.records) === '[object Array]' ? data.records : [];
+      for (var i = 0; i < list.length; i++) {
+        // 读档时也过一遍 normalizeRecord：手改过的存档不能把排序搞崩
+        if (isObj(list[i])) _records.push(normalizeRecord(list[i], 'local'));
+      }
+      if (typeof data.myPlayerId === 'string' && data.myPlayerId) _myPlayerId = data.myPlayerId;
+    }
+    return _records;
+  }
+
+  function saveLocal() {
+    var list = loadLocal();
+    // 只留最近的 MAX_LOCAL_RECORDS 条（按提交时间，不按名次——
+    // 名次会随后来者变化，按时间留才是「我的历史」）
+    if (list.length > MAX_LOCAL_RECORDS) {
+      list.sort(function (a, b) { return b.at - a.at; });
+      list.length = MAX_LOCAL_RECORDS;
+    }
+    var payload = { v: 1, myPlayerId: _myPlayerId, records: list, savedAt: Date.now() };
+    var ok = false;
+    try { ok = store().set(STORE_KEY, JSON.stringify(payload)); } catch (e) { ok = false; }
+    return ok;
+  }
+
+  /** 稳定的本地玩家 id：第一次生成后存下来。 */
+  function myPlayerId() {
+    if (!_myPlayerId) {
+      loadLocal();
+      if (!_myPlayerId) {
+        _myPlayerId = 'local-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
+        saveLocal();
+      }
+    }
+    return _myPlayerId;
+  }
+
+  /**
+   * 提交一条成绩。这是**唯一**的上报入口，将来接后端时在这里加 POST。
+   *
+   * @param {Object} record 至少给 score；其余字段可选，缺省按 0 处理
+   * @param {Object} opts   { local: 是否写本地（默认 true）,
+   *                          remote: 是否尝试上报后端（默认 true，无后端时静默跳过） }
+   * @returns {{ ok:boolean, record:Object, localSaved:boolean,
+   *             remote:{ ok:boolean, unavailable:boolean, reason:string } }}
+   *
+   * 注意：本函数**同步**返回本地部分的结果；远端上报是异步的，通过返回值里的
+   * remote 字段报告「不可用」，不会静默假装成功。
+   */
+  function submit(record, opts) {
+    var o = isObj(opts) ? opts : {};
+    var rec = normalizeRecord(record, 'local');
+    if (!rec.playerId) rec.playerId = myPlayerId();
+    if (!rec.playerId) rec.playerId = 'anon';
+    rec.at = rec.at || Date.now();
+
+    var localSaved = false;
+    if (o.local !== false) {
+      var list = loadLocal();
+      // 同一玩家、同一局（同 at）重复提交时覆盖，避免列表里塞满重复项
+      var replaced = false;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].playerId === rec.playerId && list[i].at === rec.at) {
+          list[i] = rec; replaced = true; break;
+        }
+      }
+      if (!replaced) list.push(rec);
+      localSaved = saveLocal();
+    }
+
+    // --- 远端上报：没有后端时明确说「不可用」，不假装成功 ---
+    var remote = { ok: false, unavailable: true, reason: 'no-backend' };
+    if (o.remote !== false) {
+      if (!SERVER_BASE) {
+        remote = {
+          ok: false, unavailable: true, reason: 'no-backend',
+          note: '本项目是纯前端游戏，没有服务器。要在 leaderboard.js 顶部把 SERVER_BASE 换成真实地址并实现 submitToServer()，全服排行才会真的工作。'
+        };
+      } else {
+        remote = submitToServer(rec);
+      }
+    }
+
+    // --- 微信好友排行：提交成绩到微信云存储（开放数据域里才能读） ---
+    var cloud = submitToWxCloud(rec);
+
+    return { ok: true, record: rec, localSaved: localSaved, remote: remote, cloud: cloud };
+  }
+
+  /**
+   * 把玩家数据写进微信云存储。这是 `wx.getFriendCloudStorage` 能读到好友数据的
+   * **前提**：每个玩家都必须先 setUserCloudStorage，好友才看得到你。
+   *
+   * kvList 的 key / value 都有长度限制（微信文档：key ≤ 128 字节，
+   * value ≤ 1KB，每个用户最多 128 个 kv）。所以只放精简后的必要字段。
+   *
+   * @returns {{ ok:boolean, unavailable:boolean, reason:string }}
+   */
+  function submitToWxCloud(rec) {
+    if (typeof wx === 'undefined' || !wx) {
+      return { ok: false, unavailable: true, reason: 'not-wechat' };
+    }
+    if (typeof wx.setUserCloudStorage !== 'function') {
+      return {
+        ok: false, unavailable: true, reason: 'api-missing',
+        note: 'wx.setUserCloudStorage 不存在。常见原因：不在微信小游戏环境、基础库版本过低（需 ≥ 2.0.0）、或本局未在开放数据域创建时调用。'
+      };
+    }
+    var payload = {
+      wxgame: {
+        score: rec.score,
+        buildProgress: rec.buildProgress,
+        achievementProgress: rec.achievementProgress,
+        townCount: rec.townCount,
+        at: rec.at
+      }
+    };
+    var ok = true, err = null;
+    try {
+      // 注意：这个 API 是异步回调式；同步的 try 只能挡住参数错误。
+      wx.setUserCloudStorage({
+        KVDataList: [{ key: 'drifttown', value: JSON.stringify(payload.wxgame) }],
+        success: function () { ok = true; },
+        fail: function (e) { err = e; }
+      });
+    } catch (e) {
+      return { ok: false, unavailable: true, reason: 'call-threw', error: String(e && e.message || e) };
+    }
+    return {
+      ok: ok, unavailable: false, reason: err ? 'callback-failed' : 'sent',
+      note: '已调用 wx.setUserCloudStorage。同步返回不代表服务端已写入，真正的结果在异步回调里；好友排行读取前建议等 1-2 秒。'
+    };
+  }
+
+  /* === 5. 本地排行读取（真能用） ======================================= */
+
+  /**
+   * 本地榜 top N。同步，立刻可用。
+   * @param {number} n
+   * @param {string} sortBy 'build'（默认，按建造进度）| 'achievement' | 'score'
+   * @returns {{ ok:true, source:'local', label:string, items:[], me:Object|null }}
+   */
+  function fetchTop(n, sortBy) {
+    var limit = clamp(num(n, 10), 1, MAX_TOP);
+    var list = loadLocal();
+    var ranked = rankBy(list, sortBy);
+    var items = ranked.slice(0, limit);
+    var me = null, myId = myPlayerId();
+    for (var i = 0; i < ranked.length; i++) {
+      if (ranked[i].playerId === myId) { me = ranked[i]; break; }
+    }
+    return {
+      ok: true,
+      source: 'local',
+      // 这句话要原样上屏，别让用户以为这是全服数据
+      label: '本地记录（本机存档 · 不是全服排行）',
+      real: true,
+      backendRequired: false,
+      items: items,
+      total: ranked.length,
+      me: me,
+      sortBy: normalizeSortBy(sortBy)
+    };
+  }
+
+  function normalizeSortBy(v) {
+    return (v === 'achievement' || v === 'score') ? v : 'build';
+  }
+
+  /** 本地榜里「我」的历史最好一条。 */
+  function myBest(sortBy) {
+    var ranked = rankBy(loadLocal(), sortBy);
+    var myId = myPlayerId();
+    for (var i = 0; i < ranked.length; i++) {
+      if (ranked[i].playerId === myId) return ranked[i];
+    }
+    return null;
+  }
+
+  /* === 6. 微信好友排行（有真实环境才能跑） =============================
+   *
+   * ## 需要什么配置才能真跑（这是队友最容易被坑的地方，写清楚）
+   *
+   * 1. **game.json 里声明开放数据域**
+   *    ```json
+   *    {
+   *      "deviceOrientation": "landscape",
+   *      "openDataContext": "open-data"
+   *    }
+   *    ```
+   *    `open-data` 是那个目录名，里面有独立的 `index.js`（跑在**另一个** JS
+   *    上下文里，不能访问主域的 game.js 变量、不能 require 主域模块）。
+   *
+   * 2. **project.config.json 里声明分包 / 信任域**
+   *    ```json
+   *    {
+   *      "compileType": "game",
+   *      "setting": { "es6": true },
+   *      "openDataContext": "open-data"
+   *    }
+   *    ```
+   *    注意：新版开发者工具对 `openDataContext` 的识别在 `game.json` 更可靠，
+   *    两边都写上不会错。
+   *
+   * 3. **开放数据域里的 index.js 只能调这几个 API**：
+   *    `wx.getFriendCloudStorage` / `wx.getGroupCloudStorage` /
+   *    `wx.getUserCloudStorage` / `wx.getUserInfo`（开放数据域版）。
+   *    它**不能**建 WebGL、不能 play 音频、不能发网络请求。
+   *
+   * 4. **主域通过 `wx.getOpenDataContext()` 拿到 context**，用
+   *    `context.postMessage({...})` 下单，用
+   *    `context.canvas`（一个 SharedCanvas）当作纹理贴到主域的场景里，
+   *    或者用 `context.canvas` 的 2D 内容 `drawImage` 到主域的 HUD canvas。
+   *
+   * 5. **每个玩家都必须先 `wx.setUserCloudStorage`**，否则好友读不到你。
+   *
+   * 6. **真实微信账号 + 已发布的小游戏**：开发者工具能模拟，但好友列表只有在
+   *    真机、真实登录态、且**至少有一个好友也玩过并写过云存储**时才有数据。
+   *    模拟器里通常是空数组——**空数组不等于功能坏了**。
+   *
+   * 7. **隐私合规**：需要在微信后台的「用户隐私保护指引」中声明读取
+   *    好友关系链（`getFriendCloudStorage` 属于「微信朋友关系」范围）。
+   *    2023 年后未声明的调用会被拒绝。
+   *
+   * ## 本模块负责什么
+   *   本模块**不**直接读好友数据（主域调 `wx.getFriendCloudStorage` 在
+   *   部分基础库上会失败/受限）。本模块负责：
+   *     a) 检测环境，判断能不能跑
+   *     b) 把主域收到的原始 KVDataList **解析并排序**成排行榜条目
+   *     c) 给出「怎么接」的完整指引（`friendsSetup()`）
+   *   也就是说：数据获取走主域 + 开放数据域（有文档的标准做法），
+   *   数据解析与排序走本模块（这些逻辑与 UI 复用，且可被 node 测试覆盖）。
+   */
+
+  /** 当前环境的微信能力探测。返回一份可上屏的诊断。 */
+  function wxCapability() {
+    var hasWx = typeof wx !== 'undefined' && !!wx;
+    var caps = {
+      hasWx: hasWx,
+      platform: hasWx ? (typeof wx.getSystemInfoSync === 'function' ? (function () {
+        try { return String((wx.getSystemInfoSync() || {}).platform || 'unknown'); } catch (e) { return 'unknown'; }
+      })() : 'unknown') : 'not-wechat',
+      setUserCloudStorage: hasWx && typeof wx.setUserCloudStorage === 'function',
+      getFriendCloudStorage: hasWx && typeof wx.getFriendCloudStorage === 'function',
+      getOpenDataContext: hasWx && typeof wx.getOpenDataContext === 'function',
+      getUserCloudStorage: hasWx && typeof wx.getUserCloudStorage === 'function'
+    };
+    caps.openDataUsable = caps.hasWx && caps.getFriendCloudStorage && caps.getOpenDataContext;
+    return caps;
+  }
+
+  /** 好友排行需要什么才能真跑 —— 直接可以贴给队友 / 上屏。 */
+  function friendsSetup() {
+    var caps = wxCapability();
+    var items = [
+      { key: 'game.json', text: '加一行 "openDataContext": "open-data"，并在项目里建 open-data/ 目录与 open-data/index.js' },
+      { key: 'project.config.json', text: '同样写 "openDataContext": "open-data"（新版工具认 game.json，两边都写最稳）' },
+      { key: 'open-data/index.js', text: '在开放数据域里调 wx.getFriendCloudStorage({ keyList:["drifttown"], success }) ，把结果 postMessage 回主域' },
+      { key: '主域', text: '用 var ctx = wx.getOpenDataContext() 拿上下文；ctx.postMessage({ type:"friends" }) 下单' },
+      { key: '每人先写云存储', text: '每个玩家必须先 wx.setUserCloudStorage 写自己的成绩，好友才读得到你' },
+      { key: '真机 + 真实登录', text: '开发者工具只能模拟；好友列表要真机、真实账号、且有好友也玩过。空数组通常是正常现象' },
+      { key: '隐私声明', text: '微信后台「用户隐私保护指引」需声明读取微信朋友关系，否则调用会被拒' }
+    ];
+    return {
+      ok: caps.openDataUsable,
+      capability: caps,
+      // 现在就缺什么，一句人话
+      verdict: caps.openDataUsable
+        ? '环境具备微信好友排行所需的 API；还要确认 openDataContext 已在 game.json 中声明并被发布。'
+        : (caps.hasWx
+            ? '在微信里，但缺少 API：' + [
+                caps.getFriendCloudStorage ? null : 'wx.getFriendCloudStorage',
+                caps.getOpenDataContext ? null : 'wx.getOpenDataContext'
+              ].filter(Boolean).join(' / ') + '（基础库版本过低或不在小游戏环境）'
+            : '当前不是微信小游戏环境（Web 端）。好友排行只在微信里可用。'),
+      items: items
+    };
+  }
+
+  /**
+   * 把 wx.getFriendCloudStorage 返回的原始数据解析成排行榜条目并排序。
+   *
+   * 入参是标准返回结构：
+   *   { data: [ { avatarUrl, nickname, openid, KVDataList: [{ key, value }] } ] }
+   * 本函数**不调用任何 wx API**（纯函数，可在 node 里测），
+   * 由主域/开放数据域把数据拿到后丢进来。
+   *
+   * @returns {{ ok:boolean, source:'friend', label:string, items:[], total:number,
+   *             skipped:number, emptyIsNormal:boolean }}
+   */
+  function parseFriendData(raw, sortBy) {
+    var recs = [], skipped = 0;
+    var list = isObj(raw) && Object.prototype.toString.call(raw.data) === '[object Array]' ? raw.data : [];
+    for (var i = 0; i < list.length; i++) {
+      var player = list[i];
+      if (!isObj(player)) { skipped++; continue; }
+      var kv = Object.prototype.toString.call(player.KVDataList) === '[object Array]' ? player.KVDataList : [];
+      // 我们只写一个 key: 'drifttown'；也可能是别的 key（用户改过），全部找一遍
+      var payload = null;
+      for (var k = 0; k < kv.length; k++) {
+        if (!isObj(kv[k])) continue;
+        if (kv[k].key !== 'drifttown') continue;
+        var v = kv[k].value;
+        if (typeof v === 'string' && v) {
+          try { payload = JSON.parse(v); } catch (e) { payload = null; }
+        } else if (isObj(v)) {
+          payload = v;
+        }
+      }
+      if (!payload) { skipped++; continue; }   // 这个好友没写云存储 / 格式不对
+      var openid = typeof player.openid === 'string' ? player.openid : ('friend-' + i);
+      recs.push(normalizeRecord({
+        playerId: openid,
+        nickname: typeof player.nickname === 'string' ? player.nickname : '微信好友',
+        avatarUrl: typeof player.avatarUrl === 'string' ? player.avatarUrl : '',
+        score: num(payload.score, 0),
+        buildProgress: num(payload.buildProgress, 0),
+        achievementProgress: num(payload.achievementProgress, 0),
+        townCount: num(payload.townCount, 0),
+        at: num(payload.at, 0)
+      }, 'friend'));
+    }
+    var ranked = rankBy(recs, sortBy);
+    return {
+      ok: true,
+      source: 'friend',
+      label: '微信好友排行（真实好友数据 · 需真机与开放数据域）',
+      real: true,
+      backendRequired: false,
+      items: ranked,
+      total: ranked.length,
+      skipped: skipped,
+      // 空数组在微信里非常常见（好友都没玩过），UI 要把它当正常情况
+      emptyIsNormal: ranked.length === 0,
+      sortBy: normalizeSortBy(sortBy)
+    };
+  }
+
+  /**
+   * 取好友排行。**在微信环境里**尝试直接调 wx.getFriendCloudStorage。
+   *
+   * 现实约束（务必知道）：
+   *   - 主域直接调 getFriendCloudStorage 在**部分基础库上会失败**，官方推荐
+   *     做法是放在开放数据域里调。所以本函数把两条路都试：先试直接调（有
+   *     基础库支持），失败就返回 `needOpenDataContext:true` 并给出指引。
+   *   - 无论哪条路，都必须有真实微信登录态与已声明 openDataContext。
+   *   - **绝不编造假好友**。读不到就如实说读不到。
+   *
+   * @returns {Promise<Object>} 解析结果；不可用时 { ok:false, unavailable:true, reason, setup }
+   */
+  function fetchFriends(sortBy) {
+    return fetchFriendsRaw(sortBy).then(function (r) {
+      // 无论成功失败，一定带上配置指引：调用方拿到的永远是同一形状。
+      if (isObj(r) && !r.setup) { try { r.setup = friendsSetup(); } catch (e) { /* ignore */ } }
+      if (isObj(r) && !r.items) r.items = [];
+      if (isObj(r) && typeof r.total !== 'number') r.total = r.items.length;
+      return r;
+    });
+  }
+
+  function fetchFriendsRaw(sortBy) {
+    var key = normalizeSortBy(sortBy);
+    var caps = wxCapability();
+    if (!caps.hasWx) {
+      return Promise.resolve({
+        ok: false, unavailable: true, reason: 'not-wechat', source: 'friend',
+        label: '微信好友排行（未在微信环境）',
+        setup: friendsSetup(),
+        note: 'Web 端拿不到微信好友关系链。这是平台限制，不是代码问题。'
+      });
+    }
+    if (!caps.getFriendCloudStorage) {
+      return Promise.resolve({
+        ok: false, unavailable: true, reason: 'api-missing', source: 'friend',
+        label: '微信好友排行（API 不可用）',
+        setup: friendsSetup(),
+        note: 'wx.getFriendCloudStorage 不存在。需要基础库 ≥ 2.0.0。'
+      });
+    }
+    return new Promise(function (resolve) {
+      var settled = false;
+      function done(result) { if (!settled) { settled = true; resolve(result); } }
+      // 兜底超时：微信在无网络/未登录时可能既不 success 也不 fail
+      var timer = setTimeout(function () {
+        done({
+          ok: false, unavailable: true, reason: 'timeout', source: 'friend',
+          label: '微信好友排行（读取超时）',
+          setup: friendsSetup(),
+          note: '10 秒内没有回调。常见原因：未登录、无网络、或该能力在开发工具中被限制。'
+        });
+      }, 10000);
+      function clear() { try { clearTimeout(timer); } catch (e) { /* ignore */ } }
+      try {
+        wx.getFriendCloudStorage({
+          keyList: ['drifttown'],
+          success: function (res) {
+            clear();
+            var parsed = parseFriendData(res, key);
+            parsed.setup = friendsSetup();
+            // 关键：空数组说清楚是正常的
+            if (parsed.emptyIsNormal) {
+              parsed.note = '读到了 0 条好友记录。这在微信里很常见：好友都没玩过这个游戏，或者他们的 game.json 没声明开放数据域。不是功能故障。';
+            }
+            done(parsed);
+          },
+          fail: function (err) {
+            clear();
+            done({
+              ok: false, unavailable: true, reason: 'wechat-error', source: 'friend',
+              label: '微信好友排行（读取失败）',
+              error: String((err && (err.errMsg || err.message)) || err || 'unknown'),
+              setup: friendsSetup(),
+              note: '主域直接调 getFriendCloudStorage 在部分基础库上受限，官方推荐放进开放数据域。请按 setup 里的步骤配置 openDataContext。'
+            });
+          }
+        });
+      } catch (e) {
+        clear();
+        done({
+          ok: false, unavailable: true, reason: 'call-threw', source: 'friend',
+          label: '微信好友排行（调用异常）',
+          error: String(e && e.message || e),
+          setup: friendsSetup()
+        });
+      }
+    });
+  }
+
+  /* === 7. 全服排行 —— 明确不可用 =======================================
+   * 没有后端就没有全服。这里**故意**不实现任何伪造数据。
+   * 所有方法都返回 unavailable + 说明，UI 会显示「需后端接入」。
+   */
+
+  function serverUnavailable(reason) {
+    return {
+      ok: false,
+      unavailable: true,
+      source: 'server',
+      reason: reason || 'no-backend',
+      label: '全服排行（不可用 · 需要后端服务器）',
+      real: false,
+      backendRequired: true,
+      items: [],
+      total: 0,
+      note: '本项目是纯前端单文件游戏，没有服务器，因此无法汇总「所有玩家」的成绩。'
+          + '要让全服排行真跑，需要：① 一个后端服务（保存成绩、做鉴权与反作弊）；'
+          + '② 在 leaderboard.js 顶部设置 SERVER_BASE 并实现 submitToServer / fetchTopFromServer；'
+          + '③ 微信侧还要配置服务器域名白名单。在此之前本榜单不显示任何数据，'
+          + '也不会用本地数据冒充全服数据。'
+    };
+  }
+
+  /**
+   * 全服榜 top N。**恒为不可用**（除非你接上后端）。
+   * @returns {Promise<Object>} 一定是 { ok:false, unavailable:true, ... }
+   */
+  function fetchServerTop(n) {
+    if (!SERVER_BASE) return Promise.resolve(serverUnavailable('no-backend'));
+    return fetchTopFromServer(n);
+  }
+
+  /* --- 下面是给将来接后端留的空实现，注释里写清楚要改什么 --- */
+
+  /**
+   * 【待实现】把成绩 POST 到自己的服务器。
+   * 接后端时把这里改成：
+   *   return fetch(SERVER_BASE + '/api/score', {
+   *     method: 'POST',
+   *     headers: { 'Content-Type': 'application/json' },
+   *     body: JSON.stringify({ ...rec, sig: sign(rec) })
+   *   }).then(r => r.json());
+   * 微信小游戏里用 wx.request 代替 fetch（fetch 在小游戏里不存在）。
+   * 注意：一定要做服务端校验 —— 纯前端上报的成绩可以被随意伪造。
+   */
+  function submitToServer(rec) {
+    return {
+      ok: false, unavailable: true, reason: 'not-implemented',
+      note: 'SERVER_BASE 已配置，但 submitToServer() 还是空实现。请在这里写真实的 POST 请求（Web 用 fetch，微信小游戏用 wx.request）。'
+    };
+  }
+
+  /**
+   * 【待实现】从自己的服务器拉 top N。
+   * 接后端时把这里改成：
+   *   return fetch(SERVER_BASE + '/api/top?n=' + n).then(r => r.json())
+   *     .then(d => ({ ok:true, source:'server', items: rankBy(d.items,'build'), total:d.items.length }));
+   */
+  function fetchTopFromServer(n) {
+    return Promise.resolve({
+      ok: false, unavailable: true, source: 'server', reason: 'not-implemented',
+      label: '全服排行（后端接口未实现）',
+      real: false, backendRequired: true, items: [], total: 0,
+      note: 'SERVER_BASE 已配置，但 fetchTopFromServer() 还是空实现。请在这里写真实的 GET 请求。'
+    });
+  }
+
+  /* === 8. 微信分享（可选，真能用） ===================================== */
+
+  /** 给 wx.onShareAppMessage 用的 payload；非微信环境返回本地文案。 */
+  function sharePayload() {
+    var best = myBest('build');
+    var title = best
+      ? ('我在《漂流小镇》建成了 ' + (best.townCount || 0) + ' 座建筑，成就 ' + best.achievementProgress + '%，来比比？')
+      : '我在《漂流小镇》漂流，来比比谁的小镇建得快？';
+    var payload = { title: title };
+    if (typeof wx !== 'undefined' && wx && typeof wx.onShareAppMessage === 'function') {
+      // 主域 game.js 里可以挂 window.__wxSharePayload = Leaderboard.sharePayload
+      payload.hint = '已可挂到 wx.onShareAppMessage';
+    }
+    return payload;
+  }
+
+  /* === 9. Canvas 2D 绘制 ==============================================
+   * 与 game.js 的 drawPill / roundRect 同一套视觉语言：深色半透明卡片 +
+   * 极细白描边 + 中文文字。零 DOM，不用彩色 emoji。
+   * ------------------------------------------------------------------- */
+
+  var FONT_DEFAULT = 'system-ui, "PingFang SC", "Microsoft YaHei", sans-serif';
+
+  function drawRoundRect(ctx, x, y, w, h, r) {
+    var rr = Math.min(r, Math.max(0, w) / 2, Math.max(0, h) / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
+  function usable(ctx) {
+    return !!ctx && typeof ctx.fillText === 'function' && typeof ctx.measureText === 'function';
+  }
+
+  /** 按宽度截断文字，加省略号。Canvas 没有 text-overflow。 */
+  function ellipsize(ctx, text, maxW) {
+    var s = String(text === undefined || text === null ? '' : text);
+    if (ctx.measureText(s).width <= maxW) return s;
+    var cut = s;
+    while (cut.length > 1 && ctx.measureText(cut + '…').width > maxW) cut = cut.slice(0, -1);
+    return cut + '…';
+  }
+
+  var TABS = [
+    { id: 'local', name: '本地榜' },
+    { id: 'friend', name: '好友榜' },
+    { id: 'server', name: '全服榜' }
+  ];
+
+  /**
+   * 排行榜界面。返回热区矩形，供 pointerdown 命中判断。
+   *
+   * @param ctx  Canvas 2D 上下文（调用方负责 dpr 变换）
+   * @param w,h  逻辑宽高（CSS 像素）
+   * @param opts {
+   *   tab: 'local'|'friend'|'server',   // 当前页
+   *   data: { local, friend, server },  // 各页的数据（fetchTop / parseFriendData 的返回值）
+   *   font, fontFamily, scroll
+   * }
+   * @returns { x,y,w,h, tabs:[{id,x,y,w,h}], close:{...}, scroll, maxScroll } | null
+   */
+  function drawTabbed(ctx, w, h, opts) {
+    if (!usable(ctx)) return null;
+    var o = isObj(opts) ? opts : {};
+    var W = num(w, 0), H = num(h, 0);
+    if (W <= 0 || H <= 0) return null;
+    var font = Math.max(11, num(o.font, Math.max(14, Math.min(22, Math.min(W, H) * 0.024))));
+    var FONT = typeof o.fontFamily === 'string' && o.fontFamily ? o.fontFamily : FONT_DEFAULT;
+    var tab = (o.tab === 'friend' || o.tab === 'server') ? o.tab : 'local';
+    var data = isObj(o.data) ? o.data : {};
+
+    var pW = Math.min(W * 0.88, 660), pH = Math.min(H * 0.84, 760);
+    var pX = (W - pW) / 2, pY = (H - pH) / 2;
+
+    ctx.save();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    ctx.fillStyle = 'rgba(8,14,26,0.64)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(18,26,44,0.97)';
+    drawRoundRect(ctx, pX, pY, pW, pH, 16); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,214,140,0.45)';
+    ctx.lineWidth = 2;
+    drawRoundRect(ctx, pX, pY, pW, pH, 16); ctx.stroke();
+
+    // 标题
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffe2a8';
+    ctx.font = '800 ' + (font * 1.25) + 'px ' + FONT;
+    ctx.fillText('排行榜', W / 2, pY + font * 1.7);
+
+    // 关闭按钮
+    var cxW = font * 2.2, cxH = font * 1.6;
+    var cxX = pX + pW - cxW - font * 0.8, cxY = pY + font * 0.7;
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    drawRoundRect(ctx, cxX, cxY, cxW, cxH, cxH / 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = '700 ' + (font * 0.78) + 'px ' + FONT;
+    ctx.fillText('关闭', cxX + cxW / 2, cxY + cxH * 0.72);
+
+    // 三个 tab
+    var tabY = pY + font * 2.4;
+    var tabH = font * 1.9;
+    var tabGap = font * 0.6;
+    var tabW = Math.min((pW - font * 2.4 - tabGap * 2) / 3, font * 6);
+    var tabTotalW = tabW * TABS.length + tabGap * (TABS.length - 1);
+    var tabX0 = (W - tabTotalW) / 2;
+    var tabRects = [];
+    for (var ti = 0; ti < TABS.length; ti++) {
+      var t = TABS[ti];
+      var tx = tabX0 + ti * (tabW + tabGap);
+      var active = t.id === tab;
+      tabRects.push({ id: t.id, x: tx, y: tabY, w: tabW, h: tabH });
+      ctx.fillStyle = active ? 'rgba(255,214,140,0.9)' : 'rgba(255,255,255,0.08)';
+      drawRoundRect(ctx, tx, tabY, tabW, tabH, tabH / 2); ctx.fill();
+      if (active) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1;
+        drawRoundRect(ctx, tx, tabY, tabW, tabH, tabH / 2); ctx.stroke();
+      }
+      ctx.fillStyle = active ? '#1a2233' : 'rgba(223,242,255,0.85)';
+      ctx.font = '700 ' + (font * 0.82) + 'px ' + FONT;
+      ctx.textAlign = 'center';
+      ctx.fillText(t.name, tx + tabW / 2, tabY + tabH * 0.7);
+      // 好友 / 全服 tab 上加一个小锁标记（纯文字，不用 emoji）
+      if (t.id !== 'local') {
+        var lock = t.id === 'friend' ? '微' : '服';
+        ctx.font = '700 ' + (font * 0.55) + 'px ' + FONT;
+        ctx.fillStyle = active ? 'rgba(26,34,51,0.6)' : 'rgba(255,226,168,0.6)';
+        ctx.fillText(lock, tx + tabW - font * 0.55, tabY + font * 0.62);
+      }
+      ctx.textAlign = 'left';
+    }
+
+    // 表头 / 状态条
+    var statusY = tabY + tabH + font * 1.15;
+    var payload = data[tab];
+    var items = isObj(payload) && Object.prototype.toString.call(payload.items) === '[object Array]'
+      ? payload.items : [];
+    var listTop = statusY + font * 0.9;
+
+    ctx.textAlign = 'left';
+    ctx.font = '700 ' + (font * 0.74) + 'px ' + FONT;
+    if (isObj(payload) && payload.label) {
+      // 每一页都明确写出数据来源，尤其是「这是本地 / 这是真实好友 / 这不可用」
+      ctx.fillStyle = payload.unavailable ? '#ffb4a0'
+        : (tab === 'local' ? 'rgba(255,226,168,0.92)' : 'rgba(159,240,184,0.92)');
+      ctx.fillText(ellipsize(ctx, payload.label, pW - font * 2.4), pX + font * 1.2, statusY);
+      listTop = statusY + font * 0.9;
+    } else {
+      ctx.fillStyle = 'rgba(200,230,255,0.7)';
+      ctx.fillText('尚未加载', pX + font * 1.2, statusY);
+    }
+
+    // 不可用说明（全服榜）
+    var listBottom = pY + pH - font * 1.4;
+    if (isObj(payload) && payload.unavailable) {
+      var msg = payload.note || payload.reason || '不可用';
+      ctx.fillStyle = 'rgba(255,180,160,0.92)';
+      ctx.font = '600 ' + (font * 0.72) + 'px ' + FONT;
+      // 手动按宽度折行
+      var maxW = pW - font * 2.4;
+      var lines = [], line = '';
+      for (var ci = 0; ci < msg.length; ci++) {
+        var test = line + msg[ci];
+        if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = msg[ci]; }
+        else line = test;
+      }
+      if (line) lines.push(line);
+      for (var li = 0; li < lines.length && listTop + li * font * 1.35 < listBottom; li++) {
+        ctx.fillText(lines[li], pX + font * 1.2, listTop + li * font * 1.35 + font * 0.6);
+      }
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(255,226,168,0.9)';
+      ctx.font = '800 ' + (font * 0.95) + 'px ' + FONT;
+      ctx.fillText('需后端接入', W / 2, pY + pH - font * 1.4);
+      ctx.textAlign = 'left';
+      ctx.restore();
+      return { x: pX, y: pY, w: pW, h: pH, tab: tab, tabs: tabRects,
+               close: { x: cxX, y: cxY, w: cxW, h: cxH }, scroll: 0, maxScroll: 0, rowH: 0 };
+    }
+
+    // 空列表提示
+    if (!items.length) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(223,242,255,0.6)';
+      ctx.font = '600 ' + (font * 0.86) + 'px ' + FONT;
+      var emptyMsg = tab === 'friend'
+        ? '没有好友成绩（微信里很常见，不是故障）'
+        : (tab === 'server' ? '全服排行需要后端' : '还没有记录，玩一局吧');
+      ctx.fillText(emptyMsg, W / 2, listTop + font * 2);
+      if (tab === 'friend' && isObj(payload) && payload.setup && payload.setup.items) {
+        ctx.font = '600 ' + (font * 0.68) + 'px ' + FONT;
+        ctx.fillStyle = 'rgba(255,226,168,0.75)';
+        ctx.fillText('配置步骤见 Leaderboard.friendsSetup()', W / 2, listTop + font * 3.6);
+      }
+      ctx.textAlign = 'left';
+      ctx.restore();
+      return { x: pX, y: pY, w: pW, h: pH, tab: tab, tabs: tabRects,
+               close: { x: cxX, y: cxY, w: cxW, h: cxH },
+               scroll: 0, maxScroll: 0, rowH: 0 };
+    }
+
+    // 列表
+    var listX = pX + font * 1.2;
+    var listW = pW - font * 2.4;
+    var rowH = font * 2.3;
+    var visible = Math.max(1, Math.floor((listBottom - listTop) / rowH));
+    var maxScroll = Math.max(0, items.length - visible);
+    var sc = clamp(num(o.scroll, 0), 0, maxScroll);
+
+    // 列头
+    ctx.font = '700 ' + (font * 0.62) + 'px ' + FONT;
+    ctx.fillStyle = 'rgba(200,230,255,0.5)';
+    var colName = listX + font * 2.6;
+    ctx.fillText('名次', listX + font * 0.2, listTop + font * 0.2);
+    ctx.fillText('玩家', colName, listTop + font * 0.2);
+    ctx.textAlign = 'right';
+    ctx.fillText('建造', listX + listW - font * 6.4, listTop + font * 0.2);
+    ctx.fillText('成就', listX + listW - font * 3.2, listTop + font * 0.2);
+    ctx.fillText('综合分', listX + listW - font * 0.2, listTop + font * 0.2);
+    ctx.textAlign = 'left';
+    var bodyTop = listTop + font * 0.9;
+
+    var myId = myPlayerId();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(listX - 4, bodyTop - 4, listW + 8, listBottom - bodyTop + 8);
+    ctx.clip();
+    for (var i = 0; i < items.length && i < sc + visible + 1; i++) {
+      if (i < sc) continue;
+      var it = items[i];
+      var ry = bodyTop + (i - sc) * rowH;
+      if (ry + rowH > listBottom + rowH) break;
+      var isMe = it.playerId === myId;
+      ctx.fillStyle = isMe ? 'rgba(255,214,140,0.16)'
+                          : (i % 2 ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.07)');
+      drawRoundRect(ctx, listX, ry, listW, rowH - 4, 8); ctx.fill();
+      if (isMe) {
+        ctx.strokeStyle = 'rgba(255,214,140,0.5)'; ctx.lineWidth = 1;
+        drawRoundRect(ctx, listX, ry, listW, rowH - 4, 8); ctx.stroke();
+      }
+
+      // 名次（前三名给金色文字，不用 emoji）
+      ctx.textAlign = 'left';
+      ctx.font = '800 ' + (font * 0.86) + 'px ' + FONT;
+      ctx.fillStyle = it.rank === 1 ? '#ffd166' : (it.rank <= 3 ? '#ffe2a8' : 'rgba(223,242,255,0.8)');
+      ctx.fillText(String(it.rank), listX + font * 0.3, ry + rowH * 0.62);
+
+      // 昵称
+      ctx.fillStyle = isMe ? '#ffe2a8' : '#ffffff';
+      ctx.font = '700 ' + (font * 0.84) + 'px ' + FONT;
+      var nickW = listW - font * 8.2;
+      ctx.fillText(ellipsize(ctx, it.nickname + (isMe ? '（我）' : ''), nickW), colName, ry + rowH * 0.62);
+
+      // 三个数字
+      ctx.textAlign = 'right';
+      ctx.font = '700 ' + (font * 0.78) + 'px ' + FONT;
+      ctx.fillStyle = '#c8f0ff';
+      ctx.fillText(it.buildProgress + '%', listX + listW - font * 6.4, ry + rowH * 0.62);
+      ctx.fillStyle = '#c8f0b0';
+      ctx.fillText(it.achievementProgress + '%', listX + listW - font * 3.2, ry + rowH * 0.62);
+      ctx.fillStyle = '#ffe2a8';
+      ctx.fillText(String(it.score), listX + listW - font * 0.2, ry + rowH * 0.62);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,226,168,0.7)';
+    ctx.font = '700 ' + (font * 0.66) + 'px ' + FONT;
+    ctx.fillText(maxScroll > 0 ? ('上下滑动 · 共 ' + items.length + ' 条')
+                               : ('共 ' + items.length + ' 条'), W / 2, pY + pH - font * 0.5);
+    ctx.textAlign = 'left';
+    ctx.restore();
+
+    return { x: pX, y: pY, w: pW, h: pH, tab: tab, tabs: tabRects,
+             close: { x: cxX, y: cxY, w: cxW, h: cxH },
+             scroll: sc, maxScroll: maxScroll, rowH: rowH, visible: visible,
+             listTop: bodyTop, listX: listX, listW: listW };
+  }
+
+  /** 命中测试：点在哪。返回 'close' | 某 tab id | 'row:<index>' | 'outside' | 'inside' */
+  function hitTest(ui, x, y) {
+    if (!isObj(ui)) return 'outside';
+    var px = num(x, -1), py = num(y, -1);
+    function inside(r) {
+      return isObj(r) && px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+    }
+    if (inside(ui.close)) return 'close';
+    var tabs = Object.prototype.toString.call(ui.tabs) === '[object Array]' ? ui.tabs : [];
+    for (var i = 0; i < tabs.length; i++) {
+      if (inside(tabs[i])) return tabs[i].id;
+    }
+    if (px >= ui.x && px <= ui.x + ui.w && py >= ui.y && py <= ui.y + ui.h) {
+      if (num(ui.rowH, 0) > 0 && py >= num(ui.listTop, 0)) {
+        var row = Math.floor((py - ui.listTop) / ui.rowH) + num(ui.scroll, 0);
+        return 'row:' + row;
+      }
+      return 'inside';
+    }
+    return 'outside';
+  }
+
+  /* === 10. 汇总视图（给 HUD 上的「我的成绩」小卡片） =================== */
+
+  /**
+   * 一条给我的成绩记录，从 gameState 折算。这是 submit() 的入参构造器。
+   * @param state window.__gameState() 的返回值
+   * @param ach   window.Achievements（可选；给了就用它算成就进度）
+   */
+  function recordFromState(state, ach) {
+    var s = isObj(state) ? state : {};
+    var buildPct = 0, achPct = 0, achCount = 0, townCount = 0;
+    // 建造进度：6 座城镇建筑 + 6 件生存装备 = 12 个里程碑
+    var town = num(s.buildings, 0);
+    if (Object.prototype.toString.call(s.buildings) === '[object Array]') town = s.buildings.length;
+    var surv = Object.prototype.toString.call(s.survival) === '[object Array]' ? s.survival.length : 0;
+    townCount = town;
+    var milestones = 12;
+    buildPct = clamp(Math.round((town + surv) / milestones * 100), 0, 100);
+    if (ach && typeof ach.snapshot === 'function') {
+      var snap = null;
+      try { snap = ach.snapshot(); } catch (e) { snap = null; }
+      if (isObj(snap)) {
+        achPct = clamp(num(snap.overall, 0), 0, 100);
+        achCount = num(snap.unlocked, 0);
+      }
+    }
+    var score = num(s.score, 0);
+    return normalizeRecord({
+      playerId: myPlayerId(),
+      nickname: '我',
+      score: score,
+      buildProgress: buildPct,
+      achievementProgress: achPct,
+      achievementCount: achCount,
+      townCount: townCount,
+      at: Date.now()
+    }, 'local');
+  }
+
+  /* === 11. 自检 ======================================================= */
+
+  function selfTest() {
+    var problems = [];
+
+    /* 排序确定性 + 并列/跳号规则。样例里 a 与 b 的三个可见指标完全相同
+     * （建造 50 / 成就 50 / 分数 100），只有 at 与 id 不同，所以它们并列。 */
+    var sample = [
+      { playerId: 'a', buildProgress: 50, achievementProgress: 50, score: 100, at: 1 },
+      { playerId: 'b', buildProgress: 50, achievementProgress: 50, score: 100, at: 1 },  // 与 a 完全并列
+      { playerId: 'c', buildProgress: 50, achievementProgress: 50, score: 100, at: 2 },  // 也并列，只是更晚
+      { playerId: 'd', buildProgress: 100, achievementProgress: 10, score: 10, at: 5 }   // 建造最高
+    ];
+    var r1 = rank(sample), r2 = rank(sample);
+    if (JSON.stringify(r1) !== JSON.stringify(r2)) problems.push('rank() 两次结果不一致（非确定性排序）');
+    if (r1[0].playerId !== 'd') problems.push('建造进度最高的没排第一');
+    // d 第 1，其余三条三个指标相同 → 并列第 2，所以名次是 1,2,2,2
+    if (r1[1].rank !== 2 || r1[2].rank !== 2 || r1[3].rank !== 2) {
+      problems.push('并列名次未生效（期望 d=1，其余三条都是 2）');
+    }
+    // 并列者内部：at 小的排前面（先达成的靠前）
+    if (r1[1].playerId !== 'a' && r1[1].playerId !== 'b') problems.push('并列组内的顺序不符合 at 升序规则');
+
+    // 跳号：一个完整并列组后面，名次要跳过整组
+    var jump = rank([
+      { playerId: 'x', buildProgress: 80, achievementProgress: 60, score: 500, at: 100 },
+      { playerId: 'y', buildProgress: 80, achievementProgress: 60, score: 500, at: 100 },
+      { playerId: 'z', buildProgress: 40, achievementProgress: 30, score: 200, at: 100 }
+    ]);
+    if (jump[0].rank !== 1 || jump[1].rank !== 1) problems.push('完全并列的两条没有共享名次 1');
+    if (jump[2].rank !== 3) problems.push('并列后名次未跳号（第三名应为 3 而非 2）');
+
+    // 名次单调
+    for (var i = 1; i < jump.length; i++) {
+      if (jump[i].rank < jump[i - 1].rank) problems.push('名次非单调：位置 ' + i);
+    }
+
+    // 环境探测不抛
+    try { wxCapability(); } catch (e) { problems.push('wxCapability() 抛异常：' + e.message); }
+    try { friendsSetup(); } catch (e) { problems.push('friendsSetup() 抛异常：' + e.message); }
+
+    // 畸形记录被规整到合法范围
+    var bad = rank([null, undefined, {}, { score: 'abc', buildProgress: NaN, at: -5 }]);
+    for (var j = 0; j < bad.length; j++) {
+      if (typeof bad[j].buildProgress !== 'number' || bad[j].buildProgress < 0 || bad[j].buildProgress > 100) {
+        problems.push('畸形记录规整后 buildProgress 越界');
+      }
+    }
+
+    // 解析好友数据不会编造条目
+    var parsed = parseFriendData({ data: [{ openid: 'x', KVDataList: [{ key: 'other', value: '{}' }] }] });
+    if (parsed.items.length !== 0) problems.push('parseFriendData 把没有我们 key 的好友也算进去了');
+    if (parsed.skipped !== 1) problems.push('parseFriendData 的 skipped 计数不对');
+
+    // 全服榜必须是「明确不可用」，不能装作有数据
+    var srv = serverUnavailable('no-backend');
+    if (srv.ok !== false || srv.unavailable !== true) problems.push('全服榜没有如实报告不可用');
+    if (srv.items.length !== 0) problems.push('全服榜返回了条目（不允许伪造数据）');
+
+    return { passed: problems.length === 0, problems: problems };
+  }
+
+  /* === 12. 导出 ======================================================= */
+
+  return {
+    VERSION: MODULE_VERSION,
+    STORE_KEY: STORE_KEY,
+    SERVER_BASE: SERVER_BASE,
+
+    /* 数据上报 / 读取 —— 任务书要求的三个接口 */
+    submit: submit,
+    fetchTop: fetchTop,
+    fetchFriends: fetchFriends,
+    fetchServerTop: fetchServerTop,
+
+    /* 本地榜辅助 */
+    myPlayerId: myPlayerId,
+    myBest: myBest,
+    recordFromState: recordFromState,
+
+    /* 微信好友榜辅助（纯函数，可 node 测） */
+    parseFriendData: parseFriendData,
+    wxCapability: wxCapability,
+    friendsSetup: friendsSetup,
+    submitToWxCloud: submitToWxCloud,
+    sharePayload: sharePayload,
+
+    /* 排序（纯函数，可 node 测） */
+    rank: rank,
+    rankBy: rankBy,
+    compareRecords: compareRecords,
+    normalizeRecord: normalizeRecord,
+
+    /* UI */
+    drawTabbed: drawTabbed,
+    draw: drawTabbed,
+    hitTest: hitTest,
+    TABS: TABS,
+
+    selfTest: selfTest,
+
+    /* 测试用 */
+    _serverUnavailable: serverUnavailable,
+    _resetLocal: function () {
+      _records = [];
+      _myPlayerId = '';
+      saveLocal();
+    },
+    _setRecords: function (list) {
+      _records = [];
+      if (Object.prototype.toString.call(list) === '[object Array]') {
+        for (var i = 0; i < list.length; i++) _records.push(normalizeRecord(list[i], 'local'));
+      }
+      saveLocal();
+    }
+  };
+});
+
+})();
 /* === INLINED-MODULES:END === */
 
 
@@ -3714,8 +6225,8 @@ var THREE = __wxRoot.THREE || window.THREE;
   var sun = new THREE.DirectionalLight('#ffe9c0', 2.2);
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
-  sun.shadow.camera.left = sun.shadow.camera.bottom = -22;
-  sun.shadow.camera.right = sun.shadow.camera.top = 22;
+  sun.shadow.camera.left = sun.shadow.camera.bottom = -34;
+  sun.shadow.camera.right = sun.shadow.camera.top = 34;
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 80;
   sun.shadow.bias = -0.0008;
@@ -3801,56 +6312,215 @@ var THREE = __wxRoot.THREE || window.THREE;
     return out;
   }
 
-  /* --- The raft: an elliptical hull of lashed planks, a mast, and a tiny crew. --- */
-  var HERO_BOXES = (function buildRaft() {
-    var B = boxList(), TONE = ['#9c6d3e', '#a97845', '#8f6135', '#b4834d'];
-    var LEN = 4.0, WID = 3.0, strip = 0, z, k, w;
-    for (z = -LEN; z <= LEN + 1e-6; z += 0.32) {              // hull strips, elliptical
-      k = 1 - Math.pow(z / (LEN + 0.55), 2);
-      if (k <= 0.05) continue;
-      w = WID * Math.sqrt(k);
-      B.add(0, 0.34, z, w * 2, 0.62, 0.3, TONE[strip++ % 4]); // side band
-      B.add(0, -0.14, z, w * 1.78, 0.4, 0.3, '#664423');       // belly
-      B.add(-w + 0.16, 0.74, z, 0.32, 0.26, 0.3, '#cba76d');   // gunwales
-      B.add(w - 0.16, 0.74, z, 0.32, 0.26, 0.3, '#cba76d');
+  /* --- The ship: a plain-liveried ocean liner that carries the whole town on
+   * its decks. It replaces the old 8-unit plank raft — the town used to stand
+   * on a raft about a third of this size.
+   *
+   * MODEL SPACE — every number below is an unscaled model unit. The finished
+   * body is then scaled once by heroSize / MODEL_HEIGHT.hero, so the ship and
+   * everything standing on it grow and shrink together:
+   *   +z is the bow (the direction the hull sails; `facing` = atan2(vx, vz)),
+   *   y = 0 is the waterline, which is also the height the holder floats at.
+   *
+   *        y 6.21   |          radar mast, masthead light
+   *        y 5.49  ##  ##      twin funnels, on the boat deck
+   *        y 4.82  [======]    voyage bridge forward, with its wings
+   *        y 3.62  =========   upper deck A: 6 town slots, railed all round
+   *        y 1.80  =========   main deck:    6 town slots aft,
+   *                            6 survival pieces on the forecastle
+   *        y 0.00  ~~~~~~~~~   waterline: one red band + navy boot stripe
+   *        y-1.30  \\_____//   keel, below the waves
+   *
+   * The livery is deliberately plain — white topsides, grey decks, one red
+   * band at the waterline, dark grey funnels — so the only colour on this
+   * ship is the town the player piles on top of it. --- */
+  var SHIP = {
+    halfLen: 13.0,    // bow at +13, transom at -13  → 26 long
+    halfBeam: 4.2,    // widest half-beam amidships → 8.4 wide
+    mainY: 1.80,      // main deck surface
+    upperY: 3.62,     // upper deck A surface (the hotel block's roof)
+    keelY: -1.30,
+    topY: 6.21
+  };
+  /** Full height of the finished model: one scale factor fits it to heroSize. */
+  var SHIP_HEIGHT = SHIP.topY - SHIP.keelY;
+
+  /** A waist-high railing along one straight run of deck edge (no diagonals —
+   *  the voxel model only carries axis-aligned boxes). */
+  function railing(B, xa, za, xb, zb, y, COL) {
+    COL = COL || '#dfe5ea';
+    var dx = xb - xa, dz = zb - za, len = Math.hypot(dx, dz);
+    var n = Math.max(1, Math.round(len / 1.15)), i, k;
+    for (i = 0; i <= n; i++) {
+      k = i / n;
+      B.add(xa + dx * k, y + 0.28, za + dz * k, 0.085, 0.56, 0.085, COL);
     }
-    strip = 0;
-    for (z = -LEN + 0.22; z <= LEN - 0.18; z += 0.4) {         // deck planks
-      k = 1 - Math.pow(z / (LEN + 0.55), 2);
-      w = WID * Math.sqrt(Math.max(0.04, k)) - 0.42;
-      B.add(0, 0.71, z, w * 2, 0.12, 0.36, strip++ % 2 ? '#c9a069' : '#bb9159');
+    if (Math.abs(dz) < 1e-6) {
+      B.add((xa + xb) / 2, y + 0.56, za, Math.abs(dx) + 0.09, 0.075, 0.115, COL);
+      B.add((xa + xb) / 2, y + 0.31, za, Math.abs(dx), 0.05, 0.06, COL);
+    } else {
+      B.add(xa, y + 0.56, (za + zb) / 2, 0.115, 0.075, Math.abs(dz) + 0.09, COL);
+      B.add(xa, y + 0.31, (za + zb) / 2, 0.06, 0.05, Math.abs(dz), COL);
     }
-    [-2.75, -0.5, 1.75].forEach(function (rz) {                // rope lashings
-      var kk = 1 - Math.pow(rz / (LEN + 0.55), 2), ww = WID * Math.sqrt(Math.max(0.05, kk));
-      B.add(0, 0.79, rz, ww * 2 - 0.55, 0.07, 0.11, '#7a5a34');
-    });
-    B.add(0, 1.85, -2.95, 0.15, 2.2, 0.15, '#7d5530');         // mast
-    B.add(0, 1.35, -2.95, 0.5, 0.22, 0.5, '#5e4024');          // mast step
-    B.add(0.46, 2.66, -2.95, 0.92, 0.46, 0.1, '#ff8a4c');      // flag
-    B.add(0.46, 2.66, -2.95, 0.92, 0.1, 0.11, '#e2574c');
-    B.add(2.25, 1.32, 2.42, 0.1, 1.2, 0.1, '#6b4a2c');         // lantern post
-    B.add(2.25, 1.98, 2.42, 0.34, 0.42, 0.34, '#ffd98a', true);
-    B.add(2.25, 2.24, 2.42, 0.42, 0.1, 0.42, '#5c4028');
-    B.add(-2.05, 1.02, 2.25, 0.6, 0.72, 0.6, '#a97845');       // barrel
-    B.add(-2.05, 1.4, 2.25, 0.66, 0.1, 0.66, '#7d5530');
-    B.add(-2.1, 0.98, 1.3, 0.74, 0.56, 0.74, '#c9a069');       // crate
-    B.add(-2.1, 1.0, 1.3, 0.8, 0.13, 0.8, '#8f6135');
-    B.add(1.95, 0.98, 1.35, 0.42, 0.44, 0.42, '#8fa3b8');      // bucket
-    B.add(0.85, 1.02, 2.6, 0.08, 1.0, 0.08, '#6b4a2c');        // fishing rod
-    B.add(0.85, 1.55, 2.6, 0.06, 0.5, 0.06, '#8a6b48');
-    B.add(0.85, 1.3, 2.85, 0.05, 0.6, 0.05, '#8a6b48');
-    // The little rafter who runs the town.
-    var fx = 0, fy = 0.78, fz = 2.2;
-    B.add(fx - 0.13, fy + 0.2, fz, 0.2, 0.42, 0.24, '#2f4a6b');
-    B.add(fx + 0.13, fy + 0.2, fz, 0.2, 0.42, 0.24, '#2f4a6b');
-    B.add(fx, fy + 0.7, fz, 0.62, 0.6, 0.38, '#e2574c');
-    B.add(fx - 0.4, fy + 0.68, fz, 0.17, 0.48, 0.21, '#f2c99a');
-    B.add(fx + 0.4, fy + 0.68, fz, 0.17, 0.48, 0.21, '#f2c99a');
-    B.add(fx, fy + 1.2, fz, 0.52, 0.5, 0.48, '#f2c99a');
-    B.add(fx - 0.12, fy + 1.26, fz + 0.23, 0.1, 0.1, 0.07, '#2b2b2b');
-    B.add(fx + 0.12, fy + 1.26, fz + 0.23, 0.1, 0.1, 0.07, '#2b2b2b');
-    B.add(fx, fy + 1.5, fz, 0.94, 0.1, 0.9, '#e8c87a');        // straw hat
-    B.add(fx, fy + 1.62, fz, 0.54, 0.22, 0.54, '#d9b264');
+  }
+
+  var HERO_BOXES = (function buildCruiseShip() {
+    var B = boxList(), i, j, z, w, y, side, strip = 0, t, s;
+    var LEN = SHIP.halfLen, HALF = SHIP.halfBeam, SLICE = 0.45, DEPTH = SLICE + 0.03;
+    // "素" is a colour decision: white, greys and deck wood — plus one red band.
+    var C = {
+      keel: '#3a414a', belly: '#48505a', hull: '#4e5761',
+      red: '#a8443c', navy: '#2f4a63',
+      topside: '#eef1f4', strake: '#e0e6eb', trim: '#d2d9e0', rail: '#dfe5ea',
+      deck: '#c6a06a', deckAlt: '#b89159',
+      deckGrey: '#b8c0c8', deckGrey2: '#a7b0b9',
+      white: '#f4f7f9', glass: '#3f5c73', lit: '#ffd98a',
+      funnel: '#4a525c', funnelBand: '#9aa3ac', grey: '#79828c', dark: '#2f3640'
+    };
+    /** Half-beam at z: a parallel body amidships, a long elliptical taper to
+     *  the stem forward, and only a gentle round-in aft — a wide, square
+     *  transom is what makes a liner read as a liner instead of a canoe. */
+    function beam(zz) {
+      if (zz > 8.6) {                                   // fine entry to the stem
+        t = (zz - 8.6) / (LEN - 8.6);
+        return HALF * Math.sqrt(Math.max(0, 1 - t * t * 0.985));
+      }
+      if (zz < -(LEN - 1.6)) {                          // slight round to the transom
+        s = (zz + LEN - 1.6) / 1.6;                     // 0 at the start, 1 at the stern
+        return HALF * (1 - 0.12 * s * s);
+      }
+      return HALF;
+    }
+
+    /* --- Hull: sliced along its length so the bow shows a real taper rather
+     * than a cut-off box. Each slice stacks keel → bilge → dark hull → red
+     * waterline band → navy boot stripe → white topsides → sheer strake, and
+     * carries its own piece of deck planking, bulwark and porthole. --- */
+    for (z = -LEN; z <= LEN + 1e-6; z += SLICE) {
+      w = beam(z);
+      if (w < 0.16) continue;
+      B.add(0, -1.12, z, w * 1.30, 0.36, DEPTH, C.keel);            // keel
+      B.add(0, -0.72, z, w * 1.64, 0.44, DEPTH, C.belly);           // bilge
+      B.add(0, -0.28, z, w * 1.92, 0.44, DEPTH, C.hull);            // dark topsides
+      B.add(0, 0.06, z, w * 2.00, 0.24, DEPTH, C.red);              // the waterline band
+      B.add(0, 0.235, z, w * 2.00, 0.11, DEPTH, C.navy);            // boot stripe
+      B.add(0, 0.98, z, w * 2.00, 1.38, DEPTH, C.topside);          // white topsides
+      B.add(0, 1.72, z, w * 2.02, 0.18, DEPTH, C.strake);           // sheer strake
+      B.add(0, 1.745, z, w * 1.94, 0.11, DEPTH, (strip % 2) ? C.deck : C.deckAlt);
+      for (side = -1; side <= 1; side += 2) {
+        B.add(side * (w - 0.09), 2.00, z, 0.18, 0.40, DEPTH, C.strake);   // bulwark
+        B.add(side * (w - 0.09), 2.235, z, 0.24, 0.07, DEPTH, C.rail);    // cap rail
+        if ((strip % 2) === 0) B.add(side * (w - 0.03), 0.98, z, 0.11, 0.22, 0.30, C.glass);
+      }
+      strip++;
+    }
+
+    /* --- Plank seams fore and aft over the two open decks. --- */
+    for (i = -4; i <= 4; i++) {
+      B.add(i * 0.92, 1.812, -8.0, 0.05, 0.02, 9.0, C.deckAlt);      // after deck
+      B.add(i * 0.74, 1.812, 10.4, 0.05, 0.02, 4.6, C.deckAlt);      // forecastle
+    }
+
+    /* --- The hotel block: two storeys of plain superstructure amidships. Its
+     * roof is upper deck A, where the second row of town buildings stands; its
+     * forward wall carries the bridge and its after end carries the funnels. --- */
+    var T1Z0 = -3.0, T1Z1 = 8.0, T1LEN = T1Z1 - T1Z0, T1Z = (T1Z0 + T1Z1) / 2;
+    var HW = 3.60;
+    B.add(0, 1.94, T1Z, HW * 2, 0.28, T1LEN, C.trim);                            // plinth
+    for (i = 0; i < 5; i++) {                                                     // wall courses
+      B.add(0, 2.22 + i * 0.28, T1Z, HW * 2, 0.28, T1LEN, i % 2 ? C.white : C.topside);
+    }
+    for (side = -1; side <= 1; side += 2) {                                       // window rows
+      for (j = 0; j < 2; j++) {
+        y = 2.50 + j * 0.56;
+        B.add(side * HW, y, T1Z, 0.09, 0.30, T1LEN - 0.30, C.glass);
+        for (i = 0; i < 13; i++) B.add(side * HW, y, T1Z0 + 0.36 + i * 0.76, 0.13, 0.34, 0.11, C.white);
+      }
+    }
+    for (i = -4; i <= 4; i++) {                                                   // end faces
+      B.add(i * 0.70, 2.50, T1Z1, 0.11, 0.34, 0.13, C.white);
+      B.add(i * 0.70, 3.06, T1Z1, 0.11, 0.34, 0.13, C.white);
+      B.add(i * 0.70, 2.50, T1Z0, 0.11, 0.34, 0.13, C.white);
+      B.add(i * 0.70, 3.06, T1Z0, 0.11, 0.34, 0.13, C.white);
+    }
+    B.add(0, 2.80, T1Z1, HW * 1.84, 0.66, 0.09, C.glass);         // saloon windows, forward
+    B.add(0, 2.80, T1Z0, HW * 1.84, 0.66, 0.09, C.glass);
+
+    /* --- Upper deck A: the block's roof, plated grey and railed all round.
+     * Railed aft and both sides; forward the bridge closes it off. --- */
+    B.add(0, 3.55, T1Z, HW * 2 + 0.10, 0.14, T1LEN + 0.10, C.deckGrey);
+    for (i = -4; i <= 4; i++) {
+      B.add(i * 0.85, 3.625, T1Z, 0.05, 0.02, T1LEN - 0.10, C.deckGrey2);
+    }
+    railing(B, -HW - 0.05, T1Z0, -HW - 0.05, T1Z1, SHIP.upperY);
+    railing(B, HW + 0.05, T1Z0, HW + 0.05, T1Z1, SHIP.upperY);
+    railing(B, -HW - 0.05, T1Z0, HW + 0.05, T1Z0, SHIP.upperY);
+
+    /* --- Twin funnels on the boat deck: dark grey, one pale band, and a flat
+     * exhaust cap. Set wide of the centreline so they stay clear of the after
+     * row of town buildings. --- */
+    for (side = -1; side <= 1; side += 2) {
+      var fxx = side * 1.72;
+      B.add(fxx, 3.72, -1.90, 1.16, 0.20, 1.08, C.funnelBand);                   // base
+      for (i = 0; i < 4; i++) {                                                   // body
+        B.add(fxx, 3.96 + i * 0.40, -1.90, 0.98 - i * 0.03, 0.40, 0.92 - i * 0.03, C.funnel);
+      }
+      B.add(fxx, 4.90, -1.90, 0.94, 0.13, 0.88, C.funnelBand);                    // the pale band
+      B.add(fxx, 5.42, -1.90, 0.92, 0.14, 0.86, C.dark);                          // cap
+    }
+    /* A capstan on the centreline between the funnels. */
+    B.add(0, 3.82, -1.90, 1.06, 0.26, 0.54, C.grey);
+    B.add(0, 4.00, -1.90, 0.34, 0.15, 0.22, C.dark);
+
+    /* --- The voyage bridge, forward on the boat deck: a glazed wheelhouse with
+     * wings the watch leans out of, and the radar mast above. --- */
+    var BRZ = 7.20, BRW = 4.80, BRD = 1.50;
+    B.add(0, 3.84, BRZ, BRW, 0.44, BRD, C.white);                                // house
+    B.add(0, 4.34, BRZ, BRW - 0.04, 0.58, BRD + 0.02, C.glass);                  // glazing
+    for (i = -2; i <= 2; i++) {
+      B.add(i * 0.90, 4.34, BRZ + BRD / 2, 0.10, 0.62, 0.06, C.white);           // mullions
+      B.add(i * 0.90, 4.34, BRZ - BRD / 2, 0.10, 0.62, 0.06, C.white);
+    }
+    for (side = -1; side <= 1; side += 2) {
+      for (i = -1; i <= 1; i++) B.add(side * (BRW / 2), 4.34, BRZ + i * 0.44, 0.06, 0.62, 0.10, C.white);
+    }
+    B.add(0, 4.72, BRZ, BRW + 0.24, 0.20, BRD + 0.28, C.trim);                    // roof
+    for (side = -1; side <= 1; side += 2) {                                       // bridge wings
+      B.add(side * (BRW / 2 + 0.34), 4.72, BRZ, 0.68, 0.18, 1.06, C.trim);
+      B.add(side * (BRW / 2 + 0.66), 4.98, BRZ, 0.06, 0.34, 1.06, C.rail);
+    }
+    B.add(0, 5.06, BRZ, 0.14, 0.70, 0.14, C.grey);                                // radar mast
+    B.add(0, 5.26, BRZ, 1.44, 0.08, 0.08, C.grey);                                // yardarm
+    B.add(0.48, 5.36, BRZ, 0.30, 0.22, 0.30, C.trim);                             // radar scanner
+    B.add(0, 5.56, BRZ, 0.10, 0.44, 0.10, C.grey);
+    B.add(0, 5.86, BRZ, 0.12, 0.36, 0.12, C.grey);
+    B.add(0, 6.16, BRZ, 0.17, 0.09, 0.17, C.lit, true);                           // masthead light
+
+    /* --- Lifeboats chocked along the narrow side decks, under the hotel
+     * block's overhang. --- */
+    for (side = -1; side <= 1; side += 2) {
+      for (j = 0; j < 2; j++) {
+        var bz = 1.40 + j * 2.90, bx = side * 3.88;
+        B.add(bx, 2.10, bz, 0.44, 0.32, 1.60, C.white);                            // hull
+        B.add(bx, 2.34, bz, 0.36, 0.15, 1.26, C.trim);                             // canopy
+        B.add(bx, 1.92, bz, 0.50, 0.10, 1.32, C.grey);                             // chocks
+        B.add(bx, 1.86, bz - 0.58, 0.06, 0.24, 0.06, C.grey);
+        B.add(bx, 1.86, bz + 0.58, 0.06, 0.24, 0.06, C.grey);
+      }
+    }
+
+    /* --- Aft deck: the ensign staff on the transom. Everything else on the
+     * after deck is left clear — the six town buildings stand there at runtime
+     * (see BUILDING_POS). --- */
+    B.add(0, 2.42, -12.86, 0.09, 1.24, 0.09, C.grey);              // ensign staff
+    B.add(0, 2.78, -12.46, 0.70, 0.38, 0.05, C.red);               // plain red ensign
+
+    /* --- Forecastle: the anchor pocket and the jackstaff right at the stem.
+     * The rest of this deck carries the six survival pieces at runtime (see
+     * SURVIVAL_STEPS) — the camp is on the bow. --- */
+    B.add(0, 1.94, 12.66, 0.58, 0.26, 0.36, C.grey);               // hawse
+    B.add(0, 2.10, 12.66, 0.22, 0.14, 0.14, C.dark);
+    B.add(0, 2.06, 12.92, 0.07, 0.62, 0.07, C.grey);               // jackstaff
     return B;
   })();
 
@@ -4265,12 +6935,34 @@ var THREE = __wxRoot.THREE || window.THREE;
       { name: '风车', cost: { wood: 5, plastic: 3, metal: 4 }, pop: 1, perk: 'speed', desc: '船速 +' }
     ];
   })();
-  /** Positions are in the raft body's own space, before it is scaled down as a whole.
-   *  Spread across the deck so a finished town reads as a skyline, leaving the
-   *  mast (z ≈ -2.95) and the crew (z ≈ 2.2) clear. */
+  /** Where the six town buildings stand: the ship body's own space, before it
+   *  is scaled as a whole (so these follow the ship up and down in size).
+   *
+   *  Twelve berths on two decks, handed out in the order they are ordered here,
+   *  so a half-finished town already reads across both levels:
+   *    main deck  (y = SHIP.mainY): the after deck, 3 rows × 2 columns, with a
+   *      clear centreline walkway between the columns (x = ±2.70);
+   *    upper deck (y = SHIP.upperY): the hotel block's roof, 3 rows × 2 columns
+   *      either side of its own centreline walkway (x = ±2.20).
+   *
+   *  Buildings are drawn at BUILDING_SCALE = 1.45, so the deepest one (小屋,
+   *  1.4 deep) is ~2.0 model units and the widest ~2.5: rows are 2.5 apart and
+   *  columns 4.4-5.4 apart, which leaves a walking gap everywhere. Every berth
+   *  sits inside the deck edge, clear of the funnel casing (z ≈ -2.4 … -1.4),
+   *  the bridge (z ≈ 6.4 … 8.0) and the lifeboats. */
   var BUILDING_POS = [
-    [-1.75, 0.8, -2.35], [1.85, 0.8, -2.3], [-2.1, 0.8, -0.75],
-    [2.15, 0.8, -0.7], [-1.65, 0.8, 0.95], [1.75, 0.8, 1.0]
+    [-2.70, SHIP.mainY, -4.80],     // main deck, row 1
+    [-2.20, SHIP.upperY, 0.10],     // upper deck, row 1
+    [2.70, SHIP.mainY, -4.80],
+    [2.20, SHIP.upperY, 0.10],
+    [-2.70, SHIP.mainY, -7.40],     // main deck, row 2
+    [-2.20, SHIP.upperY, 2.55],     // upper deck, row 2
+    [2.70, SHIP.mainY, -7.40],
+    [2.20, SHIP.upperY, 2.55],
+    [-2.70, SHIP.mainY, -10.00],    // main deck, row 3
+    [-2.20, SHIP.upperY, 5.00],     // upper deck, row 3
+    [2.70, SHIP.mainY, -10.00],
+    [2.20, SHIP.upperY, 5.00]
   ];
   /* --- Survival gear (design doc stage 0–1). Small models that sit on the deck:
    *  the workbench you build everything at, the shelter that makes the raft a
@@ -4363,25 +7055,35 @@ var THREE = __wxRoot.THREE || window.THREE;
 
   /** The survival build order. Each step lists what it needs built first, so the
    *  unlock chain of the design doc lives in one readable table:
-   *  workbench → shelter → { rain catcher, fish basket, scoop net → purifier }. */
+   *  workbench → shelter → { rain catcher, fish basket, scoop net → purifier }.
+   *
+   *  `at` is the ship's own model space, exactly like BUILDING_POS: the whole
+   *  forward deck (z ≈ +8 … +13) is left clear of hull fittings for this camp,
+   *  so the survival layer reads as a distinct "working bow" and the town grows
+   *  behind it on the after deck. y = SHIP.mainY puts every piece on the deck. */
   var SURVIVAL_STEPS = [
-    { id: 'workbench', name: '工作台', boxes: WORKBENCH_BOXES, at: [0, 0.72, 2.05], scale: 1.0, needs: [],
+    { id: 'workbench', name: '工作台', boxes: WORKBENCH_BOXES, at: [2.95, SHIP.mainY, 8.30], scale: 1.0, needs: [],
       short: '建造', desc: '解锁建造 · 木材加工', tip: '造出工作台，才能动手搭别的东西' },
-    { id: 'shelter', name: '庇护所', boxes: SHELTER_BOXES, at: [-1.5, 0.72, 1.1], scale: 1.05, needs: ['workbench'],
+    { id: 'shelter', name: '庇护所', boxes: SHELTER_BOXES, at: [-2.95, SHIP.mainY, 8.55], scale: 1.05, needs: ['workbench'],
       short: '床位+2', desc: '床位+2 · 存档点 · 生存装备图纸', tip: '有了遮风挡雨的家，才顾得上喝水吃饭' },
-    { id: 'rainCatcher', name: '集雨器', boxes: RAINCATCHER_BOXES, at: [1.85, 0.72, 0.55], scale: 0.95, needs: ['shelter'],
+    { id: 'rainCatcher', name: '集雨器', boxes: RAINCATCHER_BOXES, at: [-2.75, SHIP.mainY, 10.30], scale: 0.95, needs: ['shelter'],
       short: '自动蓄水', desc: '每 ' + R.survival.rainEvery + ' 秒 +' + R.survival.rainAmount + ' 水', tip: '' },
-    { id: 'fishBasket', name: '鱼篓', boxes: FISHBASKET_BOXES, at: [1.15, 0.72, -0.5], scale: 0.95, needs: ['shelter'],
+    { id: 'fishBasket', name: '鱼篓', boxes: FISHBASKET_BOXES, at: [-0.55, SHIP.mainY, 11.85], scale: 0.95, needs: ['shelter'],
       short: '自动加餐', desc: '每 ' + R.survival.fishEvery + ' 秒 +' + R.survival.fishAmount + ' 食', tip: '' },
-    { id: 'scoopNet', name: '捞网', boxes: SCOOPNET_BOXES, at: [-1.9, 0.72, -1.4], scale: 0.95, needs: ['shelter'],
+    { id: 'scoopNet', name: '捞网', boxes: SCOOPNET_BOXES, at: [2.55, SHIP.mainY, 10.35], scale: 0.95, needs: ['shelter'],
       short: '打捞范围+50%', desc: '打捞范围 +50%', tip: '' },
-    { id: 'purifier', name: '净水器', boxes: PURIFIER_BOXES, at: [0.2, 0.72, 1.75], scale: 0.95,
+    { id: 'purifier', name: '净水器', boxes: PURIFIER_BOXES, at: [0.10, SHIP.mainY, 9.95], scale: 0.95,
       needs: ['rainCatcher', 'workbench'],
       short: '稳定供水', desc: '每 ' + R.survival.purifyEvery + ' 秒 +' + R.survival.purifyAmount + ' 水', tip: '' }
   ];
 
-  var MODEL_HEIGHT = { hero: 4.7, enemy: 1.1, pickup: 1.9 };
-  /** The raft body is scaled to R.heroSize / MODEL_HEIGHT.hero; buildings counter-scale to stay legible. */
+  /** hero is the ship: its real model height is SHIP_HEIGHT, so
+   *  heroSize / MODEL_HEIGHT.hero gives the scale the whole vessel is drawn at.
+   *  (The two small models keep their hand-tuned heights.) */
+  var MODEL_HEIGHT = { hero: SHIP_HEIGHT, enemy: 1.1, pickup: 1.9 };
+  /** The ship body is scaled to R.heroSize / MODEL_HEIGHT.hero; buildings
+   *  counter-scale to stay legible. MODEL_HEIGHT.hero is the ship model's real
+   *  height, so one number (heroSize) sizes the whole vessel. */
   var BUILDING_SCALE = 1.45;
   /** Every character's look in one place: the game and the studio's thumbnails both draw from here. */
   var MODELS = { hero: HERO_BOXES, enemy: SHARK_BOXES, pickup: BOTTLE_BOXES };
@@ -4405,13 +7107,20 @@ var THREE = __wxRoot.THREE || window.THREE;
       body.scale.set(size * 1.25, size * 1.25, 1);
       body.userData.sprite = true;
     } else {
-      // The raft is a wooden boat, so it gets the grain atlas; small props and
-      // creatures stay flat-shaded, which reads better at their size.
+      // The ship has white steel sides and wooden decks, so it gets the grain
+      // atlas; small props and creatures stay flat-shaded, which reads better
+      // at their size.
       body = voxelModel(boxes, slot === 'hero');
       body.scale.setScalar(size / MODEL_HEIGHT[slot]);
     }
     holder.add(body);
-    var shadow = new THREE.Mesh(new THREE.PlaneGeometry(size * 0.9, size * 0.9), new THREE.MeshBasicMaterial({ map: BLOB, transparent: true, depthWrite: false }));
+    // The blob shadow follows the footprint of the body: a hull this long needs
+    // a long shadow, or it looks like it is standing on a small dot. The plane
+    // is rotated flat, so its width spans world x (the beam) and its height
+    // spans world z (the length).
+    var shadowW = slot === 'hero' ? size * 1.15 : size * 0.9;
+    var shadowD = slot === 'hero' ? size * 3.5 : size * 0.9;
+    var shadow = new THREE.Mesh(new THREE.PlaneGeometry(shadowW, shadowD), new THREE.MeshBasicMaterial({ map: BLOB, transparent: true, depthWrite: false }));
     shadow.rotation.x = -Math.PI / 2;
     shadow.position.y = 0.03;
     holder.add(shadow);
@@ -4423,8 +7132,42 @@ var THREE = __wxRoot.THREE || window.THREE;
   var hero = { x: 0, z: 0, y: floatY(0, 0), vx: 0, vz: 0, facing: 0, dashT: 0, dashCd: 0, dashX: 0, dashZ: 0, node: makeCharacter('hero', R.heroSize, MODELS.hero) };
   var heroMode = customArt('hero') ? 'sprite' : 'voxel';
   var BASE_HERO_SCALE = hero.node.userData.body.scale.x;
-  var bubble = new THREE.Mesh(new THREE.SphereGeometry(R.heroSize * 0.78, 20, 14), new THREE.MeshBasicMaterial({ color: '#9fe8ff', transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending }));
+  /* The hull's real footprint on the water, in world units. Everything that has
+   * to touch the ship's edges — the wake, the safety bubble, the dash burst,
+   * the salvage reach, the shark's bite — reads these instead of guessing from
+   * a centre point.
+   *
+   * The footprint is an ellipse in the ship's own frame (half-length fore and
+   * aft, half-beam across), because a 16-unit liner that grabbed loot in a
+   * 4-unit circle would leave half its own deck unreachable, and a shark that
+   * bit at a raft-sized radius would swim through the hull to do it. */
+  var SHIP_SCALE = R.heroSize / SHIP_HEIGHT;        // 4.6 / 7.51 ≈ 0.61
+  var SHIP_HALF_LEN = SHIP.halfLen * SHIP_SCALE;    // ≈ 7.1
+  var SHIP_HALF_BEAM = SHIP.halfBeam * SHIP_SCALE;  // ≈ 2.4
+  /* A long ship only reads as a ship when it is seen at an angle: end-on it is
+   * a grey stick. The raft was symmetric so its heading never mattered; the
+   * liner starts at a three-quarter view (bow toward the camera and to the
+   * right) and turns to face whichever way it sails. */
+  hero.facing = Math.PI / 4;
+  hero.node.userData.body.rotation.y = hero.facing;
+  function hullPoint(x, z, pad) {
+    // Where a world point sits relative to the hull: forward along the keel and
+    // across the beam, in the ship's rotated frame, normalised to ±1 at the edge.
+    var dx = x - hero.x, dz = z - hero.z;
+    var fs = Math.sin(hero.facing), fc = Math.cos(hero.facing);
+    var p = pad || 0;
+    return {
+      fwd: (dx * fs + dz * fc) / (SHIP_HALF_LEN + p),
+      lat: (dx * fc - dz * fs) / (SHIP_HALF_BEAM + p)
+    };
+  }
+  function hullContains(x, z, pad) {
+    var q = hullPoint(x, z, pad);
+    return q.fwd * q.fwd + q.lat * q.lat <= 1;
+  }
+  var bubble = new THREE.Mesh(new THREE.SphereGeometry(R.heroSize * 0.82, 20, 14), new THREE.MeshBasicMaterial({ color: '#9fe8ff', transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending }));
   bubble.position.y = R.heroSize * 0.5;
+  bubble.scale.z = 1.9;             // the safety bubble wraps the whole hull
   bubble.visible = false;
   hero.node.add(bubble);
 
@@ -4637,6 +7380,7 @@ var THREE = __wxRoot.THREE || window.THREE;
   function reelIn() {
     if (!fishReady) return false;
     fishReady = false;
+    if (window.Achievements) window.Achievements.note({ fished: 1 });
     var gain = Math.round(SURV.foodDropAmount * (1 + foodPerk) * 0.8);
     food = Math.min(maxFood, food + gain);
     score += 1;
@@ -4773,7 +7517,7 @@ var THREE = __wxRoot.THREE || window.THREE;
       var coachA = Math.min(1, (nowMs - coachT0) / 400);   // fade in over 0.4s
       hudCtx.globalAlpha = coachA;
       var cLines = [
-        '你在一只小木筏上。用摇杆靠近漂浮垃圾，自动打捞。',
+        '你在邮轮的甲板上。用摇杆靠近漂浮垃圾，自动打捞。',
         '垃圾会拆成 木 / 塑 / 铁。攒够 木4。',
         '按右下角圆钮「建」（或键盘 B）造工作台 —— 造完才算真正开始。'
       ];
@@ -5194,6 +7938,12 @@ var THREE = __wxRoot.THREE || window.THREE;
       hudCtx.fillText(cardData.hint, w / 2, cy + ch - font * 1.1);
       hudCtx.textAlign = 'left';
     }
+    /* Achievement unlock banner, drawn last so it floats above everything. */
+    if (window.Achievements) {
+      try {
+        window.Achievements.drawToast(hudCtx, w, h, { font: font, fontFamily: FONT });
+      } catch (e) { /* a HUD extra must never break the frame */ }
+    }
   }
 
   /* 8. GAME STATE */
@@ -5264,7 +8014,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     var pool = CASTAWAY_DEFS.filter(function (d) { return !used[d.id]; });
     if (!pool.length) return;
     var def = pool[Math.floor(Math.random() * pool.length)];
-    var a = Math.random() * Math.PI * 2, d = 7 + Math.random() * 6;
+    var a = Math.random() * Math.PI * 2, d = SHIP_HALF_LEN + 3 + Math.random() * 6;
     var x = hero.x + Math.cos(a) * d, z = hero.z + Math.sin(a) * d;
     var node = makeCharacter('pickup', R.pickupSize * 1.5, CASTAWAY_BOXES);
     var ring = new THREE.Mesh(new THREE.RingGeometry(1.1, 1.35, 32),
@@ -5276,11 +8026,11 @@ var THREE = __wxRoot.THREE || window.THREE;
     addFT('有人漂过来了', x, z, '#9fe8ff', 2.4);
     fanfare([660, 880], 0.12, 'sine', 0.05);
   }
-  /** Recruit the drifter nearest the raft, if the player is close enough. */
+  /** Recruit the drifter nearest the ship, if they are alongside. */
   function tryRecruit() {
     for (var i = castaways.length - 1; i >= 0; i--) {
       var c = castaways[i];
-      if (Math.hypot(c.x - hero.x, c.z - hero.z) > 4.2) continue;
+      if (Math.hypot(c.x - hero.x, c.z - hero.z) > SHIP_HALF_LEN + 3.5) continue;
       recruited.push(c.def);
       applyPerk(c.def);
       addFT(c.def.name + ' 上船了！' + c.def.perk, hero.x, hero.z, '#9ff0b8', 2.6);
@@ -5308,15 +8058,15 @@ var THREE = __wxRoot.THREE || window.THREE;
       c.node.position.set(c.x, WATER_Y + Math.sin(c.t * 1.8) * 0.06, c.z);
       c.ring.scale.setScalar(1 + Math.sin(c.t * 2.4) * 0.1);
       c.ring.material.opacity = 0.4 + Math.sin(c.t * 2.4) * 0.2;
-      // The drifter slowly makes for the raft, so they are approachable.
+      // The drifter slowly makes for the ship, so they are approachable.
       var dx = hero.x - c.x, dz = hero.z - c.z, d = Math.hypot(dx, dz);
-      if (d > 5) { c.x += dx / d * dt * 0.5; c.z += dz / d * dt * 0.5; }
+      if (d > SHIP_HALF_LEN + 2) { c.x += dx / d * dt * 0.5; c.z += dz / d * dt * 0.5; }
       c.ring.position.set(c.x, WATER_Y + 0.12, c.z);
     }
   }
   function inRecruitRange() {
     for (var i = 0; i < castaways.length; i++) {
-      if (Math.hypot(castaways[i].x - hero.x, castaways[i].z - hero.z) <= 4.2) return castaways[i];
+      if (Math.hypot(castaways[i].x - hero.x, castaways[i].z - hero.z) <= SHIP_HALF_LEN + 3.5) return castaways[i];
     }
     return null;
   }
@@ -5603,12 +8353,13 @@ var THREE = __wxRoot.THREE || window.THREE;
     return pickSurvival(step.id);
   }
 
-  /* Loot spawns right around the raft, so the next pickup is always a short
-   *  hop away and the loop keeps its rhythm. */
+  /* Loot spawns right around the ship, so the next pickup is always a short
+   *  hop away and the loop keeps its rhythm. The ring clears the hull's own
+   *  footprint: a 16-unit liner would otherwise spawn loot inside its decks. */
   function nearSea(minFromHero) {
     for (var tries = 0; tries < 300; tries++) {
       var a = Math.random() * Math.PI * 2;
-      var r = 3.2 + Math.random() * 6;
+      var r = SHIP_HALF_LEN * 0.55 + Math.random() * (SHIP_HALF_LEN * 1.35);
       var x = hero.x + Math.cos(a) * r, z = hero.z + Math.sin(a) * r;
       if (groundAt(x, z) > 0) continue;
       return { x: x, z: z };
@@ -5720,11 +8471,12 @@ var THREE = __wxRoot.THREE || window.THREE;
     endedAt = performance.now();
     if (next !== 'playing' && drag) drag = null;
     if (next === 'title') showCard(TITLE,
-      '你是海上的一只小木筏。\n\n'
+      '你的小镇建在一艘邮轮上。\n\n'
       + '① 用摇杆贴近漂浮垃圾，会自动打捞\n'
       + '② 垃圾拆成 木 / 塑 / 铁 三种材料\n'
       + '③ 攒够材料按「建」按钮造东西\n'
-      + '④ 造出工作台 → 庇护所 → 四件生存装备，水与食能自持就站住了脚\n\n'
+      + '④ 前甲板先立起工作台 → 庇护所 → 四件生存装备，水与食能自持就站住了脚\n'
+      + '⑤ 攒下的建筑会一层层长到主甲板和上层甲板上，成为一座漂在海上的镇子\n\n'
       + '小心鲨鱼的红圈预警，⚡ 冲刺可以脱身。',
       '点击屏幕 / 按任意键开始');
     else if (next === 'playing') clearCard();
@@ -5734,7 +8486,7 @@ var THREE = __wxRoot.THREE || window.THREE;
         townCount() + '/' + townTarget() + ' 座建筑 · ' + pop + ' 位居民 · ' + pieces + ' 件垃圾 · ' + score + ' 分\n' + tallyLine() + '\n最佳: ' + best,
         '按任意键 / 点击屏幕再来一局');
     } else if (next === 'lost') {
-      var why = lastReason === 'shark' ? '木筏被鲨鱼撞散了！'
+      var why = lastReason === 'shark' ? '船体被鲨鱼撞穿了！'
         : lastReason === 'thirst' ? '水喝完了，船员撑不住了…'
         : lastReason === 'hunger' ? '食物吃完了，船员饿垮了…' : '天黑了，垃圾漂走了…';
       showCard(why,
@@ -5780,6 +8532,16 @@ var THREE = __wxRoot.THREE || window.THREE;
     if (score > best) { best = score; try { window.localStorage.setItem('dsh-game-studio:drift-town:best', String(best)); } catch (e) { /* sandboxed */ } }
     var won = result === 'town' || result === 'partial';
     lastReason = result;
+    /* Report the run to the leaderboard. The local board always works; the
+     * friend board only works inside WeChat with the open-data domain wired up,
+     * and the server board has no backend — the module says so rather than
+     * inventing a ranking. */
+    try {
+      if (window.Leaderboard && window.Achievements) {
+        var rec = window.Leaderboard.recordFromState(window.__gameState(), window.Achievements);
+        window.Leaderboard.submit(rec, { local: true, remote: true });
+      }
+    } catch (e) { /* never let stats break the round end */ }
     blip(won ? 660 : 220, 0.5, won ? 'triangle' : 'sawtooth', 0.06, won ? 990 : 110);
     setPhase(won ? 'won' : 'lost');
   }
@@ -5967,7 +8729,8 @@ var THREE = __wxRoot.THREE || window.THREE;
     hero.dashT = R.dash.time;
     hero.dashCd = R.dash.cooldown;
     hero.dashX = dir.x; hero.dashZ = dir.z;
-    spawnFoam(hero.x, hero.z, 10, 2.5);
+    spawnFoam(hero.x - Math.sin(hero.facing) * SHIP_HALF_LEN * 0.6,
+              hero.z - Math.cos(hero.facing) * SHIP_HALF_LEN * 0.6, 14, 3.4);
     blip(300, 0.18, 'triangle', 0.05, 700);
   }
 
@@ -6089,12 +8852,22 @@ var THREE = __wxRoot.THREE || window.THREE;
       // While docked the raft stays where it is, so the "town" does not drift off.
       if (docked) { hero.x = lerp(hero.x, dockX, Math.min(1, dt * 8)); hero.z = lerp(hero.z, dockZ, Math.min(1, dt * 8)); }
       if (Math.abs(hero.vx) + Math.abs(hero.vz) > 0.4) hero.facing = Math.atan2(hero.vx, hero.vz);
-      // Foam wake trailing a moving raft.
+      // Foam wake trailing a moving ship: the churn breaks at the transom (well
+      // aft of the centre) and spills out along both quarters of the hull.
       var heroSpd = Math.hypot(hero.vx, hero.vz);
       wakeTimer -= dt;
       if (heroSpd > 3 && wakeTimer <= 0) {
         wakeTimer = 0.07;
-        spawnFoam(hero.x - hero.vx / heroSpd * 1.2, hero.z - hero.vz / heroSpd * 1.2, 2, 0.8);
+        var wnx = hero.vx / heroSpd, wnz = hero.vz / heroSpd;
+        var sternX = hero.x - wnx * SHIP_HALF_LEN * 0.92;
+        var sternZ = hero.z - wnz * SHIP_HALF_LEN * 0.92;
+        spawnFoam(sternX, sternZ, 2, 1.6);
+        if (Math.random() < 0.5) {
+          // one quarter of the hull, alternating sides
+          var sideSign = Math.random() < 0.5 ? 1 : -1;
+          spawnFoam(sternX + (-wnz) * sideSign * SHIP_HALF_BEAM,
+                    sternZ + (wnx) * sideSign * SHIP_HALF_BEAM, 1, 0.9);
+        }
       }
 
       spawnTimer += dt;
@@ -6128,11 +8901,16 @@ var THREE = __wxRoot.THREE || window.THREE;
           if (od > 0 && od < 1.6) { ax += ox / od * 0.8; az += oz / od * 0.8; }
         }
         // Shark states: cruise in slow, telegraph a lunge, dash, then cool off.
+        // `near` is how far the shark is from the hull itself (0 = alongside),
+        // not from the ship's centre point: a 16-unit liner is a very different
+        // target from the old 3-unit raft, and sharks have to circle it.
+        var hullPad = (R.enemySize * 0.85) - R.pickupSize;
+        var near = hullContains(e.x, e.z, hullPad) ? 0 : (dist - (R.heroSize * 0.62));
         if (e.state === 'cruise') {
-          mv = speed * e.speedMul * (dist > 6 ? 1 : 0.55);
-          if (dist < 3) { ax += -tz / dist * 0.9; az += tx / dist * 0.9; } // circle sideways
+          mv = speed * e.speedMul * (near > 3 ? 1 : 0.55);
+          if (near < 2.2) { ax += -tz / dist * 0.9; az += tx / dist * 0.9; } // circle sideways
           e.nextLunge -= dt;
-          if (e.nextLunge <= 0 && dist < 4.2) {
+          if (e.nextLunge <= 0 && near < 3.6) {
             e.state = 'windup'; e.st = e.hammer ? 0.58 : 0.7; e.ring.visible = true;
             e.lx = tx / dist; e.lz = tz / dist;
             blip(e.hammer ? 120 : 150, 0.15, 'square', 0.05, e.hammer ? 90 : 110);
@@ -6153,11 +8931,11 @@ var THREE = __wxRoot.THREE || window.THREE;
           if (e.st <= 0) e.state = 'cruise';
         }
         var al = Math.hypot(ax, az) || 1;
-        if (shield > 0 && dist < 3) { ax = -tx / dist; az = -tz / dist; al = 1; }
+        if (shield > 0 && near < 4) { ax = -tx / dist; az = -tz / dist; al = 1; }
         // A docked town is a safe harbour: sharks circle but do not bite.
-        if (docked) { mv = mv * 0.45; if (dist < 5) { ax = -tx / dist; az = -tz / dist; al = 1; } }
+        if (docked) { mv = mv * 0.45; if (near < 6) { ax = -tx / dist; az = -tz / dist; al = 1; } }
         if (mv > 0) moveOnIsland(e, ax / al * mv * dt, az / al * mv * dt, 0.3);
-        if (!docked && dist < (R.heroSize + R.enemySize) * 0.30) {
+        if (!docked && hullContains(e.x, e.z, R.enemySize * 0.85)) {
           if (shield > 0) { moveOnIsland(e, -tx / dist * 1.2, -tz / dist * 1.2, 0.3); }
           else if (invulnerable <= 0) {
             hearts -= 1;
@@ -6171,11 +8949,12 @@ var THREE = __wxRoot.THREE || window.THREE;
       }
       for (var k = pickups.length - 1; k >= 0; k--) {
         var p = pickups[k];
-        // Generous but not magnetic: the raft has to be roughly on top of a
-        // piece to sweep it up. (`heroSize` alone is the hull's half-width.)
-        // The scoop net widens the base reach; the formula itself is unchanged.
-        var reach = (R.heroSize * 0.62 + R.pickupSize * 0.85 + magnet) * (hasBuilt('scoopNet') ? 1.5 : 1);
-        if (Math.hypot(p.x - hero.x, p.z - hero.z) < reach) {
+        // Generous but not magnetic: the ship has to be roughly on top of a
+        // piece to sweep it up. The reach is the hull's real ellipse plus the
+        // magnet radius, so loot anywhere along a 16-unit deck is pickable.
+        // The scoop net widens the base reach by half.
+        var pad = (R.pickupSize * 0.85 + magnet) * (hasBuilt('scoopNet') ? 1.5 : 1);
+        if (hullContains(p.x, p.z, pad)) {
           scene.remove(p.node);
           pickups.splice(k, 1);
           var gained = p.value || 1;
@@ -6208,6 +8987,9 @@ var THREE = __wxRoot.THREE || window.THREE;
             if (tally[p.name] === undefined) tally[p.name] = 0;
             tally[p.name] += 1;
             pieces += 1;
+            // Precise salvage count for achievements (the module otherwise has to
+            // infer pickups from score jumps, which undercounts multi-pickups).
+            if (window.Achievements) window.Achievements.note({ picked: 1 });
             if (p.res) {
               for (var rk in p.res) res[rk] += p.res[rk] * (p.mult || 1);
             }
@@ -6344,6 +9126,16 @@ var THREE = __wxRoot.THREE || window.THREE;
     // keep the wave plane and sea floor centred on the camera so there is no edge.
     updateCastaways(dt, t);
     updateFishing(dt);
+    /* Achievements: tick once a frame with the live state. Unlocks are queued
+     * and drawn as banners by drawHUD, so no DOM is involved. */
+    if (window.Achievements && phase === 'playing') {
+      var achState = window.__gameState();
+      var newly = window.Achievements.tick(achState, dt);
+      if (newly && newly.length) {
+        fanfare([659, 880, 1047], 0.09, 'triangle', 0.065);
+      }
+    }
+    if (window.Achievements) window.Achievements.updateToast(dt);
     chunkTimer -= dt;
     if (chunkTimer <= 0) { chunkTimer = 0.25; updateChunks(hero.x, hero.z); }
     water.position.x = hero.x;
@@ -6359,11 +9151,13 @@ var THREE = __wxRoot.THREE || window.THREE;
     wp.needsUpdate = true;
     waterGeo.computeVertexNormals();
     water.material.color.set(R.palette.water).multiplyScalar(0.94 + Math.sin(t * 0.8) * 0.04);
-    // The raft rides the swell: bob and tilt with the water it sits on.
-    var swell = Math.sin(hero.x * 0.3 + t * 1.7) * 0.11 + Math.cos(hero.z * 0.26 + t * 1.35) * 0.09;
+    // The ship rides the swell: bob and tilt with the water it sits on. A hull
+    // this long dips its bow and stern out of phase, so the amplitude and the
+    // period both scale up with the vessel.
+    var swell = Math.sin(hero.x * 0.22 + t * 1.1) * 0.22 + Math.cos(hero.z * 0.19 + t * 0.9) * 0.17;
     hero.node.position.y += swell;
-    hero.node.rotation.z = Math.sin(t * 1.3 + hero.x * 0.2) * 0.045;
-    hero.node.rotation.x = Math.cos(t * 1.1 + hero.z * 0.2) * 0.045;
+    hero.node.rotation.z = Math.sin(t * 0.85 + hero.x * 0.16) * 0.022;
+    hero.node.rotation.x = Math.cos(t * 0.72 + hero.z * 0.15) * 0.022;
     // Day wears on: the sky warms and dims as the round nears its end.
     if (phase === 'playing') {
       var prog = clamp(elapsed / R.duration, 0, 1);
@@ -6387,12 +9181,21 @@ var THREE = __wxRoot.THREE || window.THREE;
     return '#' + ((1 << 24) + (r << 16) + (g << 8) + bl).toString(16).slice(1);
   }
 
-  /* 11. CAMERA — a fixed angle that follows the hero; portrait screens pull back. */
-  var PITCH = 47 * Math.PI / 180;
+  /* 11. CAMERA — a fixed angle that follows the hero; portrait screens pull back.
+   *
+   * The ship is ~16 world units long and turns to face its heading, so the
+   * frame has to hold it at every angle. Measured by projecting the hull's
+   * silhouette across all headings at 960x540 (fov 38): distance 46 with a 45°
+   * pitch fills y≈160…420 px — below the top HUD row and above the bottom
+   * coach panel, with the masthead clear. The look target sits above the
+   * waterline by 0.4 x heroSize so the superstructure, not the waterline,
+   * ends up near the centre of the screen. */
+  var PITCH = 45 * Math.PI / 180;
+  var CAM_DISTANCE = 46;
   var focus = new THREE.Vector3(0, floatY(0, 0), 0);
   function cameraDistance() {
     var aspect = camera.aspect;
-    return aspect >= 1 ? 22 : 22 + (1 - aspect) * 26;
+    return aspect >= 1 ? CAM_DISTANCE : CAM_DISTANCE + (1 - aspect) * 34;
   }
   function placeCamera(dt) {
     // Follow the hero all the way to the shore; narrow portrait screens would otherwise lose it.
@@ -6400,8 +9203,9 @@ var THREE = __wxRoot.THREE || window.THREE;
     focus.z = lerp(focus.z, hero.z, Math.min(1, dt * 5));
     focus.y = lerp(focus.y, hero.y, Math.min(1, dt * 4));
     var distance = cameraDistance();
-    // Once the round ends, bias the view down so the finished town is not behind the card.
-    var lift = phase === 'playing' ? 0.6 : -2.6;
+    // Aim above the waterline so the whole hull + superstructure is framed; on
+    // the result screen bias further down so the card does not cover the town.
+    var lift = phase === 'playing' ? R.heroSize * 0.55 : R.heroSize * 0.20;
     camera.position.set(focus.x, focus.y + Math.sin(PITCH) * distance, focus.z + Math.cos(PITCH) * distance);
     if (shake > 0) {
       camera.position.x += (Math.random() - 0.5) * shake * 0.9;
@@ -6598,6 +9402,40 @@ var THREE = __wxRoot.THREE || window.THREE;
   };
   window.__debugOpenBuild = function () { openBuildMenu(); return buildOpen; };
   window.__debugBuild = function (id) { return pickSurvival(id); };
+  /* Build every structure at once, for verifying that the whole town lands on
+   * the ship's decks (and for screenshots of a finished liner). */
+  window.__debugBuildAll = function () {
+    res.wood = 999; res.plastic = 999; res.metal = 999;
+    var guard = 0;
+    while (guard++ < 40) {
+      if (!buildNextSurvival()) break;
+    }
+    var guard2 = 0;
+    while (guard2++ < 40 && buildings.length < BUILDING_SPECS.length) {
+      pickBuildSpec(buildings.length);
+    }
+    return { survival: survival.slice(), buildings: buildings.length };
+  };
+  /** Where each structure actually ended up, in world space. */
+  window.__debugShipParts = function () {
+    var out = [];
+    hero.node.userData.body.updateWorldMatrix(true, true);
+    var v = new THREE.Vector3();
+    function push(kind, name, model) {
+      if (!model) return;
+      model.getWorldPosition(v);
+      out.push({ kind: kind, name: name, x: Math.round(v.x * 100) / 100, y: Math.round(v.y * 100) / 100, z: Math.round(v.z * 100) / 100 });
+    }
+    for (var i = 0; i < survival.length; i++) {
+      var st = stepById(survival[i]);
+      push('survival', st ? st.name : survival[i], survivalModels[i]);
+    }
+    for (var b = 0; b < buildings.length; b++) {
+      var sp = BUILDING_SPECS[b] || null;
+      push('town', (sp && sp.name) || ('建筑' + (b + 1)), buildings[b]);
+    }
+    return out;
+  };
   window.__debugManage = function () { openManage(); return manageOpen; };
   window.__debugParts = function () { return shipParts().map(function (p) { return p.name; }); };
   window.__debugSpawnCastaway = function () { spawnCastaway(); return castaways.length; };
