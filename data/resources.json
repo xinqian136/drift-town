@@ -1,0 +1,891 @@
+{
+  "schema": "drift-town.resources",
+  "version": 1,
+  "updatedAt": "2026-11-22",
+  "title": "资源与海洋图鉴表",
+  "summary": "游戏与运营后台共用的唯一资源真相来源。海面可打捞物、潜水食材、沉城残骸与人类装备都在这一张表里。",
+  "sourceOfTruth": {
+    "surfacePickups": "game.js · PICKUP_KINDS（7 种垃圾的 name / res / value / glow）",
+    "surfaceSpawnWeights": "game.js · addPickup() 里 var roll = Math.random() * 12 的概率区间宽度",
+    "craftRecipes": "docs/GAME_DESIGN.md · 6.2 关键装备解锁链",
+    "tiers": "docs/GAME_DESIGN.md · 6.1 四层稀有度与海域绑定"
+  },
+  "notes": [
+    "本文件是合法严格 JSON，不含注释；所有说明放在 notes / 字段旁边的 text 里。",
+    "spawnWeight 的口径：海面打捞物的 7 个权重之和恰为 12，等价于 game.js 中 Math.random()*12 的区间宽度。改这些数字即可在不发版的情况下调整海面垃圾的比例。",
+    "yield 只使用 enums.yieldKeys 中列出的材料键；目前游戏内经济只有 wood / plastic / metal 三条线，food 是可直接入口的食材，salvage（稀有残件）是寿司店造价里「稀有材料」的落点，游戏侧接入前会忽略该键。",
+    "source 在文档给定的 surface|dive|npc 之外扩展了一个 craft：由玩家用其它材料制作出来的装备，没有自然产出地。",
+    "gameBinding 只对已经在 game.js 里实现的 7 种垃圾存在，用来把数据表锚回代码；其余条目是设计落地，游戏尚未实现，故无此字段。",
+    "usage[] 已拆成 usedBy{buildings,recipes,npcs} 三个分类桶——早期把建筑/菜谱/NPC 三种 id 混在一个数组里会让后台无法按类型解析引用，这是有意做的结构修正。",
+    "usedBy 是从 buildings.cost / recipes.ingredients / tools.craftCost / npc.recruitCondition 反向推导出来的只读索引，不是手写数据——由 tools/derive-usedby 一步生成，改任何一张表后重跑即可，避免索引与实际数据漂移。",
+    "materials 是「垃圾 → 材料 → 建筑」两跳关系的显式中间层。7 种海面垃圾的 usedBy 为空是正确的而非缺数据：它们先被拆解成 wood/plastic/metal，材料才进入建筑造价。后台用 materials 把两跳串起来展示，避免把中间层误读成漏填。"
+  ],
+  "enums": {
+    "category": {
+      "material": "建材，拆解后进入木 / 塑 / 铁三线",
+      "food": "食材，用于寿司店菜谱",
+      "artifact": "遗物，图鉴与叙事收集物",
+      "tool": "装备，由玩家制作，不参与拆解"
+    },
+    "tier": {
+      "1": "近岸漂浮物 · 起始海域",
+      "2": "洋流带垃圾 · 中距离海域",
+      "3": "沉城残骸 · 需潜水",
+      "4": "深渊生物 · 深水区"
+    },
+    "source": {
+      "surface": "海面打捞",
+      "dive": "潜水采集",
+      "npc": "NPC / 市场购入",
+      "craft": "玩家制作"
+    },
+    "yieldKeys": [
+      "wood",
+      "plastic",
+      "metal",
+      "food",
+      "salvage"
+    ],
+    "unlockConditionType": {
+      "firstPickup": "首次获得即解锁图鉴",
+      "buildBuilding": "建成某座建筑后进入刷新池",
+      "recruitNpc": "招募某位 NPC 后进入刷新池",
+      "progress": "达到某进度门槛后进入刷新池",
+      "craftKnown": "拥有对应图纸后可在工作台制作"
+    },
+    "usedByKeys": {
+      "buildings": "直接作为造价材料的建筑 id",
+      "recipes": "直接作为食材的菜谱 id",
+      "npcs": "与该资源相关的 NPC id（招募条件或特长所需装备）",
+      "tools": "与该资源存在工具依赖的装备 id（制作消耗或被它采集/解锁）"
+    }
+  },
+  "items": [
+    {
+      "id": "plasticBottle",
+      "name": "塑料瓶",
+      "icon": "BOTTLE_BOXES",
+      "color": "#8ee3b8",
+      "category": "material",
+      "tier": 1,
+      "source": "surface",
+      "yield": {
+        "plastic": 1
+      },
+      "spawnWeight": 2.6,
+      "unlockCondition": {
+        "type": "firstPickup",
+        "value": null,
+        "text": "首次打捞时解锁图鉴"
+      },
+      "codexText": "大潮之前它装水，大潮之后它常被拆去盖别人的屋顶。塑料永存，所以它总还有用。",
+      "gameBinding": {
+        "pickupKindIndex": 0,
+        "scoreValue": 1,
+        "glow": "#8ee3b8"
+      },
+      "basePool": true,
+      "usedBy": {}
+    },
+    {
+      "id": "sodaCan",
+      "name": "易拉罐",
+      "icon": "CAN_BOXES",
+      "color": "#ff9a96",
+      "category": "material",
+      "tier": 1,
+      "source": "surface",
+      "yield": {
+        "metal": 1
+      },
+      "spawnWeight": 2.6,
+      "unlockCondition": {
+        "type": "firstPickup",
+        "value": null,
+        "text": "首次打捞时解锁图鉴"
+      },
+      "codexText": "被压扁的铝壳，煮过盐水的海面替它抛了光。敲平后能补船底的洞。",
+      "gameBinding": {
+        "pickupKindIndex": 1,
+        "scoreValue": 1,
+        "glow": "#ff9a96"
+      },
+      "basePool": true,
+      "usedBy": {}
+    },
+    {
+      "id": "rubberDuck",
+      "name": "橡皮鸭",
+      "icon": "DUCK_BOXES",
+      "color": "#ffe066",
+      "category": "material",
+      "tier": 1,
+      "source": "surface",
+      "yield": {
+        "plastic": 1
+      },
+      "spawnWeight": 1.6,
+      "unlockCondition": {
+        "type": "firstPickup",
+        "value": null,
+        "text": "首次打捞时解锁图鉴"
+      },
+      "codexText": "它已经在海上漂了四十年，仍然看着水面。有人给它起了名字，然后拆了做鞋底。",
+      "gameBinding": {
+        "pickupKindIndex": 2,
+        "scoreValue": 1,
+        "glow": "#ffe066"
+      },
+      "basePool": true,
+      "usedBy": {}
+    },
+    {
+      "id": "woodenCrate",
+      "name": "木箱",
+      "icon": "CRATE_BOXES",
+      "color": "#ffd166",
+      "category": "material",
+      "tier": 1,
+      "source": "surface",
+      "yield": {
+        "wood": 2
+      },
+      "spawnWeight": 1.8,
+      "unlockCondition": {
+        "type": "firstPickup",
+        "value": null,
+        "text": "首次打捞时解锁图鉴"
+      },
+      "codexText": "钉子是锈的，木板还是直的。拆开它，是小镇里最常听见的响声。",
+      "gameBinding": {
+        "pickupKindIndex": 3,
+        "scoreValue": 2,
+        "glow": "#ffd166"
+      },
+      "basePool": true,
+      "usedBy": {}
+    },
+    {
+      "id": "barrel",
+      "name": "木桶",
+      "icon": "BARREL_BOXES",
+      "color": "#e0b072",
+      "category": "material",
+      "tier": 2,
+      "source": "surface",
+      "yield": {
+        "wood": 1,
+        "metal": 1
+      },
+      "spawnWeight": 1.2,
+      "unlockCondition": {
+        "type": "firstPickup",
+        "value": null,
+        "text": "首次打捞时解锁图鉴"
+      },
+      "codexText": "箍还在，说明它装过什么要紧的东西。现在它装雨水。",
+      "gameBinding": {
+        "pickupKindIndex": 4,
+        "scoreValue": 2,
+        "glow": "#e0b072"
+      },
+      "basePool": true,
+      "usedBy": {}
+    },
+    {
+      "id": "tire",
+      "name": "轮胎",
+      "icon": "TIRE_BOXES",
+      "color": "#aab4c0",
+      "category": "material",
+      "tier": 2,
+      "source": "surface",
+      "yield": {
+        "plastic": 1,
+        "metal": 1
+      },
+      "spawnWeight": 1,
+      "unlockCondition": {
+        "type": "firstPickup",
+        "value": null,
+        "text": "首次打捞时解锁图鉴"
+      },
+      "codexText": "陆地上跑的东西留下的最后一件遗物。垫在浮岛下面，比什么都耐磨。",
+      "gameBinding": {
+        "pickupKindIndex": 5,
+        "scoreValue": 2,
+        "glow": "#aab4c0"
+      },
+      "basePool": true,
+      "usedBy": {}
+    },
+    {
+      "id": "fishingNet",
+      "name": "渔网",
+      "icon": "NET_BOXES",
+      "color": "#7fd8b4",
+      "category": "material",
+      "tier": 2,
+      "source": "surface",
+      "yield": {
+        "wood": 1,
+        "plastic": 2
+      },
+      "spawnWeight": 1.2,
+      "unlockCondition": {
+        "type": "firstPickup",
+        "value": null,
+        "text": "首次打捞时解锁图鉴"
+      },
+      "codexText": "破洞的地方被补过三次，补网的人已经不在了。它还在捞东西。",
+      "gameBinding": {
+        "pickupKindIndex": 6,
+        "scoreValue": 3,
+        "glow": "#7fd8b4"
+      },
+      "basePool": true,
+      "usedBy": {}
+    },
+    {
+      "id": "brokenBuoy",
+      "name": "破损浮标",
+      "icon": "PROC:buoy",
+      "color": "#7fc7e8",
+      "category": "material",
+      "tier": 2,
+      "source": "surface",
+      "yield": {
+        "plastic": 2,
+        "metal": 1
+      },
+      "spawnWeight": 0.8,
+      "unlockCondition": {
+        "type": "buildBuilding",
+        "value": "workbench",
+        "text": "建成工作台后进入刷新池"
+      },
+      "codexText": "曾经标出一片安全水域。它现在标出的是它自己沉下去的位置。",
+      "basePool": false,
+      "usedBy": {}
+    },
+    {
+      "id": "metalFitting",
+      "name": "金属构件",
+      "icon": "PROC:beam",
+      "color": "#c8d0d8",
+      "category": "material",
+      "tier": 3,
+      "source": "dive",
+      "yield": {
+        "metal": 3
+      },
+      "spawnWeight": 0.6,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "dive",
+        "text": "潜水玩法开放后可采集"
+      },
+      "codexText": "沉城楼骨的断口，断面还是亮的。它比海面漂来的一切都结实。",
+      "usedBy": {}
+    },
+    {
+      "id": "ceramicShard",
+      "name": "陶瓷残片",
+      "icon": "PROC:shard",
+      "color": "#e8dcc0",
+      "category": "material",
+      "tier": 3,
+      "source": "dive",
+      "yield": {
+        "salvage": 1
+      },
+      "spawnWeight": 0.5,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "dive",
+        "text": "潜水玩法开放后可采集"
+      },
+      "codexText": "釉色还留着一点蓝。烧它的人相信陆地上会有明天。",
+      "usedBy": {}
+    },
+    {
+      "id": "brassGear",
+      "name": "黄铜齿轮",
+      "icon": "PROC:gear",
+      "color": "#d9b063",
+      "category": "material",
+      "tier": 3,
+      "source": "dive",
+      "yield": {
+        "metal": 2,
+        "salvage": 1
+      },
+      "spawnWeight": 0.35,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "dive",
+        "text": "潜水玩法开放后可采集"
+      },
+      "codexText": "齿没崩。转起来依旧咬合，只是带不动任何东西了。",
+      "usedBy": {}
+    },
+    {
+      "id": "glassLens",
+      "name": "玻璃透镜",
+      "icon": "PROC:lens",
+      "color": "#9fe0e8",
+      "category": "material",
+      "tier": 3,
+      "source": "dive",
+      "yield": {
+        "plastic": 2,
+        "salvage": 1
+      },
+      "spawnWeight": 0.3,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "dive",
+        "text": "潜水玩法开放后可采集"
+      },
+      "codexText": "对着阳光还能聚出一个亮点。潜水的人用它换过一整夜的住宿。",
+      "usedBy": {}
+    },
+    {
+      "id": "relic",
+      "name": "沉城文物",
+      "icon": "PROC:relic",
+      "color": "#c9a0e8",
+      "category": "artifact",
+      "tier": 3,
+      "source": "dive",
+      "yield": {
+        "salvage": 2
+      },
+      "spawnWeight": 0.25,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "dive",
+        "text": "潜水玩法开放后可采集"
+      },
+      "codexText": "一块刻着字的石板，字被水磨掉了一半。老人说那是地址。",
+      "usedBy": {}
+    },
+    {
+      "id": "inscribedJar",
+      "name": "刻纹陶罐",
+      "icon": "PROC:jar",
+      "color": "#d8b48c",
+      "category": "artifact",
+      "tier": 3,
+      "source": "dive",
+      "yield": {
+        "salvage": 1
+      },
+      "spawnWeight": 0.2,
+      "unlockCondition": {
+        "type": "recruitNpc",
+        "value": "namelessOld",
+        "text": "招募无名老人后才会指出陶罐的出土地"
+      },
+      "codexText": "罐口封着蜡。里面是空的，但蜡上压了一枚指印。",
+      "usedBy": {}
+    },
+    {
+      "id": "seaweed",
+      "name": "海藻",
+      "icon": "PROC:kelp",
+      "color": "#6fbf8f",
+      "category": "food",
+      "tier": 1,
+      "source": "dive",
+      "yield": {
+        "food": 1
+      },
+      "spawnWeight": 2,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "dive",
+        "text": "潜水玩法开放后可采集"
+      },
+      "codexText": "浅水区最不缺的东西。晒干能存，卷起来能吃，煮汤也还行。",
+      "usedBy": {
+        "recipes": [
+          "seaweedRoll",
+          "kelpSoup",
+          "squidGunkan",
+          "roeGunkan",
+          "deepCrabGunkan"
+        ]
+      }
+    },
+    {
+      "id": "clam",
+      "name": "贝壳",
+      "icon": "PROC:shell",
+      "color": "#e8c8b8",
+      "category": "food",
+      "tier": 1,
+      "source": "dive",
+      "yield": {
+        "food": 2
+      },
+      "spawnWeight": 1.5,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "dive",
+        "text": "潜水玩法开放后可采集"
+      },
+      "codexText": "壳上的纹路一年一道。数到第七道就够煮一碗汤了。",
+      "usedBy": {
+        "recipes": [
+          "clamSashimi"
+        ]
+      }
+    },
+    {
+      "id": "squid",
+      "name": "墨鱼",
+      "icon": "PROC:squid",
+      "color": "#e8e0f0",
+      "category": "food",
+      "tier": 2,
+      "source": "dive",
+      "yield": {
+        "food": 2
+      },
+      "spawnWeight": 0.9,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "dive",
+        "text": "潜水玩法开放后可采集"
+      },
+      "codexText": "它看你一眼就喷墨跑了。快的人能吃上，慢的人只能洗网。",
+      "usedBy": {
+        "recipes": [
+          "grilledSkewer",
+          "squidGunkan"
+        ]
+      }
+    },
+    {
+      "id": "silverScaleFish",
+      "name": "银鳞鱼",
+      "icon": "PROC:fishSilver",
+      "color": "#cfd8e8",
+      "category": "food",
+      "tier": 3,
+      "source": "dive",
+      "yield": {
+        "food": 3
+      },
+      "spawnWeight": 0.5,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "dive",
+        "text": "潜水玩法开放后可采集"
+      },
+      "codexText": "中层水域最容易看错的一种鱼——它转身的时候像一片会动的月光。",
+      "usedBy": {
+        "recipes": [
+          "grilledSkewer",
+          "silverScaleNigiri"
+        ]
+      }
+    },
+    {
+      "id": "seaUrchin",
+      "name": "海胆",
+      "icon": "PROC:urchin",
+      "color": "#8f6fb0",
+      "category": "food",
+      "tier": 3,
+      "source": "dive",
+      "yield": {
+        "food": 3
+      },
+      "spawnWeight": 0.4,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "dive",
+        "text": "潜水玩法开放后可采集"
+      },
+      "codexText": "扎手，但值得。撬开的那一刻，壳里是小小一片橙色的日落。",
+      "usedBy": {
+        "recipes": [
+          "seaUrchinBowl"
+        ]
+      }
+    },
+    {
+      "id": "fishRoe",
+      "name": "鱼子",
+      "icon": "PROC:roe",
+      "color": "#f0a860",
+      "category": "food",
+      "tier": 3,
+      "source": "dive",
+      "yield": {
+        "food": 3
+      },
+      "spawnWeight": 0.35,
+      "unlockCondition": {
+        "type": "buildBuilding",
+        "value": "sushiRestaurant",
+        "text": "寿司店建成后才能分级处理鱼子"
+      },
+      "codexText": "一颗一颗咬破，是咸的响。处理它的人要有耐心。",
+      "usedBy": {
+        "recipes": [
+          "roeGunkan"
+        ]
+      }
+    },
+    {
+      "id": "deepKelp",
+      "name": "深海藻",
+      "icon": "PROC:kelpDeep",
+      "color": "#3f8f7f",
+      "category": "food",
+      "tier": 3,
+      "source": "dive",
+      "yield": {
+        "food": 2
+      },
+      "spawnWeight": 0.6,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "dive",
+        "text": "潜水玩法开放后可采集"
+      },
+      "codexText": "比浅水海藻更厚、更韧，煮久了会发甜。深水区那片绿是它的。",
+      "usedBy": {
+        "recipes": [
+          "kelpSoup",
+          "deepCrabGunkan"
+        ]
+      }
+    },
+    {
+      "id": "deepCrab",
+      "name": "深海蟹",
+      "icon": "PROC:crab",
+      "color": "#d85f5f",
+      "category": "food",
+      "tier": 4,
+      "source": "dive",
+      "yield": {
+        "food": 5
+      },
+      "spawnWeight": 0.3,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "tier4",
+        "text": "穿潜水服后可下潜 Tier 4"
+      },
+      "codexText": "壳上有寄生的白点，像星星。抓它要快，它夹人比鲨鱼疼。",
+      "usedBy": {
+        "recipes": [
+          "deepCrabGunkan",
+          "abyssPlatter"
+        ]
+      }
+    },
+    {
+      "id": "abyssLanternfish",
+      "name": "深渊灯笼鱼",
+      "icon": "PROC:lanternfish",
+      "color": "#7fb0e8",
+      "category": "food",
+      "tier": 4,
+      "source": "dive",
+      "yield": {
+        "food": 4
+      },
+      "spawnWeight": 0.25,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "tier4",
+        "text": "穿潜水服后可下潜 Tier 4"
+      },
+      "codexText": "它提着灯找人，人提着灯找它。深水里遇到，谁也不该怪谁。",
+      "usedBy": {
+        "recipes": [
+          "abyssPlatter"
+        ]
+      }
+    },
+    {
+      "id": "abyssLobster",
+      "name": "深渊龙虾",
+      "icon": "PROC:lobster",
+      "color": "#e06f8f",
+      "category": "food",
+      "tier": 4,
+      "source": "dive",
+      "yield": {
+        "food": 6
+      },
+      "spawnWeight": 0.15,
+      "unlockCondition": {
+        "type": "progress",
+        "value": "tier4",
+        "text": "穿潜水服后可下潜 Tier 4"
+      },
+      "codexText": "传说里才有的东西，第一只出水时整条船沉默了三秒。",
+      "usedBy": {
+        "recipes": [
+          "abyssPlatter"
+        ]
+      }
+    },
+    {
+      "id": "rice",
+      "name": "米",
+      "icon": "PROC:rice",
+      "color": "#f0e8d0",
+      "category": "food",
+      "tier": 1,
+      "source": "npc",
+      "yield": {
+        "food": 1
+      },
+      "spawnWeight": 0,
+      "unlockCondition": {
+        "type": "buildBuilding",
+        "value": "market",
+        "text": "建成市场后可用材料换取"
+      },
+      "codexText": "不从海里来。所以它比任何鱼都贵，也比任何鱼都让人安心。",
+      "usedBy": {
+        "recipes": [
+          "seaweedRoll",
+          "clamSashimi",
+          "squidGunkan",
+          "silverScaleNigiri",
+          "seaUrchinBowl",
+          "roeGunkan",
+          "abyssPlatter"
+        ]
+      }
+    },
+    {
+      "id": "snorkelMask",
+      "name": "浮潜镜",
+      "icon": "PROC:mask",
+      "color": "#7fd8e8",
+      "category": "tool",
+      "tier": 2,
+      "source": "craft",
+      "yield": {},
+      "craftCost": {
+        "plastic": 4,
+        "metal": 1
+      },
+      "spawnWeight": 0,
+      "unlockCondition": {
+        "type": "craftKnown",
+        "value": "lighthouse",
+        "text": "建成灯塔（光学件来源）后可制作"
+      },
+      "codexText": "把海面之下的世界第一次交到人手里。有人说第一次戴它时哭了。",
+      "usedBy": {
+        "npcs": [
+          "ahai"
+        ]
+      }
+    },
+    {
+      "id": "oxygenTank",
+      "name": "氧气瓶",
+      "icon": "PROC:tank",
+      "color": "#e8a860",
+      "category": "tool",
+      "tier": 3,
+      "source": "craft",
+      "yield": {},
+      "craftCost": {
+        "metal": 5,
+        "wood": 3
+      },
+      "spawnWeight": 0,
+      "unlockCondition": {
+        "type": "craftKnown",
+        "value": "snorkelMask",
+        "text": "制作浮潜镜后可制作"
+      },
+      "codexText": "把潜水时长从 60 秒推到 120 秒。多出来的那一分钟，价格贵得离谱。",
+      "usedBy": {}
+    },
+    {
+      "id": "diveSuit",
+      "name": "潜水服",
+      "icon": "PROC:suit",
+      "color": "#5f7fa8",
+      "category": "tool",
+      "tier": 4,
+      "source": "craft",
+      "yield": {},
+      "craftCost": {
+        "metal": 8,
+        "plastic": 6
+      },
+      "spawnWeight": 0,
+      "unlockCondition": {
+        "type": "craftKnown",
+        "value": "oxygenTank",
+        "text": "制作氧气瓶后可制作"
+      },
+      "codexText": "缝补出来的，接缝处糊了树脂。它不体面，但它能扛住深水。",
+      "usedBy": {}
+    },
+    {
+      "id": "submersible",
+      "name": "深潜器",
+      "icon": "PROC:sub",
+      "color": "#a8b8c8",
+      "category": "tool",
+      "tier": 4,
+      "source": "craft",
+      "yield": {},
+      "craftCost": {
+        "metal": 12,
+        "salvage": 4,
+        "plastic": 8
+      },
+      "spawnWeight": 0,
+      "unlockCondition": {
+        "type": "craftKnown",
+        "value": "diveSuit",
+        "text": "消耗全部 Tier 3 材料制造"
+      },
+      "codexText": "用沉城自己的骨头造的东西。它下去的时候，像是回家。",
+      "usedBy": {}
+    }
+  ],
+  "materials": {
+    "wood": {
+      "id": "wood",
+      "label": "木",
+      "fromResources": [
+        "woodenCrate",
+        "barrel",
+        "fishingNet"
+      ],
+      "usedByBuildings": [
+        "workbench",
+        "shelter",
+        "rainCatcher",
+        "fishBasket",
+        "scoopNet",
+        "purifier",
+        "cabin",
+        "waterTower",
+        "greenhouse",
+        "lighthouse",
+        "marketStall",
+        "windmill",
+        "townCenter",
+        "house",
+        "dock",
+        "market",
+        "inn",
+        "sushiRestaurant"
+      ],
+      "usedByTools": [
+        "oxygenTank"
+      ]
+    },
+    "plastic": {
+      "id": "plastic",
+      "label": "塑",
+      "fromResources": [
+        "plasticBottle",
+        "rubberDuck",
+        "tire",
+        "fishingNet",
+        "brokenBuoy",
+        "glassLens"
+      ],
+      "usedByBuildings": [
+        "shelter",
+        "rainCatcher",
+        "waterTower",
+        "greenhouse",
+        "lighthouse",
+        "marketStall",
+        "windmill",
+        "townCenter",
+        "inn",
+        "sushiRestaurant"
+      ],
+      "usedByTools": [
+        "snorkelMask",
+        "diveSuit",
+        "submersible"
+      ]
+    },
+    "metal": {
+      "id": "metal",
+      "label": "铁",
+      "fromResources": [
+        "sodaCan",
+        "barrel",
+        "tire",
+        "brokenBuoy",
+        "metalFitting",
+        "brassGear"
+      ],
+      "usedByBuildings": [
+        "purifier",
+        "lighthouse",
+        "marketStall",
+        "windmill",
+        "townCenter",
+        "dock",
+        "market",
+        "sushiRestaurant"
+      ],
+      "usedByTools": [
+        "snorkelMask",
+        "oxygenTank",
+        "diveSuit",
+        "submersible"
+      ]
+    },
+    "food": {
+      "id": "food",
+      "label": "食材",
+      "fromResources": [
+        "seaweed",
+        "clam",
+        "squid",
+        "silverScaleFish",
+        "seaUrchin",
+        "fishRoe",
+        "deepKelp",
+        "deepCrab",
+        "abyssLanternfish",
+        "abyssLobster",
+        "rice"
+      ],
+      "usedByTools": []
+    },
+    "salvage": {
+      "id": "salvage",
+      "label": "稀有残件",
+      "fromResources": [
+        "ceramicShard",
+        "brassGear",
+        "glassLens",
+        "relic",
+        "inscribedJar"
+      ],
+      "usedByBuildings": [
+        "sushiRestaurant"
+      ],
+      "usedByTools": [
+        "submersible"
+      ]
+    }
+  }
+}

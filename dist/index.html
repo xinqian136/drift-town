@@ -4231,7 +4231,7 @@ void main() {
 
 }`,Jd=class{constructor(){this.texture=null,this.mesh=null,this.depthNear=0,this.depthFar=0}init(t,e){if(this.texture===null){let n=new or(t.texture);(t.depthNear!==e.depthNear||t.depthFar!==e.depthFar)&&(this.depthNear=t.depthNear,this.depthFar=t.depthFar),this.texture=n}}getMesh(t){if(this.texture!==null&&this.mesh===null){let e=t.cameras[0].viewport,n=new Mn({vertexShader:YS,fragmentShader:ZS,uniforms:{depthColor:{value:this.texture},depthWidth:{value:e.z},depthHeight:{value:e.w}}});this.mesh=new Ae(new hs(20,20),n)}return this.mesh}reset(){this.texture=null,this.mesh=null}getDepthTexture(){return this.texture}},$d=class extends un{constructor(t,e){super();let n=this,i=null,r=1,a=null,o="local-floor",l=1,c=null,h=null,d=null,u=null,f=null,p=null,_=typeof XRWebGLBinding<"u",m=new Jd,g={},v=e.getContextAttributes(),S=null,y=null,A=[],E=[],x=new et,b=null,I=null,R=new Le;R.viewport=new ue;let L=new Le;L.viewport=new ue;let F=[R,L],H=new So,D=null,k=null;this.cameraAutoUpdate=!0,this.enabled=!1,this.isPresenting=!1,this.getController=function(Y){let xt=A[Y];return xt===void 0&&(xt=new rs,A[Y]=xt),xt.getTargetRaySpace()},this.getControllerGrip=function(Y){let xt=A[Y];return xt===void 0&&(xt=new rs,A[Y]=xt),xt.getGripSpace()},this.getHand=function(Y){let xt=A[Y];return xt===void 0&&(xt=new rs,A[Y]=xt),xt.getHandSpace()};function X(Y){let xt=E.indexOf(Y.inputSource);if(xt===-1)return;let wt=A[xt];wt!==void 0&&(wt.update(Y.inputSource,Y.frame,c||a),wt.dispatchEvent({type:Y.type,data:Y.inputSource}))}function G(){i.removeEventListener("select",X),i.removeEventListener("selectstart",X),i.removeEventListener("selectend",X),i.removeEventListener("squeeze",X),i.removeEventListener("squeezestart",X),i.removeEventListener("squeezeend",X),i.removeEventListener("end",G),i.removeEventListener("inputsourceschange",nt);for(let Y=0;Y<A.length;Y++){let xt=E[Y];xt!==null&&(E[Y]=null,A[Y].disconnect(xt))}D=null,k=null,m.reset();for(let Y in g)delete g[Y];if(t.setRenderTarget(S),f=null,u=null,d=null,i=null,y=null,zt.stop(),n.isPresenting=!1,t.setPixelRatio(b),t.setSize(x.width,x.height,!1),I!==null){let Y=I.camera;Y.fov=I.fov,Y.zoom=I.zoom,Y.updateProjectionMatrix(),I=null}n.dispatchEvent({type:"sessionend"})}this.setFramebufferScaleFactor=function(Y){r=Y,n.isPresenting===!0&&gt("WebXRManager: Cannot change framebuffer scale while presenting.")},this.setReferenceSpaceType=function(Y){o=Y,n.isPresenting===!0&&gt("WebXRManager: Cannot change reference space type while presenting.")},this.getReferenceSpace=function(){return c||a},this.setReferenceSpace=function(Y){c=Y},this.getBaseLayer=function(){return u!==null?u:f},this.getBinding=function(){return d===null&&_&&(d=new XRWebGLBinding(i,e)),d},this.getFrame=function(){return p},this.getSession=function(){return i},this.setSession=async function(Y){if(i=Y,i!==null){if(S=t.getRenderTarget(),i.addEventListener("select",X),i.addEventListener("selectstart",X),i.addEventListener("selectend",X),i.addEventListener("squeeze",X),i.addEventListener("squeezestart",X),i.addEventListener("squeezeend",X),i.addEventListener("end",G),i.addEventListener("inputsourceschange",nt),v.xrCompatible!==!0&&await e.makeXRCompatible(),b=t.getPixelRatio(),t.getSize(x),_&&"createProjectionLayer"in XRWebGLBinding.prototype){let wt=null,Ft=null,vt=null;v.depth&&(vt=v.stencil?e.DEPTH24_STENCIL8:e.DEPTH_COMPONENT24,wt=v.stencil?Jn:Vn,Ft=v.stencil?Oi:_n);let Ot={colorFormat:e.RGBA8,depthFormat:vt,scaleFactor:r};d=this.getBinding(),u=d.createProjectionLayer(Ot),i.updateRenderState({layers:[u]}),t.setPixelRatio(1),t.setSize(u.textureWidth,u.textureHeight,!1),y=new $e(u.textureWidth,u.textureHeight,{format:rn,type:on,depthTexture:new Xn(u.textureWidth,u.textureHeight,Ft,void 0,void 0,void 0,void 0,void 0,void 0,wt),stencilBuffer:v.stencil,colorSpace:t.outputColorSpace,samples:v.antialias?4:0,resolveDepthBuffer:u.ignoreDepthValues===!1,resolveStencilBuffer:u.ignoreDepthValues===!1,storeMultisampledDepthBuffer:u.ignoreDepthValues===!1,storeMultisampledStencilBuffer:u.ignoreDepthValues===!1})}else{let wt={antialias:v.antialias,alpha:!0,depth:v.depth,stencil:v.stencil,framebufferScaleFactor:r};f=new XRWebGLLayer(i,e,wt),i.updateRenderState({baseLayer:f}),t.setPixelRatio(1),t.setSize(f.framebufferWidth,f.framebufferHeight,!1),y=new $e(f.framebufferWidth,f.framebufferHeight,{format:rn,type:on,colorSpace:t.outputColorSpace,stencilBuffer:v.stencil,resolveDepthBuffer:f.ignoreDepthValues===!1,resolveStencilBuffer:f.ignoreDepthValues===!1,storeMultisampledDepthBuffer:f.ignoreDepthValues===!1,storeMultisampledStencilBuffer:f.ignoreDepthValues===!1})}y.isXRRenderTarget=!0,this.setFoveation(l),c=null,a=await i.requestReferenceSpace(o),zt.setContext(i),zt.start(),n.isPresenting=!0,n.dispatchEvent({type:"sessionstart"})}},this.getEnvironmentBlendMode=function(){if(i!==null)return i.environmentBlendMode},this.getDepthTexture=function(){return m.getDepthTexture()};function nt(Y){for(let xt=0;xt<Y.removed.length;xt++){let wt=Y.removed[xt],Ft=E.indexOf(wt);Ft>=0&&(E[Ft]=null,A[Ft].disconnect(wt))}for(let xt=0;xt<Y.added.length;xt++){let wt=Y.added[xt],Ft=E.indexOf(wt);if(Ft===-1){for(let Ot=0;Ot<A.length;Ot++)if(Ot>=E.length){E.push(wt),Ft=Ot;break}else if(E[Ot]===null){E[Ot]=wt,Ft=Ot;break}if(Ft===-1)break}let vt=A[Ft];vt&&vt.connect(wt)}}function W(Y,xt){xt===null?Y.matrixWorld.copy(Y.matrix):Y.matrixWorld.multiplyMatrices(xt.matrixWorld,Y.matrix),Y.matrixWorldInverse.copy(Y.matrixWorld).invert()}this.updateCamera=function(Y){if(i===null)return;let xt=Y.near,wt=Y.far;m.texture!==null&&(m.depthNear>0&&(xt=m.depthNear),m.depthFar>0&&(wt=m.depthFar)),H.near=L.near=R.near=xt,H.far=L.far=R.far=wt,(D!==H.near||k!==H.far)&&(i.updateRenderState({depthNear:H.near,depthFar:H.far}),D=H.near,k=H.far),H.layers.mask=Y.layers.mask|6,R.layers.mask=H.layers.mask&-5,L.layers.mask=H.layers.mask&-3;let Ft=Y.parent,vt=H.cameras;W(H,Ft);for(let Ot=0;Ot<vt.length;Ot++)W(vt[Ot],Ft);H.projectionMatrix.copy(R.projectionMatrix),H.projectionMatrixInverse.copy(R.projectionMatrixInverse),I===null&&Y.isPerspectiveCamera&&(I={camera:Y,fov:Y.fov,zoom:Y.zoom}),Q(Y,H,Ft)};function Q(Y,xt,wt){wt===null?Y.matrix.copy(xt.matrixWorld):(Y.matrix.copy(wt.matrixWorld),Y.matrix.invert(),Y.matrix.multiply(xt.matrixWorld)),Y.matrix.decompose(Y.position,Y.quaternion,Y.scale),Y.updateMatrixWorld(!0),Y.projectionMatrix.copy(xt.projectionMatrix),Y.projectionMatrixInverse.copy(xt.projectionMatrixInverse),Y.isPerspectiveCamera&&(Y.fov=es*2*Math.atan(1/Y.projectionMatrix.elements[5]),Y.zoom=1)}this.getCamera=function(){return H},this.getFoveation=function(){if(!(u===null&&f===null))return l},this.setFoveation=function(Y){l=Y,u!==null&&(u.fixedFoveation=Y),f!==null&&f.fixedFoveation!==void 0&&(f.fixedFoveation=Y)},this.hasDepthSensing=function(){return m.texture!==null},this.getDepthSensingMesh=function(){return m.getMesh(H)},this.getCameraTexture=function(Y){return g[Y]};let tt=null;function At(Y,xt){if(h=xt.getViewerPose(c||a),p=xt,h!==null){let wt=h.views;f!==null&&(t.setRenderTargetFramebuffer(y,f.framebuffer),t.setRenderTarget(y));let Ft=!1;wt.length!==H.cameras.length&&(H.cameras.length=0,Ft=!0);for(let kt=0;kt<wt.length;kt++){let Kt=wt[kt],te=null;if(f!==null)te=f.getViewport(Kt);else{let ct=d.getViewSubImage(u,Kt);te=ct.viewport,kt===0&&(t.setRenderTargetTextures(y,ct.colorTexture,ct.depthStencilTexture),t.setRenderTarget(y))}let j=F[kt];j===void 0&&(j=new Le,j.layers.enable(kt),j.viewport=new ue,F[kt]=j),j.matrix.fromArray(Kt.transform.matrix),j.matrix.decompose(j.position,j.quaternion,j.scale),j.projectionMatrix.fromArray(Kt.projectionMatrix),j.projectionMatrixInverse.copy(j.projectionMatrix).invert(),j.viewport.set(te.x,te.y,te.width,te.height),kt===0&&(H.matrix.copy(j.matrix),H.matrix.decompose(H.position,H.quaternion,H.scale)),Ft===!0&&H.cameras.push(j)}let vt=i.enabledFeatures;if(vt&&vt.includes("depth-sensing")&&i.depthUsage=="gpu-optimized"&&_){d=n.getBinding();let kt=d.getDepthInformation(wt[0]);kt&&kt.isValid&&kt.texture&&m.init(kt,i.renderState)}if(vt&&vt.includes("camera-access")&&_){t.state.unbindTexture(),d=n.getBinding();for(let kt=0;kt<wt.length;kt++){let Kt=wt[kt].camera;if(Kt){let te=g[Kt];te||(te=new or,g[Kt]=te);let j=d.getCameraImage(Kt);te.sourceTexture=j}}}}for(let wt=0;wt<A.length;wt++){let Ft=E[wt],vt=A[wt];Ft!==null&&vt!==void 0&&vt.update(Ft,xt,c||a)}tt&&tt(Y,xt),xt.detectedPlanes&&n.dispatchEvent({type:"planesdetected",data:xt}),p=null}let zt=new ng;zt.setAnimationLoop(At),this.setAnimationLoop=function(Y){tt=Y},this.dispose=function(){}}},JS=new Vt,fg=new Wt;fg.set(-1,0,0,0,1,0,0,0,1);function $S(s,t){function e(m,g){m.matrixAutoUpdate===!0&&m.updateMatrix(),g.value.copy(m.matrix)}function n(m,g){g.color.getRGB(m.fogColor.value,Pd(s)),g.isFog?(m.fogNear.value=g.near,m.fogFar.value=g.far):g.isFogExp2&&(m.fogDensity.value=g.density)}function i(m,g,v,S,y){g.isNodeMaterial?g.uniformsNeedUpdate=!1:g.isMeshBasicMaterial?r(m,g):g.isMeshLambertMaterial?(r(m,g),g.envMap&&(m.envMapIntensity.value=g.envMapIntensity)):g.isMeshToonMaterial?(r(m,g),d(m,g)):g.isMeshPhongMaterial?(r(m,g),h(m,g),g.envMap&&(m.envMapIntensity.value=g.envMapIntensity)):g.isMeshStandardMaterial?(r(m,g),u(m,g),g.isMeshPhysicalMaterial&&f(m,g,y)):g.isMeshMatcapMaterial?(r(m,g),p(m,g)):g.isMeshDepthMaterial?r(m,g):g.isMeshDistanceMaterial?(r(m,g),_(m,g)):g.isMeshNormalMaterial?r(m,g):g.isLineBasicMaterial?(a(m,g),g.isLineDashedMaterial&&o(m,g)):g.isPointsMaterial?l(m,g,v,S):g.isSpriteMaterial?c(m,g):g.isShadowMaterial?(m.color.value.copy(g.color),m.opacity.value=g.opacity):g.isShaderMaterial&&(g.uniformsNeedUpdate=!1)}function r(m,g){m.opacity.value=g.opacity,g.color&&m.diffuse.value.copy(g.color),g.emissive&&m.emissive.value.copy(g.emissive).multiplyScalar(g.emissiveIntensity),g.map&&(m.map.value=g.map,e(g.map,m.mapTransform)),g.alphaMap&&(m.alphaMap.value=g.alphaMap,e(g.alphaMap,m.alphaMapTransform)),g.bumpMap&&(m.bumpMap.value=g.bumpMap,e(g.bumpMap,m.bumpMapTransform),m.bumpScale.value=g.bumpScale,g.side===Ke&&(m.bumpScale.value*=-1)),g.normalMap&&(m.normalMap.value=g.normalMap,e(g.normalMap,m.normalMapTransform),m.normalScale.value.copy(g.normalScale),g.side===Ke&&m.normalScale.value.negate()),g.displacementMap&&(m.displacementMap.value=g.displacementMap,e(g.displacementMap,m.displacementMapTransform),m.displacementScale.value=g.displacementScale,m.displacementBias.value=g.displacementBias),g.emissiveMap&&(m.emissiveMap.value=g.emissiveMap,e(g.emissiveMap,m.emissiveMapTransform)),g.specularMap&&(m.specularMap.value=g.specularMap,e(g.specularMap,m.specularMapTransform)),g.alphaTest>0&&(m.alphaTest.value=g.alphaTest);let v=t.get(g),S=v.envMap,y=v.envMapRotation;S&&(m.envMap.value=S,m.envMapRotation.value.setFromMatrix4(JS.makeRotationFromEuler(y)).transpose(),S.isCubeTexture&&S.isRenderTargetTexture===!1&&m.envMapRotation.value.premultiply(fg),m.reflectivity.value=g.reflectivity,m.ior.value=g.ior,m.refractionRatio.value=g.refractionRatio),g.lightMap&&(m.lightMap.value=g.lightMap,m.lightMapIntensity.value=g.lightMapIntensity,e(g.lightMap,m.lightMapTransform)),g.aoMap&&(m.aoMap.value=g.aoMap,m.aoMapIntensity.value=g.aoMapIntensity,e(g.aoMap,m.aoMapTransform))}function a(m,g){m.diffuse.value.copy(g.color),m.opacity.value=g.opacity,g.map&&(m.map.value=g.map,e(g.map,m.mapTransform))}function o(m,g){m.dashSize.value=g.dashSize,m.totalSize.value=g.dashSize+g.gapSize,m.scale.value=g.scale}function l(m,g,v,S){m.diffuse.value.copy(g.color),m.opacity.value=g.opacity,m.size.value=g.size*v,m.scale.value=S*.5,g.map&&(m.map.value=g.map,e(g.map,m.uvTransform)),g.alphaMap&&(m.alphaMap.value=g.alphaMap,e(g.alphaMap,m.alphaMapTransform)),g.alphaTest>0&&(m.alphaTest.value=g.alphaTest)}function c(m,g){m.diffuse.value.copy(g.color),m.opacity.value=g.opacity,m.rotation.value=g.rotation,g.map&&(m.map.value=g.map,e(g.map,m.mapTransform)),g.alphaMap&&(m.alphaMap.value=g.alphaMap,e(g.alphaMap,m.alphaMapTransform)),g.alphaTest>0&&(m.alphaTest.value=g.alphaTest)}function h(m,g){m.specular.value.copy(g.specular),m.shininess.value=Math.max(g.shininess,1e-4)}function d(m,g){g.gradientMap&&(m.gradientMap.value=g.gradientMap)}function u(m,g){m.metalness.value=g.metalness,g.metalnessMap&&(m.metalnessMap.value=g.metalnessMap,e(g.metalnessMap,m.metalnessMapTransform)),m.roughness.value=g.roughness,g.roughnessMap&&(m.roughnessMap.value=g.roughnessMap,e(g.roughnessMap,m.roughnessMapTransform)),g.envMap&&(m.envMapIntensity.value=g.envMapIntensity)}function f(m,g,v){m.ior.value=g.ior,g.diffuseRoughness>0&&(m.diffuseRoughness.value=g.diffuseRoughness,g.diffuseRoughnessMap&&(m.diffuseRoughnessMap.value=g.diffuseRoughnessMap,e(g.diffuseRoughnessMap,m.diffuseRoughnessMapTransform))),g.sheen>0&&(m.sheenColor.value.copy(g.sheenColor).multiplyScalar(g.sheen),m.sheenRoughness.value=g.sheenRoughness,g.sheenColorMap&&(m.sheenColorMap.value=g.sheenColorMap,e(g.sheenColorMap,m.sheenColorMapTransform)),g.sheenRoughnessMap&&(m.sheenRoughnessMap.value=g.sheenRoughnessMap,e(g.sheenRoughnessMap,m.sheenRoughnessMapTransform))),g.clearcoat>0&&(m.clearcoat.value=g.clearcoat,m.clearcoatRoughness.value=g.clearcoatRoughness,g.clearcoatMap&&(m.clearcoatMap.value=g.clearcoatMap,e(g.clearcoatMap,m.clearcoatMapTransform)),g.clearcoatRoughnessMap&&(m.clearcoatRoughnessMap.value=g.clearcoatRoughnessMap,e(g.clearcoatRoughnessMap,m.clearcoatRoughnessMapTransform)),g.clearcoatNormalMap&&(m.clearcoatNormalMap.value=g.clearcoatNormalMap,e(g.clearcoatNormalMap,m.clearcoatNormalMapTransform),m.clearcoatNormalScale.value.copy(g.clearcoatNormalScale),g.side===Ke&&m.clearcoatNormalScale.value.negate())),g.dispersion>0&&(m.dispersion.value=g.dispersion),g.retroreflectivity>0&&(m.retroreflectivity.value=g.retroreflectivity),g.iridescence>0&&(m.iridescence.value=g.iridescence,m.iridescenceIOR.value=g.iridescenceIOR,m.iridescenceThicknessMinimum.value=g.iridescenceThicknessMinimum,m.iridescenceThicknessMaximum.value=g.iridescenceThicknessMaximum,g.iridescenceMap&&(m.iridescenceMap.value=g.iridescenceMap,e(g.iridescenceMap,m.iridescenceMapTransform)),g.iridescenceThicknessMap&&(m.iridescenceThicknessMap.value=g.iridescenceThicknessMap,e(g.iridescenceThicknessMap,m.iridescenceThicknessMapTransform))),g.transmission>0&&(m.transmission.value=g.transmission,m.transmissionSamplerMap.value=v.texture,m.transmissionSamplerSize.value.set(v.width,v.height),g.transmissionMap&&(m.transmissionMap.value=g.transmissionMap,e(g.transmissionMap,m.transmissionMapTransform)),m.thickness.value=g.thickness,g.thicknessMap&&(m.thicknessMap.value=g.thicknessMap,e(g.thicknessMap,m.thicknessMapTransform)),m.attenuationDistance.value=g.attenuationDistance,m.attenuationColor.value.copy(g.attenuationColor)),g.anisotropy>0&&(m.anisotropyVector.value.set(g.anisotropy*Math.cos(g.anisotropyRotation),g.anisotropy*Math.sin(g.anisotropyRotation)),g.anisotropyMap&&(m.anisotropyMap.value=g.anisotropyMap,e(g.anisotropyMap,m.anisotropyMapTransform))),m.specularIntensity.value=g.specularIntensity,m.specularColor.value.copy(g.specularColor),g.specularColorMap&&(m.specularColorMap.value=g.specularColorMap,e(g.specularColorMap,m.specularColorMapTransform)),g.specularIntensityMap&&(m.specularIntensityMap.value=g.specularIntensityMap,e(g.specularIntensityMap,m.specularIntensityMapTransform))}function p(m,g){g.matcap&&(m.matcap.value=g.matcap)}function _(m,g){let v=t.get(g).light;m.referencePosition.value.setFromMatrixPosition(v.matrixWorld),m.nearDistance.value=v.shadow.camera.near,m.farDistance.value=v.shadow.camera.far}return{refreshFogUniforms:n,refreshMaterialUniforms:i}}function KS(s,t,e,n){let i={},r={};function a(v,S){let y=S.program;n.uniformBlockBinding(v,y,i[v.id])}function o(v,S){let y=i[v.id];y===void 0&&(p(v),y=l(v),i[v.id]=y,v.addEventListener("dispose",m));let A=S.program;n.updateUBOMapping(v,A);let E=t.render.frame;r[v.id]!==E&&(c(v),r[v.id]=E)}function l(v){let S=s.createBuffer(),y=v.__size,A=v.usage;return s.bindBuffer(s.UNIFORM_BUFFER,S),s.bufferData(s.UNIFORM_BUFFER,y,A),s.bindBuffer(s.UNIFORM_BUFFER,null),S}function c(v){let S=i[v.id],y=v.uniforms,A=v.__cache;s.bindBuffer(s.UNIFORM_BUFFER,S);for(let E=0,x=y.length;E<x;E++){let b=y[E];if(Array.isArray(b))for(let I=0,R=b.length;I<R;I++)h(b[I],E,I,A);else h(b,E,0,A)}s.bindBuffer(s.UNIFORM_BUFFER,null)}function h(v,S,y,A){if(u(v,S,y,A)===!0){let E=v.__offset,x=v.value;if(Array.isArray(x)){let b=0;for(let I=0;I<x.length;I++){let R=x[I],L=_(R,!0);d(R,v.__data,b),b+=L.storage/Float32Array.BYTES_PER_ELEMENT}}else d(x,v.__data,0);s.bufferSubData(s.UNIFORM_BUFFER,E,v.__data)}}function d(v,S,y){typeof v=="number"||typeof v=="boolean"?S[y]=v:v.isMatrix3?(S[y]=v.elements[0],S[y+1]=v.elements[1],S[y+2]=v.elements[2],S[y+3]=0,S[y+4]=v.elements[3],S[y+5]=v.elements[4],S[y+6]=v.elements[5],S[y+7]=0,S[y+8]=v.elements[6],S[y+9]=v.elements[7],S[y+10]=v.elements[8],S[y+11]=0):ArrayBuffer.isView(v)?S.set(v.subarray(0,S.length-y),y):v.toArray(S,y)}function u(v,S,y,A){let E=v.value,x=S+"_"+y;if(Array.isArray(E)){A[x]===void 0&&(A[x]=[]);let b=A[x],I=!1;for(let R=0;R<E.length;R++)f(E[R],b,R)===!0&&(I=!0);return I}return f(E,A,x)}function f(v,S,y){if(S[y]===void 0)return typeof v=="number"||typeof v=="boolean"?S[y]=v:ArrayBuffer.isView(v)?S[y]=v.slice():S[y]=v.clone(),!0;{let A=S[y];if(typeof v=="number"||typeof v=="boolean"){if(A!==v)return S[y]=v,!0}else{if(ArrayBuffer.isView(v))return!0;if(A.equals(v)===!1)return A.copy(v),!0}}return!1}function p(v){let S=v.uniforms,y=0,A=16;for(let x=0,b=S.length;x<b;x++){let I=Array.isArray(S[x])?S[x]:[S[x]];for(let R=0,L=I.length;R<L;R++){let F=I[R],H=Array.isArray(F.value)?F.value:[F.value],D=Array.isArray(S[x])||Array.isArray(F.value),k=y;for(let G=0,nt=H.length;G<nt;G++){let W=H[G],Q=_(W,D),tt=y%A,At=tt%Q.boundary,zt=tt+At;y+=At,zt!==0&&A-zt<Q.storage&&(y+=A-zt),G===0&&(k=y),y+=Q.storage}let X=F.type==="int"?Int32Array:F.type==="uint"?Uint32Array:Float32Array;F.__data=new X((y-k)/Float32Array.BYTES_PER_ELEMENT),F.__offset=k}}let E=y%A;return E>0&&(y+=A-E),v.__size=y,v.__cache={},this}function _(v,S){let y={boundary:0,storage:0};return typeof v=="number"||typeof v=="boolean"?(y.boundary=4,y.storage=4):v.isVector2?(y.boundary=8,y.storage=8):v.isVector3||v.isColor?(y.boundary=16,y.storage=12):v.isVector4?(y.boundary=16,y.storage=16):v.isMatrix3?(y.boundary=16,y.storage=48):v.isMatrix4?(y.boundary=16,y.storage=64):v.isTexture?gt("WebGLRenderer: Texture samplers can not be part of an uniforms group."):ArrayBuffer.isView(v)?(y.boundary=16,y.storage=v.byteLength):gt("WebGLRenderer: Unsupported uniform value type.",v),S===!0&&(y.boundary=16,y.storage=Math.ceil(y.storage/16)*16),y}function m(v){let S=v.target;S.removeEventListener("dispose",m),s.deleteBuffer(i[S.id]),delete i[S.id],delete r[S.id]}function g(){for(let v in i)s.deleteBuffer(i[v]);i={},r={}}return{bind:a,update:o,dispose:g}}var QS=new Uint16Array([12469,15057,12620,14925,13266,14620,13807,14376,14323,13990,14545,13625,14713,13328,14840,12882,14931,12528,14996,12233,15039,11829,15066,11525,15080,11295,15085,10976,15082,10705,15073,10495,13880,14564,13898,14542,13977,14430,14158,14124,14393,13732,14556,13410,14702,12996,14814,12596,14891,12291,14937,11834,14957,11489,14958,11194,14943,10803,14921,10506,14893,10278,14858,9960,14484,14039,14487,14025,14499,13941,14524,13740,14574,13468,14654,13106,14743,12678,14818,12344,14867,11893,14889,11509,14893,11180,14881,10751,14852,10428,14812,10128,14765,9754,14712,9466,14764,13480,14764,13475,14766,13440,14766,13347,14769,13070,14786,12713,14816,12387,14844,11957,14860,11549,14868,11215,14855,10751,14825,10403,14782,10044,14729,9651,14666,9352,14599,9029,14967,12835,14966,12831,14963,12804,14954,12723,14936,12564,14917,12347,14900,11958,14886,11569,14878,11247,14859,10765,14828,10401,14784,10011,14727,9600,14660,9289,14586,8893,14508,8533,15111,12234,15110,12234,15104,12216,15092,12156,15067,12010,15028,11776,14981,11500,14942,11205,14902,10752,14861,10393,14812,9991,14752,9570,14682,9252,14603,8808,14519,8445,14431,8145,15209,11449,15208,11451,15202,11451,15190,11438,15163,11384,15117,11274,15055,10979,14994,10648,14932,10343,14871,9936,14803,9532,14729,9218,14645,8742,14556,8381,14461,8020,14365,7603,15273,10603,15272,10607,15267,10619,15256,10631,15231,10614,15182,10535,15118,10389,15042,10167,14963,9787,14883,9447,14800,9115,14710,8665,14615,8318,14514,7911,14411,7507,14279,7198,15314,9675,15313,9683,15309,9712,15298,9759,15277,9797,15229,9773,15166,9668,15084,9487,14995,9274,14898,8910,14800,8539,14697,8234,14590,7790,14479,7409,14367,7067,14178,6621,15337,8619,15337,8631,15333,8677,15325,8769,15305,8871,15264,8940,15202,8909,15119,8775,15022,8565,14916,8328,14804,8009,14688,7614,14569,7287,14448,6888,14321,6483,14088,6171,15350,7402,15350,7419,15347,7480,15340,7613,15322,7804,15287,7973,15229,8057,15148,8012,15046,7846,14933,7611,14810,7357,14682,7069,14552,6656,14421,6316,14251,5948,14007,5528,15356,5942,15356,5977,15353,6119,15348,6294,15332,6551,15302,6824,15249,7044,15171,7122,15070,7050,14949,6861,14818,6611,14679,6349,14538,6067,14398,5651,14189,5311,13935,4958,15359,4123,15359,4153,15356,4296,15353,4646,15338,5160,15311,5508,15263,5829,15188,6042,15088,6094,14966,6001,14826,5796,14678,5543,14527,5287,14377,4985,14133,4586,13869,4257,15360,1563,15360,1642,15358,2076,15354,2636,15341,3350,15317,4019,15273,4429,15203,4732,15105,4911,14981,4932,14836,4818,14679,4621,14517,4386,14359,4156,14083,3795,13808,3437,15360,122,15360,137,15358,285,15355,636,15344,1274,15322,2177,15281,2765,15215,3223,15120,3451,14995,3569,14846,3567,14681,3466,14511,3305,14344,3121,14037,2800,13753,2467,15360,0,15360,1,15359,21,15355,89,15346,253,15325,479,15287,796,15225,1148,15133,1492,15008,1749,14856,1882,14685,1886,14506,1783,14324,1608,13996,1398,13702,1183]),Qn=null;function jS(){return Qn===null&&(Qn=new sn(QS,16,16,pi,En),Qn.name="DFG_LUT",Qn.minFilter=xe,Qn.magFilter=xe,Qn.wrapS=nn,Qn.wrapT=nn,Qn.generateMipmaps=!1,Qn.needsUpdate=!0),Qn}var Kd=class{constructor(t={}){let{canvas:e=wd(),context:n=null,depth:i=!0,stencil:r=!1,alpha:a=!1,antialias:o=!1,premultipliedAlpha:l=!0,preserveDrawingBuffer:c=!1,powerPreference:h="default",failIfMajorPerformanceCaveat:d=!1,reversedDepthBuffer:u=!1,outputBufferType:f=on}=t;this.isWebGLRenderer=!0;let p;if(n!==null){if(typeof WebGLRenderingContext<"u"&&n instanceof WebGLRenderingContext)throw new Error("THREE.WebGLRenderer: WebGL 1 is not supported since r163.");p=n.getContextAttributes().alpha}else p=a;let _=f,m=new Set([Do,Lo,Nr]),g=new Set([on,_n,ys,Oi,Co,Io]),v=new Uint32Array(4),S=new Int32Array(4),y={textures:[],min:[],max:[],resolution:[]},A=null,E=null,x=[],b=[],I=null;this.domElement=e,this.debug={checkShaderErrors:!0,diagnostics:{keywords:!1},onShaderError:null},this.autoClear=!0,this.autoClearColor=!0,this.autoClearDepth=!0,this.autoClearStencil=!0,this.sortObjects=!0,this.clippingPlanes=[],this.localClippingEnabled=!1,this.toneMapping=On,this.toneMappingExposure=1,this.transmissionResolutionScale=1;let R=this,L=!1,F=null,H=null,D=null,k=null;this._outputColorSpace=en;let X=0,G=0,nt=null,W=-1,Q=null,tt=new ue,At=new ue,zt=null,Y=new bt(0),xt=0,wt=e.width,Ft=e.height,vt=1,Ot=null,_e=null,kt=new ue(0,0,wt,Ft),Kt=new ue(0,0,wt,Ft),te=!1,j=new Wn,ct=new sr,at=!1,Et=!1,_t=new Vt,qt=new C,Dt=new ue,ee={background:null,fog:null,environment:null,overrideMaterial:null,isScene:!0},ne=!1;function ae(){return nt===null?vt:1}let U=n;function we(T,N){return e.getContext(T,N)}let Qt,pe,ft,Se,Bt,Ht,w,M,B,it,K,ot,pt,Z,J,ht,P,$,q,ut,rt,lt,Nt;try{let T={alpha:!0,depth:i,stencil:r,antialias:o,premultipliedAlpha:l,preserveDrawingBuffer:c,powerPreference:h,failIfMajorPerformanceCaveat:d};if("setAttribute"in e&&e.setAttribute("data-engine",`three.js r${"187"}`),e.addEventListener("webglcontextlost",Ut,!1),e.addEventListener("webglcontextrestored",Zt,!1),e.addEventListener("webglcontextcreationerror",St,!1),U===null){let N="webgl2";if(U=we(N,T),U===null)throw we(N)?new Error("THREE.WebGLRenderer: Error creating WebGL context with your selected attributes."):new Error("THREE.WebGLRenderer: Error creating WebGL context.")}$t()}catch(T){throw e.removeEventListener("webglcontextlost",Ut,!1),e.removeEventListener("webglcontextrestored",Zt,!1),e.removeEventListener("webglcontextcreationerror",St,!1),Lt("WebGLRenderer: "+T.message),T}function $t(){Qt=new uy(U),Qt.init(),rt=new dg(U,Qt),pe=new ty(U,Qt,t,rt),ft=new XS(U,Qt),pe.reversedDepthBuffer&&u&&ft.buffers.depth.setReversed(!0),H=U.createFramebuffer(),D=U.createFramebuffer(),k=U.createFramebuffer(),Se=new py(U),Bt=new PS,Ht=new qS(U,Qt,ft,Bt,pe,rt,Se),w=new hy(R),M=new g0(U),lt=new Qv(U,M),B=new dy(U,M,Se,lt),it=new gy(U,B,M,lt,Se),$=new my(U,pe,Ht),J=new ey(Bt),K=new IS(R,w,Qt,pe,lt,J),ot=new $S(R,Bt),pt=new DS,Z=new zS(Qt),P=new Kv(R,w,ft,it,p,l),ht=new WS(R,it,pe),Nt=new KS(U,Se,pe,ft),q=new jv(U,Qt,Se),ut=new fy(U,Qt,Se),Se.programs=K.programs,R.capabilities=pe,R.extensions=Qt,R.properties=Bt,R.renderLists=pt,R.shadowMap=ht,R.state=ft,R.info=Se}_!==on&&(I=new xy(_,e.width,e.height,o,i,r));let st=new $d(R,U);this.xr=st,this.getContext=function(){return U},this.getContextAttributes=function(){return U.getContextAttributes()},this.forceContextLoss=function(){let T=Qt.get("WEBGL_lose_context");T&&T.loseContext()},this.forceContextRestore=function(){let T=Qt.get("WEBGL_lose_context");T&&T.restoreContext()},this.getPixelRatio=function(){return vt},this.setPixelRatio=function(T){T!==void 0&&(vt=T,this.setSize(wt,Ft,!1))},this.getSize=function(T){return T.set(wt,Ft)},this.setSize=function(T,N,V=!0){if(st.isPresenting){gt("WebGLRenderer: Can't change size while VR device is presenting.");return}wt=T,Ft=N,e.width=Math.floor(T*vt),e.height=Math.floor(N*vt),V===!0&&(e.style.width=T+"px",e.style.height=N+"px"),I!==null&&I.setSize(e.width,e.height),this.setViewport(0,0,T,N)},this.getDrawingBufferSize=function(T){return T.set(wt*vt,Ft*vt).floor()},this.setDrawingBufferSize=function(T,N,V){wt=T,Ft=N,vt=V,e.width=Math.floor(T*V),e.height=Math.floor(N*V),this.setViewport(0,0,T,N)},this.setEffects=function(T){if(_===on){Lt("WebGLRenderer: setEffects() requires outputBufferType set to HalfFloatType or FloatType.");return}if(T){for(let N=0;N<T.length;N++)if(T[N].isOutputPass===!0){gt("WebGLRenderer: OutputPass is not needed in setEffects(). Tone mapping and color space conversion are applied automatically.");break}}I.setEffects(T||[])},this.getCurrentViewport=function(T){return T.copy(tt)},this.getViewport=function(T){return T.copy(kt)},this.setViewport=function(T,N,V,O){T.isVector4?kt.set(T.x,T.y,T.z,T.w):kt.set(T,N,V,O),ft.viewport(tt.copy(kt).multiplyScalar(ae()).round())},this.getScissor=function(T){return T.copy(Kt)},this.setScissor=function(T,N,V,O){T.isVector4?Kt.set(T.x,T.y,T.z,T.w):Kt.set(T,N,V,O),ft.scissor(At.copy(Kt).multiplyScalar(ae()).round())},this.getScissorTest=function(){return te},this.setScissorTest=function(T){ft.setScissorTest(te=T)},this.setOpaqueSort=function(T){Ot=T},this.setTransparentSort=function(T){_e=T},this.getClearColor=function(T){return T.copy(P.getClearColor())},this.setClearColor=function(){P.setClearColor(...arguments)},this.getClearAlpha=function(){return P.getClearAlpha()},this.setClearAlpha=function(){P.setClearAlpha(...arguments)},this.clear=function(T=!0,N=!0,V=!0){let O=0;if(T){let z=!1;if(nt!==null){let mt=nt.texture.format;z=m.has(mt)}if(z){let mt=nt.texture.type,Rt=g.has(mt),dt=P.getClearColor(),Mt=P.getClearAlpha(),Pt=dt.r,Xt=dt.g,ie=dt.b;Rt?(v[0]=Pt,v[1]=Xt,v[2]=ie,v[3]=Mt,U.clearBufferuiv(U.COLOR,0,v)):(S[0]=Pt,S[1]=Xt,S[2]=ie,S[3]=Mt,U.clearBufferiv(U.COLOR,0,S))}else O|=U.COLOR_BUFFER_BIT}N&&(O|=U.DEPTH_BUFFER_BIT,this.state.buffers.depth.setMask(!0)),V&&(O|=U.STENCIL_BUFFER_BIT,this.state.buffers.stencil.setMask(4294967295)),O!==0&&U.clear(O)},this.clearColor=function(){this.clear(!0,!1,!1)},this.clearDepth=function(){this.clear(!1,!0,!1)},this.clearStencil=function(){this.clear(!1,!1,!0)},this.setNodesHandler=function(T){T.setRenderer(this),F=T},this.dispose=function(){e.removeEventListener("webglcontextlost",Ut,!1),e.removeEventListener("webglcontextrestored",Zt,!1),e.removeEventListener("webglcontextcreationerror",St,!1),P.dispose(),pt.dispose(),Z.dispose(),Ht.dispose(),Bt.dispose(),w.dispose(),it.dispose(),B.dispose(),lt.dispose(),Nt.dispose(),K.dispose(),st.dispose(),st.removeEventListener("sessionstart",tf),st.removeEventListener("sessionend",ef),Bi.stop()};function Ut(T){T.preventDefault(),Qs("WebGLRenderer: Context Lost."),L=!0}function Zt(){Qs("WebGLRenderer: Context Restored."),L=!1;let T=Se.autoReset,N=ht.enabled,V=ht.autoUpdate,O=ht.needsUpdate,z=ht.type;$t(),Se.autoReset=T,ht.enabled=N,ht.autoUpdate=V,ht.needsUpdate=O,ht.type=z}function St(T){Lt("WebGLRenderer: A WebGL context could not be created. Reason: ",T.statusMessage)}function de(T){let N=T.target;N.removeEventListener("dispose",de),Fe(N)}function Fe(T){mi(T),Bt.remove(T)}function mi(T){let N=Bt.get(T).programs;N!==void 0&&(N.forEach(function(V){K.releaseProgram(V)}),T.isShaderMaterial&&K.releaseShaderCache(T))}this.renderBufferDirect=function(T,N,V,O,z,mt){N===null&&(N=ee);let Rt=z.isMesh&&z.matrixWorld.determinantAffine()<0,dt=gg(T,N,V,O,z);ft.setMaterial(O,Rt);let Mt=V.index,Pt=1;if(O.wireframe===!0){if(Mt=B.getWireframeAttribute(V),Mt===void 0)return;Pt=2}let Xt=V.drawRange,ie=V.attributes.position,Ct=Xt.start*Pt,se=(Xt.start+Xt.count)*Pt;mt!==null&&(Ct=Math.max(Ct,mt.start*Pt),se=Math.min(se,(mt.start+mt.count)*Pt)),Mt!==null?(Ct=Math.max(Ct,0),se=Math.min(se,Mt.count)):ie!=null&&(Ct=Math.max(Ct,0),se=Math.min(se,ie.count));let Re=se-Ct;if(Re<0||Re===1/0)return;lt.setup(z,O,dt,V,Mt);let ge,me=q;if(Mt!==null&&(ge=M.get(Mt),me=ut,me.setIndex(ge)),z.isMesh)O.wireframe===!0?(ft.setLineWidth(O.wireframeLinewidth*ae()),me.setMode(U.LINES)):me.setMode(U.TRIANGLES);else if(z.isLine){let He=O.linewidth;He===void 0&&(He=1),ft.setLineWidth(He*ae()),z.isLineSegments?me.setMode(U.LINES):z.isLineLoop?me.setMode(U.LINE_LOOP):me.setMode(U.LINE_STRIP)}else z.isPoints?me.setMode(U.POINTS):z.isSprite&&me.setMode(U.TRIANGLES);if(z.isBatchedMesh)if(Qt.get("WEBGL_multi_draw"))me.renderMultiDraw(z._multiDrawStarts,z._multiDrawCounts,z._multiDrawCount);else{let He=z._multiDrawStarts,It=z._multiDrawCounts,je=z._multiDrawCount,le=Mt?M.get(Mt).bytesPerElement:1,zi=Bt.get(O).currentProgram.getUniforms();for(let We=0;We<je;We++)zi.setValue(U,"_gl_DrawID",We),me.render(He[We]/le,It[We])}else if(z.isInstancedMesh)me.renderInstances(Ct,Re,z.count);else if(V.isInstancedBufferGeometry){let He=V._maxInstanceCount!==void 0?V._maxInstanceCount:1/0,It=Math.min(V.instanceCount,He);me.renderInstances(Ct,Re,It)}else me.render(Ct,Re)};function jd(T,N,V,O){F!==null&&T.isNodeMaterial&&F.setObject(O,T),at===!0&&J.setState(T,V,!1),T.transparent===!0&&T.side===Fn&&T.forceSinglePass===!1?(T.side=Ke,T.needsUpdate=!0,Wr(T,N,O),T.side=fi,T.needsUpdate=!0,Wr(T,N,O),T.side=Fn):Wr(T,N,O)}this.compile=function(T,N,V=null){V===null&&(V=T),F!==null&&F.renderStart(T,N,V),E=Z.get(V),E.init(N),b.push(E),V.traverseVisible(function(z){z.isLight&&z.layers.test(N.layers)&&(E.pushLight(z),z.castShadow&&E.pushShadow(z))}),T!==V&&T.traverseVisible(function(z){z.isLight&&z.layers.test(N.layers)&&(E.pushLight(z),z.castShadow&&E.pushShadow(z))}),E.setupLights(),F!==null&&F.updateLights(E.state.lightsArray),Et=this.localClippingEnabled,at=J.init(this.clippingPlanes,Et),at===!0&&J.setGlobalState(this.clippingPlanes,N),F!==null&&ht.render(E.state.shadowsArray,V,N);let O=new Set;return T.traverse(function(z){if(!(z.isMesh||z.isPoints||z.isLine||z.isSprite))return;let mt=z.material;if(mt)if(Array.isArray(mt))for(let Rt=0;Rt<mt.length;Rt++){let dt=mt[Rt];jd(dt,V,N,z),O.add(dt)}else jd(mt,V,N,z),O.add(mt)}),E=b.pop(),F!==null&&F.renderEnd(),O},this.compileAsync=function(T,N,V=null){let O=this.compile(T,N,V);return new Promise(z=>{function mt(){if(O.forEach(function(Rt){let Mt=Bt.get(Rt).currentProgram;(Mt===void 0||Mt.isReady())&&O.delete(Rt)}),O.size===0){z(T);return}setTimeout(mt,10)}Qt.get("KHR_parallel_shader_compile")!==null?mt():setTimeout(mt,10)})};let Zh=null;function pg(T){Zh&&Zh(T)}function tf(){Bi.stop()}function ef(){Bi.start()}let Bi=new ng;Bi.setAnimationLoop(pg),typeof self<"u"&&Bi.setContext(self),this.setAnimationLoop=function(T){Zh=T,st.setAnimationLoop(T),T===null?Bi.stop():Bi.start()},st.addEventListener("sessionstart",tf),st.addEventListener("sessionend",ef),this.render=function(T,N){if(N!==void 0&&N.isCamera!==!0){Lt("WebGLRenderer.render: camera is not an instance of THREE.Camera.");return}if(L===!0)return;F!==null&&F.renderStart(T,N);let V=st.enabled===!0&&st.isPresenting===!0,O=I!==null&&(nt===null||V)&&I.begin(R,nt);if(T.matrixWorldAutoUpdate===!0&&T.updateMatrixWorld(),N.parent===null&&N.matrixWorldAutoUpdate===!0&&N.updateMatrixWorld(),st.enabled===!0&&st.isPresenting===!0&&(I===null||I.isCompositing()===!1)&&(st.cameraAutoUpdate===!0&&st.updateCamera(N),N=st.getCamera()),T.isScene===!0&&T.onBeforeRender(R,T,N,nt),E=Z.get(T,b.length),E.init(N),E.state.textureUnits=Ht.getTextureUnits(),b.push(E),_t.multiplyMatrices(N.projectionMatrix,N.matrixWorldInverse),N.isArrayCamera?ct.setFromArrayCamera(N):j.setFromProjectionMatrix(_t,hn,N.reversedDepth),Et=this.localClippingEnabled,at=J.init(this.clippingPlanes,Et),A=pt.get(T,x.length),A.init(),x.push(A),this.info.render.frame++,st.enabled===!0&&st.isPresenting===!0){let Rt=R.xr.getDepthSensingMesh();Rt!==null&&Jh(Rt,N,-1/0,R.sortObjects)}Jh(T,N,0,R.sortObjects),A.finish(),F!==null&&F.updateLights(E.state.lightsArray),R.sortObjects===!0&&A.sort(Ot,_e),ne=st.enabled===!1||st.isPresenting===!1||st.hasDepthSensing()===!1,ne&&P.addToRenderList(A,T),this.info.autoReset===!0&&this.info.reset(),at===!0&&J.beginShadows();let z=E.state.shadowsArray;if(ht.render(z,T,N),at===!0&&J.endShadows(),(O&&I.hasRenderPass())===!1){let Rt=A.opaque,dt=A.transmissive;if(E.setupLights(),N.isArrayCamera){let Mt=N.cameras;if(dt.length>0)for(let Pt=0,Xt=Mt.length;Pt<Xt;Pt++){let ie=Mt[Pt];sf(Rt,dt,T,ie)}ne&&P.render(T);for(let Pt=0,Xt=Mt.length;Pt<Xt;Pt++){let ie=Mt[Pt];nf(A,T,ie,ie.viewport)}}else dt.length>0&&sf(Rt,dt,T,N),ne&&P.render(T),nf(A,T,N)}nt!==null&&G===0&&(Ht.updateMultisampleRenderTarget(nt),Ht.updateRenderTargetMipmap(nt)),O&&I.end(R),T.isScene===!0&&T.onAfterRender(R,T,N),lt.resetDefaultState(),W=-1,Q=null,b.pop(),b.length>0?(E=b[b.length-1],Ht.setTextureUnits(E.state.textureUnits),at===!0&&J.setGlobalState(R.clippingPlanes,E.state.camera)):E=null,x.pop(),x.length>0?A=x[x.length-1]:A=null,F!==null&&F.renderEnd()};function Jh(T,N,V,O){if(T.visible===!1)return;if(T.layers.test(N.layers)){if(T.isGroup)V=T.renderOrder;else if(T.isLOD)T.autoUpdate===!0&&T.update(N);else if(T.isLight)E.pushLight(T),T.castShadow&&E.pushShadow(T);else if(T.isSprite){let Rt=N.isArrayCamera?ct:j;if(!T.frustumCulled||T.intersectsFrustum(Rt)){O&&Dt.setFromMatrixPosition(T.matrixWorld).applyMatrix4(_t);let dt=it.update(T),Mt=T.material;Mt.visible&&A.push(T,dt,Mt,V,Dt.z,null,N)}}else if(T.isMesh||T.isLine||T.isPoints){let Rt=N.isArrayCamera?ct:j;if(!T.frustumCulled||T.intersectsFrustum(Rt)){let dt=it.update(T),Mt=T.material;if(O&&(T.boundingSphere!==void 0?(T.boundingSphere===null&&T.computeBoundingSphere(),Dt.copy(T.boundingSphere.center)):(dt.boundingSphere===null&&dt.computeBoundingSphere(),Dt.copy(dt.boundingSphere.center)),Dt.applyMatrix4(T.matrixWorld).applyMatrix4(_t)),Array.isArray(Mt)){let Pt=dt.groups;for(let Xt=0,ie=Pt.length;Xt<ie;Xt++){let Ct=Pt[Xt],se=Mt[Ct.materialIndex];se&&se.visible&&A.push(T,dt,se,V,Dt.z,Ct,N)}}else Mt.visible&&A.push(T,dt,Mt,V,Dt.z,null,N)}}}let mt=T.children;for(let Rt=0,dt=mt.length;Rt<dt;Rt++)Jh(mt[Rt],N,V,O)}function nf(T,N,V,O){let{opaque:z,transmissive:mt,transparent:Rt}=T;E.setupLightsView(V),at===!0&&J.setGlobalState(R.clippingPlanes,V),O&&ft.viewport(tt.copy(O)),z.length>0&&gl(z,N,V),mt.length>0&&gl(mt,N,V),Rt.length>0&&gl(Rt,N,V),ft.buffers.depth.setTest(!0),ft.buffers.depth.setMask(!0),ft.buffers.color.setMask(!0),ft.setPolygonOffset(!1)}function sf(T,N,V,O){if((V.isScene===!0?V.overrideMaterial:null)!==null)return;if(E.state.transmissionRenderTarget[O.id]===void 0){let Ct=Qt.has("EXT_color_buffer_half_float")||Qt.has("EXT_color_buffer_float");E.state.transmissionRenderTarget[O.id]=new $e(1,1,{generateMipmaps:!0,type:Ct?En:on,minFilter:Tn,samples:Math.max(4,pe.samples),stencilBuffer:r,resolveDepthBuffer:!1,resolveStencilBuffer:!1,storeMultisampledDepthBuffer:!1,storeMultisampledStencilBuffer:!1,colorSpace:jt.workingColorSpace})}let mt=E.state.transmissionRenderTarget[O.id],Rt=O.viewport||tt;mt.setSize(Rt.z*R.transmissionResolutionScale,Rt.w*R.transmissionResolutionScale);let dt=R.getRenderTarget(),Mt=R.getActiveCubeFace(),Pt=R.getActiveMipmapLevel();R.setRenderTarget(mt),R.getClearColor(Y),xt=R.getClearAlpha(),xt<1&&R.setClearColor(16777215,.5),R.clear(),ne&&P.render(V);let Xt=R.toneMapping;R.toneMapping=On;let ie=O.viewport;if(O.viewport!==void 0&&(O.viewport=void 0),E.setupLightsView(O),at===!0&&J.setGlobalState(R.clippingPlanes,O),gl(T,V,O),Ht.updateMultisampleRenderTarget(mt),Ht.updateRenderTargetMipmap(mt),Qt.has("WEBGL_multisampled_render_to_texture")===!1){let Ct=!1;for(let se=0,Re=N.length;se<Re;se++){let ge=N[se],{object:me,geometry:He,material:It,group:je}=ge;if(It.side===Fn&&me.layers.test(O.layers)){let le=It.side;It.side=Ke,It.needsUpdate=!0,rf(me,V,O,He,It,je),It.side=le,It.needsUpdate=!0,Ct=!0}}Ct===!0&&(Ht.updateMultisampleRenderTarget(mt),Ht.updateRenderTargetMipmap(mt))}R.setRenderTarget(dt,Mt,Pt),R.setClearColor(Y,xt),ie!==void 0&&(O.viewport=ie),R.toneMapping=Xt}function gl(T,N,V){let O=N.isScene===!0?N.overrideMaterial:null;for(let z=0,mt=T.length;z<mt;z++){let Rt=T[z],{object:dt,geometry:Mt,group:Pt}=Rt,Xt=Rt.material;Xt.allowOverride===!0&&O!==null&&(Xt=O),dt.layers.test(V.layers)&&rf(dt,N,V,Mt,Xt,Pt)}}function rf(T,N,V,O,z,mt){F!==null&&z.isNodeMaterial&&F.setObject(T,z),T.onBeforeRender(R,N,V,O,z,mt),T.modelViewMatrix.multiplyMatrices(V.matrixWorldInverse,T.matrixWorld),T.normalMatrix.getNormalMatrix(T.modelViewMatrix),z.onBeforeRender(R,N,V,O,T,mt),z.transparent===!0&&z.side===Fn&&z.forceSinglePass===!1?(z.side=Ke,z.needsUpdate=!0,R.renderBufferDirect(V,N,O,z,T,mt),z.side=fi,z.needsUpdate=!0,R.renderBufferDirect(V,N,O,z,T,mt),z.side=Fn):R.renderBufferDirect(V,N,O,z,T,mt),T.onAfterRender(R,N,V,O,z,mt)}function af(T){let N=0;for(let V of T)V.texture!==null&&N++;return N}function Wr(T,N,V){N.isScene!==!0&&(N=ee);let O=Bt.get(T),z=E.state.lights,mt=E.state.shadowsArray,Rt=z.state.version,dt=K.getParameters(T,z.state,mt,N,V,E.state.lightProbeGridArray),Mt=K.getProgramCacheKey(dt),Pt=O.programs;O.environment=T.isMeshStandardMaterial||T.isMeshLambertMaterial||T.isMeshPhongMaterial?N.environment:null,O.fog=N.fog;let Xt=T.isMeshStandardMaterial||T.isMeshLambertMaterial&&!T.envMap||T.isMeshPhongMaterial&&!T.envMap;O.envMap=w.get(T.envMap||O.environment,Xt),O.envMapRotation=O.environment!==null&&T.envMap===null?N.environmentRotation:T.envMapRotation,Pt===void 0&&(T.addEventListener("dispose",de),Pt=new Map,O.programs=Pt,O.programVariants=new Map);let ie=Pt.get(Mt);if(ie!==void 0){if(O.currentProgram===ie&&O.lightsStateVersion===Rt)return lf(T,dt),ie}else dt.uniforms=K.getUniforms(T),F!==null&&T.isNodeMaterial&&F.build(T,V,dt),T.onBeforeCompile(dt,R),ie=K.acquireProgram(dt,Mt),Pt.set(Mt,ie),O.uniforms=dt.uniforms;let Ct=O.uniforms;return(!T.isShaderMaterial&&!T.isRawShaderMaterial||T.clipping===!0)&&(Ct.clippingPlanes=J.uniform),lf(T,dt),O.needsLights=xg(T),O.lightsStateVersion=Rt,O.needsLights&&(Ct.ambientLightColor.value=z.state.ambient,Ct.lightProbe.value=z.state.probe,Ct.sunLights.value=z.state.sun,Ct.sunLightShadows.value=z.state.sunShadow,Ct.directionalLights.value=z.state.directional,Ct.directionalLightShadows.value=z.state.directionalShadow,Ct.spotLights.value=z.state.spot,Ct.spotLightShadows.value=z.state.spotShadow,Ct.rectAreaLights.value=z.state.rectArea,Ct.ltc_1.value=z.state.rectAreaLTC1,Ct.ltc_2.value=z.state.rectAreaLTC2,Ct.pointLights.value=z.state.point,Ct.pointLightShadows.value=z.state.pointShadow,Ct.hemisphereLights.value=z.state.hemi,Ct.sunShadowMatrix.value=z.state.sunShadowMatrix,Ct.sunShadowCascade.value=z.state.sunShadowCascade,Ct.directionalShadowMatrix.value=z.state.directionalShadowMatrix,Ct.spotLightMatrix.value=z.state.spotLightMatrix,Ct.spotLightMap.value=z.state.spotLightMap,Ct.pointShadowMatrix.value=z.state.pointShadowMatrix),O.numLightProbeGrids=af(E.state.lightProbeGridArray),O.currentProgram=ie,O.uniformsList=null,ie}function mg(T,N,V,O,z){let mt=Bt.get(T),Rt=mt.currentProgram.id+","+O+","+z,dt=mt.programVariants.get(Rt);return dt===void 0?(dt=Wr(T,N,V),mt.programVariants.set(Rt,dt)):(mt.currentProgram=dt,mt.uniformsList=null,mt.outputColorSpace=O,mt.toneMapping=z),dt}function of(T){if(T.uniformsList===null){let N=T.currentProgram.getUniforms();T.uniformsList=Gr.seqWithValue(N.seq,T.uniforms)}return T.uniformsList}function lf(T,N){let V=Bt.get(T);V.outputColorSpace=N.outputColorSpace,V.batching=N.batching,V.batchingColor=N.batchingColor,V.instancing=N.instancing,V.instancingColor=N.instancingColor,V.instancingMorph=N.instancingMorph,V.skinning=N.skinning,V.morphTargets=N.morphTargets,V.morphNormals=N.morphNormals,V.morphColors=N.morphColors,V.morphTargetsCount=N.morphTargetsCount,V.numClippingPlanes=N.numClippingPlanes,V.numIntersection=N.numClipIntersection,V.vertexAlphas=N.vertexAlphas,V.vertexTangents=N.vertexTangents,V.toneMapping=N.toneMapping}function gg(T,N,V,O,z){N.isScene!==!0&&(N=ee),Ht.resetTextureUnits();let mt=N.fog,Rt=O.isMeshStandardMaterial||O.isMeshLambertMaterial||O.isMeshPhongMaterial?N.environment:null,dt=nt===null?R.outputColorSpace:nt.isXRRenderTarget===!0?nt.texture.colorSpace:jt.workingColorSpace,Mt=O.isMeshStandardMaterial||O.isMeshLambertMaterial&&!O.envMap||O.isMeshPhongMaterial&&!O.envMap,Pt=w.get(O.envMap||Rt,Mt),Xt=O.vertexColors===!0&&!!V.attributes.color&&V.attributes.color.itemSize===4,ie=!!V.attributes.tangent&&(!!O.normalMap||O.anisotropy>0),Ct=!!V.morphAttributes.position,se=!!V.morphAttributes.normal,Re=!!V.morphAttributes.color,ge=On;O.toneMapped&&(nt===null||nt.isXRRenderTarget===!0)&&(ge=R.toneMapping);let me=V.morphAttributes.position||V.morphAttributes.normal||V.morphAttributes.color,He=me!==void 0?me.length:0,It=Bt.get(O),je=E.state.lights;if(at===!0&&(Et===!0||T!==Q)){let ve=T===Q&&O.id===W;J.setState(O,T,ve)}let le=!1,zi=!1;O.version===It.__version?It.needsLights&&It.lightsStateVersion!==je.state.version||z.isBatchedMesh&&It.batching===!1||!z.isBatchedMesh&&It.batching===!0||z.isBatchedMesh&&It.batchingColor===!0&&z._colorsTexture===null||z.isBatchedMesh&&It.batchingColor===!1&&z._colorsTexture!==null||z.isInstancedMesh&&It.instancing===!1||!z.isInstancedMesh&&It.instancing===!0||z.isSkinnedMesh&&It.skinning===!1||!z.isSkinnedMesh&&It.skinning===!0||z.isInstancedMesh&&It.instancingColor===!0&&z.instanceColor===null||z.isInstancedMesh&&It.instancingColor===!1&&z.instanceColor!==null||z.isInstancedMesh&&It.instancingMorph===!0&&z.morphTexture===null||z.isInstancedMesh&&It.instancingMorph===!1&&z.morphTexture!==null||It.envMap!==Pt||O.fog===!0&&It.fog!==mt||It.numClippingPlanes!==void 0&&(It.numClippingPlanes!==J.numPlanes||It.numIntersection!==J.numIntersection)||It.vertexAlphas!==Xt||It.vertexTangents!==ie||It.morphTargets!==Ct||It.morphNormals!==se||It.morphColors!==Re||It.morphTargetsCount!==He||It.numLightProbeGrids!==af(E.state.lightProbeGridArray)?le=!0:(It.outputColorSpace!==dt||It.toneMapping!==ge)&&(zi=!0):(le=!0,It.__version=O.version);let We=It.currentProgram;(le===!0||zi===!0)&&(We=zi===!0?mg(O,N,z,dt,ge):Wr(O,N,z),F&&O.isNodeMaterial&&F.onUpdateProgram(O,We,It));let _l=!1,gi=!1,ki=!1,re=We.getUniforms(),Ge=It.uniforms;if(ft.useProgram(We.program)&&(_l=!0,gi=!0,ki=!0),O.id!==W&&(W=O.id,gi=!0),_l||Q!==T){ft.buffers.depth.getReversed()&&T.reversedDepth!==!0&&(T._reversedDepth=!0,T.updateProjectionMatrix()),re.setValue(U,"projectionMatrix",T.projectionMatrix),re.setValue(U,"viewMatrix",T.matrixWorldInverse);let Oe=re.map.cameraPosition;Oe!==void 0&&Oe.setValue(U,qt.setFromMatrixPosition(T.matrixWorld)),pe.logarithmicDepthBuffer&&re.setValue(U,"logDepthBufFC",2/(Math.log(T.far+1)/Math.LN2)),(O.isMeshPhongMaterial||O.isMeshToonMaterial||O.isMeshLambertMaterial||O.isMeshBasicMaterial||O.isMeshStandardMaterial||O.isShaderMaterial)&&re.setValue(U,"isOrthographic",T.isOrthographicCamera===!0),Q!==T&&(Q=T,gi=!0,ki=!0)}if(It.needsLights&&(je.state.sunShadowMap.length>0&&re.setValue(U,"sunShadowMap",je.state.sunShadowMap,Ht),je.state.directionalShadowMap.length>0&&re.setValue(U,"directionalShadowMap",je.state.directionalShadowMap,Ht),je.state.spotShadowMap.length>0&&re.setValue(U,"spotShadowMap",je.state.spotShadowMap,Ht),je.state.pointShadowMap.length>0&&re.setValue(U,"pointShadowMap",je.state.pointShadowMap,Ht)),z.isSkinnedMesh){re.setOptional(U,z,"bindMatrix"),re.setOptional(U,z,"bindMatrixInverse");let ve=z.skeleton;ve&&(ve.boneTexture===null&&ve.computeBoneTexture(),re.setValue(U,"boneTexture",ve.boneTexture,Ht))}z.isBatchedMesh&&(re.setOptional(U,z,"batchingTexture"),re.setValue(U,"batchingTexture",z._matricesTexture,Ht),re.setOptional(U,z,"batchingIdTexture"),re.setValue(U,"batchingIdTexture",z._indirectTexture,Ht),re.setOptional(U,z,"batchingColorTexture"),z._colorsTexture!==null&&re.setValue(U,"batchingColorTexture",z._colorsTexture,Ht));let wn=V.morphAttributes;if((wn.position!==void 0||wn.normal!==void 0||wn.color!==void 0)&&$.update(z,V,We),(gi||It.receiveShadow!==z.receiveShadow)&&(It.receiveShadow=z.receiveShadow,re.setValue(U,"receiveShadow",z.receiveShadow)),(O.isMeshStandardMaterial||O.isMeshLambertMaterial||O.isMeshPhongMaterial)&&O.envMap===null&&N.environment!==null&&(Ge.envMapIntensity.value=N.environmentIntensity),Ge.dfgLUT!==void 0&&(Ge.dfgLUT.value=jS()),gi){if(re.setValue(U,"toneMappingExposure",R.toneMappingExposure),It.needsLights&&_g(Ge,ki),mt&&O.fog===!0&&ot.refreshFogUniforms(Ge,mt),ot.refreshMaterialUniforms(Ge,O,vt,Ft,E.state.transmissionRenderTarget[T.id]),It.needsLights&&It.numLightProbeGrids>0){let ve=y,Oe=0;for(let jn of E.state.lightProbeGridArray)jn.texture!==null&&(ve.textures[Oe]=jn.texture,ve.min[Oe]=jn.boundingBox.min,ve.max[Oe]=jn.boundingBox.max,ve.resolution[Oe]=jn.resolution,Oe++);for(let jn in ve)ve[jn].length=Oe;Ge.probesSH.value=ve.textures,Ge.probesMin.value=ve.min,Ge.probesMax.value=ve.max,Ge.probesResolution.value=ve.resolution}Gr.upload(U,of(It),Ge,Ht)}if(O.isShaderMaterial&&O.uniformsNeedUpdate===!0&&(Gr.upload(U,of(It),Ge,Ht),O.uniformsNeedUpdate=!1),O.isSpriteMaterial&&re.setValue(U,"center",z.center),re.setValue(U,"modelViewMatrix",z.modelViewMatrix),re.setValue(U,"normalMatrix",z.normalMatrix),re.setValue(U,"modelMatrix",z.matrixWorld),O.uniformsGroups!==void 0){let ve=O.uniformsGroups;for(let Oe=0,jn=ve.length;Oe<jn;Oe++){let hf=ve[Oe];Nt.update(hf,We),Nt.bind(hf,We)}}return We}function _g(T,N){T.ambientLightColor.needsUpdate=N,T.lightProbe.needsUpdate=N,T.sunLights.needsUpdate=N,T.sunLightShadows.needsUpdate=N,T.directionalLights.needsUpdate=N,T.directionalLightShadows.needsUpdate=N,T.pointLights.needsUpdate=N,T.pointLightShadows.needsUpdate=N,T.spotLights.needsUpdate=N,T.spotLightShadows.needsUpdate=N,T.rectAreaLights.needsUpdate=N,T.hemisphereLights.needsUpdate=N}function xg(T){return T.isMeshLambertMaterial||T.isMeshToonMaterial||T.isMeshPhongMaterial||T.isMeshStandardMaterial||T.isShadowMaterial||T.isShaderMaterial&&T.lights===!0}this.getActiveCubeFace=function(){return X},this.getActiveMipmapLevel=function(){return G},this.getRenderTarget=function(){return nt},this.setRenderTargetTextures=function(T,N,V){let O=Bt.get(T);O.__autoAllocateDepthBuffer=T.resolveDepthBuffer===!1,O.__autoAllocateDepthBuffer===!1&&(O.__useRenderToTexture=!1),Bt.get(T.texture).__webglTexture=N,Bt.get(T.depthTexture).__webglTexture=O.__autoAllocateDepthBuffer?void 0:V,O.__hasExternalTextures=!0},this.setRenderTargetFramebuffer=function(T,N){let V=Bt.get(T);V.__webglFramebuffer=N,V.__useDefaultFramebuffer=N===void 0},this.setRenderTarget=function(T,N=0,V=0){nt=T,X=N,G=V;let O=null,z=!1,mt=!1;if(T){let dt=Bt.get(T);if(dt.__useDefaultFramebuffer!==void 0){ft.bindFramebuffer(U.FRAMEBUFFER,dt.__webglFramebuffer),tt.copy(T.viewport),At.copy(T.scissor),zt=T.scissorTest,ft.viewport(tt),ft.scissor(At),ft.setScissorTest(zt),W=-1;return}else if(dt.__webglFramebuffer===void 0)Ht.setupRenderTarget(T);else if(dt.__hasExternalTextures)Ht.rebindTextures(T,Bt.get(T.texture).__webglTexture,Bt.get(T.depthTexture).__webglTexture);else if(T.depthBuffer){let Xt=T.depthTexture;if(dt.__boundDepthTexture!==Xt){if(Xt!==null&&Bt.has(Xt)&&(T.width!==Xt.image.width||T.height!==Xt.image.height))throw new Error("THREE.WebGLRenderer: Attached DepthTexture is initialized to the incorrect size.");Ht.setupDepthRenderbuffer(T)}}let Mt=T.texture;(Mt.isData3DTexture||Mt.isDataArrayTexture||Mt.isCompressedArrayTexture)&&(mt=!0);let Pt=Bt.get(T).__webglFramebuffer;T.isWebGLCubeRenderTarget?(Array.isArray(Pt[N])?O=Pt[N][V]:O=Pt[N],z=!0):T.samples>0&&Ht.useMultisampledRTT(T)===!1?O=Bt.get(T).__webglMultisampledFramebuffer:Array.isArray(Pt)?O=Pt[V]:O=Pt,tt.copy(T.viewport),At.copy(T.scissor),zt=T.scissorTest}else tt.copy(kt).multiplyScalar(vt).floor(),At.copy(Kt).multiplyScalar(vt).floor(),zt=te;if(V!==0&&(O=H),ft.bindFramebuffer(U.FRAMEBUFFER,O)&&ft.drawBuffers(T,O),ft.viewport(tt),ft.scissor(At),ft.setScissorTest(zt),z){let dt=Bt.get(T.texture);U.framebufferTexture2D(U.FRAMEBUFFER,U.COLOR_ATTACHMENT0,U.TEXTURE_CUBE_MAP_POSITIVE_X+N,dt.__webglTexture,V)}else if(mt){let dt=N;for(let Mt=0;Mt<T.textures.length;Mt++){let Pt=Bt.get(T.textures[Mt]);U.framebufferTextureLayer(U.FRAMEBUFFER,U.COLOR_ATTACHMENT0+Mt,Pt.__webglTexture,V,dt)}}else if(T!==null&&V!==0){let dt=Bt.get(T.texture);U.framebufferTexture2D(U.FRAMEBUFFER,U.COLOR_ATTACHMENT0,U.TEXTURE_2D,dt.__webglTexture,V)}W=-1};function cf(T){let N=Bt.get(T);return(N.__readFormat!==T.format||N.__readType!==T.type)&&(N.__readFormat=T.format,N.__readType=T.type,N.__formatReadable=pe.textureFormatReadable(T.format),N.__typeReadable=pe.textureTypeReadable(T.type)),N}this.readRenderTargetPixels=function(T,N,V,O,z,mt,Rt,dt=0){if(!(T&&T.isWebGLRenderTarget)){Lt("WebGLRenderer.readRenderTargetPixels: renderTarget is not THREE.WebGLRenderTarget.");return}let Mt=Bt.get(T).__webglFramebuffer;if(T.isWebGLCubeRenderTarget&&Rt!==void 0&&(Mt=Mt[Rt],Array.isArray(Mt)&&(Mt=Mt[0])),Mt){ft.bindFramebuffer(U.FRAMEBUFFER,Mt);try{let Pt=T.textures[dt],Xt=Pt.format,ie=Pt.type;T.textures.length>1&&U.readBuffer(U.COLOR_ATTACHMENT0+dt);let Ct=cf(Pt);if(Ct.__formatReadable===!1){Lt("WebGLRenderer.readRenderTargetPixels: renderTarget is not in RGBA or implementation defined format.");return}if(Ct.__typeReadable===!1){Lt("WebGLRenderer.readRenderTargetPixels: renderTarget is not in UnsignedByteType or implementation defined type.");return}N>=0&&N<=T.width-O&&V>=0&&V<=T.height-z&&U.readPixels(N,V,O,z,rt.convert(Xt),rt.convert(ie),mt)}finally{let Pt=nt!==null?Bt.get(nt).__webglFramebuffer:null;ft.bindFramebuffer(U.FRAMEBUFFER,Pt)}}},this.readRenderTargetPixelsAsync=async function(T,N,V,O,z,mt,Rt,dt=0){if(!(T&&T.isWebGLRenderTarget))throw new Error("THREE.WebGLRenderer.readRenderTargetPixels: renderTarget is not THREE.WebGLRenderTarget.");let Mt=Bt.get(T).__webglFramebuffer;if(T.isWebGLCubeRenderTarget&&Rt!==void 0&&(Mt=Mt[Rt],Array.isArray(Mt)&&(Mt=Mt[0])),Mt)if(N>=0&&N<=T.width-O&&V>=0&&V<=T.height-z){ft.bindFramebuffer(U.FRAMEBUFFER,Mt);let Pt=T.textures[dt],Xt=Pt.format,ie=Pt.type;T.textures.length>1&&U.readBuffer(U.COLOR_ATTACHMENT0+dt);let Ct=cf(Pt);if(Ct.__formatReadable===!1)throw new Error("THREE.WebGLRenderer.readRenderTargetPixelsAsync: renderTarget is not in RGBA or implementation defined format.");if(Ct.__typeReadable===!1)throw new Error("THREE.WebGLRenderer.readRenderTargetPixelsAsync: renderTarget is not in UnsignedByteType or implementation defined type.");let se=U.createBuffer();U.bindBuffer(U.PIXEL_PACK_BUFFER,se),U.bufferData(U.PIXEL_PACK_BUFFER,mt.byteLength,U.STREAM_READ),U.readPixels(N,V,O,z,rt.convert(Xt),rt.convert(ie),0),U.bindBuffer(U.PIXEL_PACK_BUFFER,null);let Re=nt!==null?Bt.get(nt).__webglFramebuffer:null;ft.bindFramebuffer(U.FRAMEBUFFER,Re);let ge=U.fenceSync(U.SYNC_GPU_COMMANDS_COMPLETE,0);return U.flush(),await Mm(U,ge,4),U.bindBuffer(U.PIXEL_PACK_BUFFER,se),U.getBufferSubData(U.PIXEL_PACK_BUFFER,0,mt),U.bindBuffer(U.PIXEL_PACK_BUFFER,null),U.deleteBuffer(se),U.deleteSync(ge),mt}else throw new Error("THREE.WebGLRenderer.readRenderTargetPixelsAsync: requested read bounds are out of range.")},this.copyFramebufferToTexture=function(T,N=null,V=0){let O=Math.pow(2,-V),z=Math.floor(T.image.width*O),mt=Math.floor(T.image.height*O),Rt=N!==null?N.x:0,dt=N!==null?N.y:0;Ht.setTexture2D(T,0),U.copyTexSubImage2D(U.TEXTURE_2D,V,0,0,Rt,dt,z,mt),ft.unbindTexture()},this.copyTextureToTexture=function(T,N,V=null,O=null,z=0,mt=0){let Rt,dt,Mt,Pt,Xt,ie,Ct,se,Re,ge=T.isCompressedTexture?T.mipmaps[mt]:T.image;if(V!==null)Rt=V.max.x-V.min.x,dt=V.max.y-V.min.y,Mt=V.isBox3?V.max.z-V.min.z:1,Pt=V.min.x,Xt=V.min.y,ie=V.isBox3?V.min.z:0;else{let re=Math.pow(2,-z);Rt=Math.floor(ge.width*re),dt=Math.floor(ge.height*re),T.isDataArrayTexture?Mt=ge.depth:T.isData3DTexture?Mt=Math.floor(ge.depth*re):Mt=1,Pt=0,Xt=0,ie=0}O!==null?(Ct=O.x,se=O.y,Re=O.z):(Ct=0,se=0,Re=0);let me=rt.convert(N.format),He=rt.convert(N.type),It;N.isData3DTexture?(Ht.setTexture3D(N,0),It=U.TEXTURE_3D):N.isDataArrayTexture||N.isCompressedArrayTexture?(Ht.setTexture2DArray(N,0),It=U.TEXTURE_2D_ARRAY):(Ht.setTexture2D(N,0),It=U.TEXTURE_2D),ft.activeTexture(U.TEXTURE0),ft.pixelStorei(U.UNPACK_FLIP_Y_WEBGL,N.flipY),ft.pixelStorei(U.UNPACK_PREMULTIPLY_ALPHA_WEBGL,N.premultiplyAlpha),ft.pixelStorei(U.UNPACK_ALIGNMENT,N.unpackAlignment);let je=ft.getParameter(U.UNPACK_ROW_LENGTH),le=ft.getParameter(U.UNPACK_IMAGE_HEIGHT),zi=ft.getParameter(U.UNPACK_SKIP_PIXELS),We=ft.getParameter(U.UNPACK_SKIP_ROWS),_l=ft.getParameter(U.UNPACK_SKIP_IMAGES);ft.pixelStorei(U.UNPACK_ROW_LENGTH,ge.width),ft.pixelStorei(U.UNPACK_IMAGE_HEIGHT,ge.height),ft.pixelStorei(U.UNPACK_SKIP_PIXELS,Pt),ft.pixelStorei(U.UNPACK_SKIP_ROWS,Xt),ft.pixelStorei(U.UNPACK_SKIP_IMAGES,ie);let gi=T.isDataArrayTexture||T.isData3DTexture,ki=N.isDataArrayTexture||N.isData3DTexture;if(T.isDepthTexture){let re=Bt.get(T),Ge=Bt.get(N),wn=Bt.get(re.__renderTarget),ve=Bt.get(Ge.__renderTarget);ft.bindFramebuffer(U.READ_FRAMEBUFFER,wn.__webglFramebuffer),ft.bindFramebuffer(U.DRAW_FRAMEBUFFER,ve.__webglFramebuffer);for(let Oe=0;Oe<Mt;Oe++)gi&&(U.framebufferTextureLayer(U.READ_FRAMEBUFFER,U.COLOR_ATTACHMENT0,Bt.get(T).__webglTexture,z,ie+Oe),U.framebufferTextureLayer(U.DRAW_FRAMEBUFFER,U.COLOR_ATTACHMENT0,Bt.get(N).__webglTexture,mt,Re+Oe)),U.blitFramebuffer(Pt,Xt,Pt+Rt,Xt+dt,Ct,se,Ct+Rt,se+dt,U.DEPTH_BUFFER_BIT,U.NEAREST);ft.bindFramebuffer(U.READ_FRAMEBUFFER,null),ft.bindFramebuffer(U.DRAW_FRAMEBUFFER,null)}else if(z!==0||T.isRenderTargetTexture||Bt.has(T)){let re=Bt.get(T),Ge=Bt.get(N);ft.bindFramebuffer(U.READ_FRAMEBUFFER,D),ft.bindFramebuffer(U.DRAW_FRAMEBUFFER,k);for(let wn=0;wn<Mt;wn++)gi?U.framebufferTextureLayer(U.READ_FRAMEBUFFER,U.COLOR_ATTACHMENT0,re.__webglTexture,z,ie+wn):U.framebufferTexture2D(U.READ_FRAMEBUFFER,U.COLOR_ATTACHMENT0,U.TEXTURE_2D,re.__webglTexture,z),ki?U.framebufferTextureLayer(U.DRAW_FRAMEBUFFER,U.COLOR_ATTACHMENT0,Ge.__webglTexture,mt,Re+wn):U.framebufferTexture2D(U.DRAW_FRAMEBUFFER,U.COLOR_ATTACHMENT0,U.TEXTURE_2D,Ge.__webglTexture,mt),z!==0?U.blitFramebuffer(Pt,Xt,Pt+Rt,Xt+dt,Ct,se,Ct+Rt,se+dt,U.COLOR_BUFFER_BIT,U.NEAREST):ki?U.copyTexSubImage3D(It,mt,Ct,se,Re+wn,Pt,Xt,Rt,dt):U.copyTexSubImage2D(It,mt,Ct,se,Pt,Xt,Rt,dt);ft.bindFramebuffer(U.READ_FRAMEBUFFER,null),ft.bindFramebuffer(U.DRAW_FRAMEBUFFER,null)}else ki?T.isDataTexture||T.isData3DTexture?U.texSubImage3D(It,mt,Ct,se,Re,Rt,dt,Mt,me,He,ge.data):N.isCompressedArrayTexture?U.compressedTexSubImage3D(It,mt,Ct,se,Re,Rt,dt,Mt,me,ge.data):U.texSubImage3D(It,mt,Ct,se,Re,Rt,dt,Mt,me,He,ge):T.isDataTexture?U.texSubImage2D(U.TEXTURE_2D,mt,Ct,se,Rt,dt,me,He,ge.data):T.isCompressedTexture?U.compressedTexSubImage2D(U.TEXTURE_2D,mt,Ct,se,ge.width,ge.height,me,ge.data):U.texSubImage2D(U.TEXTURE_2D,mt,Ct,se,Rt,dt,me,He,ge);ft.pixelStorei(U.UNPACK_ROW_LENGTH,je),ft.pixelStorei(U.UNPACK_IMAGE_HEIGHT,le),ft.pixelStorei(U.UNPACK_SKIP_PIXELS,zi),ft.pixelStorei(U.UNPACK_SKIP_ROWS,We),ft.pixelStorei(U.UNPACK_SKIP_IMAGES,_l),mt===0&&N.generateMipmaps===!0&&N.mipmapsAutoUpdate===!0&&U.generateMipmap(It),ft.unbindTexture()},this.initRenderTarget=function(T){Bt.get(T).__webglFramebuffer===void 0&&Ht.setupRenderTarget(T)},this.initTexture=function(T){T.isCubeTexture?Ht.setTextureCube(T,0):T.isData3DTexture?Ht.setTexture3D(T,0):T.isDataArrayTexture||T.isCompressedArrayTexture?Ht.setTexture2DArray(T,0):Ht.setTexture2D(T,0),ft.unbindTexture()},this.resetState=function(){X=0,G=0,nt=null,ft.reset(),lt.reset()},typeof __THREE_DEVTOOLS__<"u"&&__THREE_DEVTOOLS__.dispatchEvent(new CustomEvent("observe",{detail:this}))}get coordinateSystem(){return hn}get outputColorSpace(){return this._outputColorSpace}set outputColorSpace(t){this._outputColorSpace=t;let e=this.getContext();e.drawingBufferColorSpace=jt._getDrawingBufferColorSpace(t),e.unpackColorSpace=jt._getUnpackColorSpace()}};window.THREE=Qd;})();
 </script>
-<script>window.addEventListener("keydown",function(e){if(e.key==="Escape")try{parent.postMessage({type:"dsh-wall-escape"},"*")}catch(_){}});window.GAME={"title":"漂流小镇","rules":{"duration":85,"hearts":4,"heroSpeed":8,"enemySpeed":1.6,"enemySpeedGrowth":0.02,"enemySpawnEvery":14,"maxEnemies":2,"maxPickups":16,"heroSize":3,"enemySize":1.15,"pickupSize":1.7,"shield":{"enabled":true,"every":5,"seconds":4},"target":26,"buildEvery":5,"dash":{"cooldown":3,"speed":15,"time":0.4},"comboWindow":5,"specialEvery":10,"autoBuild":false,"worldSize":34,"seed":7,"palette":{"skyTop":"#79c4ef","skyBottom":"#ffedc4","fog":"#cfeaf2","grass":"#7cc46a","dirt":"#a8814f","sand":"#f2e2ae","water":"#2fb9cf","accent":"#ffd166"}},"slots":{"hero":{"tile":false,"custom":false},"enemy":{"tile":false,"custom":false},"pickup":{"tile":false,"custom":false}},"assets":{"hero":"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNTYiIGhlaWdodD0iMjU2IiB2aWV3Qm94PSIwIDAgMjU2IDI1NiI+CiAgPGcgc3Ryb2tlPSIjM2EyNDE2IiBzdHJva2Utd2lkdGg9IjMiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPgogICAgPHBhdGggZD0iTTcwIDIxNGgyMnYtMjZINzB6TTE2NCAyMTRoMjJ2LTI2aC0yMnoiIGZpbGw9IiM0YTJhMWEiLz4KICAgIDxwYXRoIGQ9Ik01NiAxMzBoMTQ0djY0SDU2eiIgZmlsbD0iI2U4ODAzYSIvPgogICAgPHBhdGggZD0iTTE2OCAxMjBsMzgtMTR2MzZsLTM4IDEweiIgZmlsbD0iI2U4ODAzYSIvPgogICAgPHBhdGggZD0iTTE5NiAxMTJsMjItOHYyMmwtMjIgOHoiIGZpbGw9IiNmNmU3ZDAiLz4KICAgIDxwYXRoIGQ9Ik05MiAxNTBoNzJ2NDBIOTJ6IiBmaWxsPSIjZjZlN2QwIi8+CiAgICA8cGF0aCBkPSJNNjAgMTEyaDEzNnYyNkg2MHoiIGZpbGw9IiNjODMyM2MiLz4KICAgIDxwYXRoIGQ9Ik0xNTAgMTM2aDIwdjQ0aC0yMHoiIGZpbGw9IiNjODMyM2MiLz4KICAgIDxwYXRoIGQ9Ik03MiA0NmgxMTJ2NzBINzJ6IiBmaWxsPSIjZTg4MDNhIi8+CiAgICA8cGF0aCBkPSJNNzIgNDZsOC0zMCAyNiAzMHpNMTg0IDQ2bC04LTMwLTI2IDMweiIgZmlsbD0iI2U4ODAzYSIvPgogICAgPHBhdGggZD0iTTEwMCA4Nmg1NnYzMGgtNTZ6IiBmaWxsPSIjZjZlN2QwIi8+CiAgPC9nPgogIDxwYXRoIGQ9Ik0xMjAgOTJoMTZ2MTBoLTE2eiIgZmlsbD0iIzJiMWExNCIvPgogIDxwYXRoIGQ9Ik05MiA2NmgxMnYxNkg5MnpNMTUyIDY2aDEydjE2aC0xMnoiIGZpbGw9IiMyMjE0MGYiLz4KICA8cGF0aCBkPSJNODQgNDBsMy0xMiAxMCAxMnpNMTcyIDQwbC0zLTEyLTEwIDEyeiIgZmlsbD0iI2Y2ZTdkMCIvPgogIDxwYXRoIGQ9Ik00MCAxNTBoMTJ2NDRINDB6IiBmaWxsPSIjNWEzYTIyIi8+CiAgPHJlY3QgeD0iMzAiIHk9IjE4OCIgd2lkdGg9IjMyIiBoZWlnaHQ9IjI2IiByeD0iNCIgZmlsbD0iI2ZmZDI3YSIgc3Ryb2tlPSIjNWEzYTIyIiBzdHJva2Utd2lkdGg9IjMiLz4KPC9zdmc+Cg==","enemy":"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNTYiIGhlaWdodD0iMjU2IiB2aWV3Qm94PSIwIDAgMjU2IDI1NiI+CiAgPGcgZmlsbD0iIzZiM2U3YSIgc3Ryb2tlPSIjMmExODMwIiBzdHJva2Utd2lkdGg9IjMiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPgogICAgPHBhdGggZD0iTTM4IDExOGwtMjYgMTAgMjYgMTB6TTIxOCAxMThsMjYgMTAtMjYgMTB6TTExMCA1MGwxOC0zNCAxOCAzNHpNNzAgNzBsLTIyLTIyIDMyIDZ6TTE4NiA3MGwyMi0yMi0zMiA2ek01OCAxODZsLTI4IDE4IDM0LTJ6TTE5OCAxODZsMjggMTgtMzQtMnoiLz4KICA8L2c+CiAgPHJlY3QgeD0iNDgiIHk9IjU2IiB3aWR0aD0iMTYwIiBoZWlnaHQ9IjE1MCIgcng9IjEwIiBmaWxsPSIjM2IyNDQ4IiBzdHJva2U9IiMyMjE0MmEiIHN0cm9rZS13aWR0aD0iNCIvPgogIDxyZWN0IHg9IjQwIiB5PSIxMTIiIHdpZHRoPSIxNzYiIGhlaWdodD0iMjgiIHJ4PSI0IiBmaWxsPSIjNGEyZDVhIi8+CiAgPHBhdGggZD0iTTc4IDIwNmgzNnYxOEg3OHpNMTQyIDIwNmgzNnYxOGgtMzZ6IiBmaWxsPSIjMmExODMwIi8+CiAgPHJlY3QgeD0iODAiIHk9IjkyIiB3aWR0aD0iMzQiIGhlaWdodD0iMjQiIHJ4PSIzIiBmaWxsPSIjZmZkMzRkIi8+CiAgPHJlY3QgeD0iMTQyIiB5PSI5MiIgd2lkdGg9IjM0IiBoZWlnaHQ9IjI0IiByeD0iMyIgZmlsbD0iI2ZmZDM0ZCIvPgogIDxwYXRoIGQ9Ik05MCAxNjBsMTAgMTAgMTAtMTAgMTAgMTAgMTAtMTAgMTAgMTAgMTAtMTAgMTAgMTAgMTAtMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmOWY0NSIgc3Ryb2tlLXdpZHRoPSI3IiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+CiAgPGcgZmlsbD0iI2I5OGFkMCI+PHJlY3QgeD0iMTI0IiB5PSIxMiIgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIi8+PHJlY3QgeD0iOCIgeT0iMTI0IiB3aWR0aD0iMTAiIGhlaWdodD0iMTAiLz48cmVjdCB4PSIyMzgiIHk9IjEyNCIgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIi8+PC9nPgo8L3N2Zz4K","pickup":"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNTYiIGhlaWdodD0iMjU2IiB2aWV3Qm94PSIwIDAgMjU2IDI1NiI+CiAgPGRlZnM+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9ImciIGN4PSI1MCUiIGN5PSI1NSUiIHI9IjUwJSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZmZmMmM0Ii8+PHN0b3Agb2Zmc2V0PSIuNiIgc3RvcC1jb2xvcj0iI2ZmZDI3YSIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2YzYTYzYyIvPjwvcmFkaWFsR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxjaXJjbGUgY3g9IjEyOCIgY3k9IjEzOCIgcj0iMTA0IiBmaWxsPSIjZmZjNDYzIiBvcGFjaXR5PSIuMTgiLz4KICA8cmVjdCB4PSIxMjIiIHk9IjE4IiB3aWR0aD0iMTIiIGhlaWdodD0iMjAiIGZpbGw9IiNjOWEyNGEiLz4KICA8cmVjdCB4PSIxMDQiIHk9IjM2IiB3aWR0aD0iNDgiIGhlaWdodD0iMTYiIGZpbGw9IiM1YTNhMjIiLz4KICA8cmVjdCB4PSI3MCIgeT0iNTIiIHdpZHRoPSIxMTYiIGhlaWdodD0iMjIiIHJ4PSIzIiBmaWxsPSIjNWEzYTIyIi8+CiAgPHJlY3QgeD0iODAiIHk9Ijc0IiB3aWR0aD0iOTYiIGhlaWdodD0iMTA0IiBmaWxsPSJ1cmwoI2cpIi8+CiAgPGcgZmlsbD0iIzVhM2EyMiI+PHJlY3QgeD0iNzYiIHk9Ijc0IiB3aWR0aD0iMTIiIGhlaWdodD0iMTA0Ii8+PHJlY3QgeD0iMTY4IiB5PSI3NCIgd2lkdGg9IjEyIiBoZWlnaHQ9IjEwNCIvPjwvZz4KICA8cmVjdCB4PSI2MiIgeT0iMTc4IiB3aWR0aD0iMTMyIiBoZWlnaHQ9IjI2IiByeD0iMyIgZmlsbD0iIzVhM2EyMiIvPgo8L3N2Zz4K"}};</script>
+<script>window.addEventListener("keydown",function(e){if(e.key==="Escape")try{parent.postMessage({type:"dsh-wall-escape"},"*")}catch(_){}});window.GAME={"title":"漂流小镇","rules":{"duration":240,"hearts":4,"heroSpeed":8,"enemySpeed":1.6,"enemySpeedGrowth":0.02,"enemySpawnEvery":14,"maxEnemies":2,"maxPickups":16,"heroSize":3,"enemySize":1.15,"pickupSize":1.7,"shield":{"enabled":true,"every":5,"seconds":4},"target":26,"buildEvery":5,"dash":{"cooldown":3,"speed":15,"time":0.4},"comboWindow":5,"specialEvery":10,"autoBuild":false,"survival":{"thirstRate":1.5,"hungerRate":0.6,"starveEvery":1.6,"selfSustainSec":60,"shelterCountsAsTown":true,"rainEvery":8,"rainAmount":8,"fishEvery":10,"fishAmount":6,"purifyEvery":5,"purifyAmount":12,"foodDropEvery":9,"foodDropAmount":26,"workbench":{"wood":4,"plastic":0,"metal":0},"shelter":{"wood":8,"plastic":2,"metal":0},"rainCatcher":{"wood":3,"plastic":2,"metal":0},"fishBasket":{"wood":4,"plastic":0,"metal":0},"scoopNet":{"wood":3,"plastic":0,"metal":0},"purifier":{"wood":4,"plastic":0,"metal":2}},"worldSize":34,"seed":7,"palette":{"skyTop":"#79c4ef","skyBottom":"#ffedc4","fog":"#cfeaf2","grass":"#7cc46a","dirt":"#a8814f","sand":"#f2e2ae","water":"#2fb9cf","accent":"#ffd166"}},"slots":{"hero":{"tile":false,"custom":false},"enemy":{"tile":false,"custom":false},"pickup":{"tile":false,"custom":false}},"assets":{"hero":"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNTYiIGhlaWdodD0iMjU2IiB2aWV3Qm94PSIwIDAgMjU2IDI1NiI+CiAgPGcgc3Ryb2tlPSIjM2EyNDE2IiBzdHJva2Utd2lkdGg9IjMiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPgogICAgPHBhdGggZD0iTTcwIDIxNGgyMnYtMjZINzB6TTE2NCAyMTRoMjJ2LTI2aC0yMnoiIGZpbGw9IiM0YTJhMWEiLz4KICAgIDxwYXRoIGQ9Ik01NiAxMzBoMTQ0djY0SDU2eiIgZmlsbD0iI2U4ODAzYSIvPgogICAgPHBhdGggZD0iTTE2OCAxMjBsMzgtMTR2MzZsLTM4IDEweiIgZmlsbD0iI2U4ODAzYSIvPgogICAgPHBhdGggZD0iTTE5NiAxMTJsMjItOHYyMmwtMjIgOHoiIGZpbGw9IiNmNmU3ZDAiLz4KICAgIDxwYXRoIGQ9Ik05MiAxNTBoNzJ2NDBIOTJ6IiBmaWxsPSIjZjZlN2QwIi8+CiAgICA8cGF0aCBkPSJNNjAgMTEyaDEzNnYyNkg2MHoiIGZpbGw9IiNjODMyM2MiLz4KICAgIDxwYXRoIGQ9Ik0xNTAgMTM2aDIwdjQ0aC0yMHoiIGZpbGw9IiNjODMyM2MiLz4KICAgIDxwYXRoIGQ9Ik03MiA0NmgxMTJ2NzBINzJ6IiBmaWxsPSIjZTg4MDNhIi8+CiAgICA8cGF0aCBkPSJNNzIgNDZsOC0zMCAyNiAzMHpNMTg0IDQ2bC04LTMwLTI2IDMweiIgZmlsbD0iI2U4ODAzYSIvPgogICAgPHBhdGggZD0iTTEwMCA4Nmg1NnYzMGgtNTZ6IiBmaWxsPSIjZjZlN2QwIi8+CiAgPC9nPgogIDxwYXRoIGQ9Ik0xMjAgOTJoMTZ2MTBoLTE2eiIgZmlsbD0iIzJiMWExNCIvPgogIDxwYXRoIGQ9Ik05MiA2NmgxMnYxNkg5MnpNMTUyIDY2aDEydjE2aC0xMnoiIGZpbGw9IiMyMjE0MGYiLz4KICA8cGF0aCBkPSJNODQgNDBsMy0xMiAxMCAxMnpNMTcyIDQwbC0zLTEyLTEwIDEyeiIgZmlsbD0iI2Y2ZTdkMCIvPgogIDxwYXRoIGQ9Ik00MCAxNTBoMTJ2NDRINDB6IiBmaWxsPSIjNWEzYTIyIi8+CiAgPHJlY3QgeD0iMzAiIHk9IjE4OCIgd2lkdGg9IjMyIiBoZWlnaHQ9IjI2IiByeD0iNCIgZmlsbD0iI2ZmZDI3YSIgc3Ryb2tlPSIjNWEzYTIyIiBzdHJva2Utd2lkdGg9IjMiLz4KPC9zdmc+Cg==","enemy":"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNTYiIGhlaWdodD0iMjU2IiB2aWV3Qm94PSIwIDAgMjU2IDI1NiI+CiAgPGcgZmlsbD0iIzZiM2U3YSIgc3Ryb2tlPSIjMmExODMwIiBzdHJva2Utd2lkdGg9IjMiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPgogICAgPHBhdGggZD0iTTM4IDExOGwtMjYgMTAgMjYgMTB6TTIxOCAxMThsMjYgMTAtMjYgMTB6TTExMCA1MGwxOC0zNCAxOCAzNHpNNzAgNzBsLTIyLTIyIDMyIDZ6TTE4NiA3MGwyMi0yMi0zMiA2ek01OCAxODZsLTI4IDE4IDM0LTJ6TTE5OCAxODZsMjggMTgtMzQtMnoiLz4KICA8L2c+CiAgPHJlY3QgeD0iNDgiIHk9IjU2IiB3aWR0aD0iMTYwIiBoZWlnaHQ9IjE1MCIgcng9IjEwIiBmaWxsPSIjM2IyNDQ4IiBzdHJva2U9IiMyMjE0MmEiIHN0cm9rZS13aWR0aD0iNCIvPgogIDxyZWN0IHg9IjQwIiB5PSIxMTIiIHdpZHRoPSIxNzYiIGhlaWdodD0iMjgiIHJ4PSI0IiBmaWxsPSIjNGEyZDVhIi8+CiAgPHBhdGggZD0iTTc4IDIwNmgzNnYxOEg3OHpNMTQyIDIwNmgzNnYxOGgtMzZ6IiBmaWxsPSIjMmExODMwIi8+CiAgPHJlY3QgeD0iODAiIHk9IjkyIiB3aWR0aD0iMzQiIGhlaWdodD0iMjQiIHJ4PSIzIiBmaWxsPSIjZmZkMzRkIi8+CiAgPHJlY3QgeD0iMTQyIiB5PSI5MiIgd2lkdGg9IjM0IiBoZWlnaHQ9IjI0IiByeD0iMyIgZmlsbD0iI2ZmZDM0ZCIvPgogIDxwYXRoIGQ9Ik05MCAxNjBsMTAgMTAgMTAtMTAgMTAgMTAgMTAtMTAgMTAgMTAgMTAtMTAgMTAgMTAgMTAtMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmOWY0NSIgc3Ryb2tlLXdpZHRoPSI3IiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+CiAgPGcgZmlsbD0iI2I5OGFkMCI+PHJlY3QgeD0iMTI0IiB5PSIxMiIgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIi8+PHJlY3QgeD0iOCIgeT0iMTI0IiB3aWR0aD0iMTAiIGhlaWdodD0iMTAiLz48cmVjdCB4PSIyMzgiIHk9IjEyNCIgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIi8+PC9nPgo8L3N2Zz4K","pickup":"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNTYiIGhlaWdodD0iMjU2IiB2aWV3Qm94PSIwIDAgMjU2IDI1NiI+CiAgPGRlZnM+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9ImciIGN4PSI1MCUiIGN5PSI1NSUiIHI9IjUwJSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZmZmMmM0Ii8+PHN0b3Agb2Zmc2V0PSIuNiIgc3RvcC1jb2xvcj0iI2ZmZDI3YSIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2YzYTYzYyIvPjwvcmFkaWFsR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxjaXJjbGUgY3g9IjEyOCIgY3k9IjEzOCIgcj0iMTA0IiBmaWxsPSIjZmZjNDYzIiBvcGFjaXR5PSIuMTgiLz4KICA8cmVjdCB4PSIxMjIiIHk9IjE4IiB3aWR0aD0iMTIiIGhlaWdodD0iMjAiIGZpbGw9IiNjOWEyNGEiLz4KICA8cmVjdCB4PSIxMDQiIHk9IjM2IiB3aWR0aD0iNDgiIGhlaWdodD0iMTYiIGZpbGw9IiM1YTNhMjIiLz4KICA8cmVjdCB4PSI3MCIgeT0iNTIiIHdpZHRoPSIxMTYiIGhlaWdodD0iMjIiIHJ4PSIzIiBmaWxsPSIjNWEzYTIyIi8+CiAgPHJlY3QgeD0iODAiIHk9Ijc0IiB3aWR0aD0iOTYiIGhlaWdodD0iMTA0IiBmaWxsPSJ1cmwoI2cpIi8+CiAgPGcgZmlsbD0iIzVhM2EyMiI+PHJlY3QgeD0iNzYiIHk9Ijc0IiB3aWR0aD0iMTIiIGhlaWdodD0iMTA0Ii8+PHJlY3QgeD0iMTY4IiB5PSI3NCIgd2lkdGg9IjEyIiBoZWlnaHQ9IjEwNCIvPjwvZz4KICA8cmVjdCB4PSI2MiIgeT0iMTc4IiB3aWR0aD0iMTMyIiBoZWlnaHQ9IjI2IiByeD0iMyIgZmlsbD0iIzVhM2EyMiIvPgo8L3N2Zz4K"}};</script>
 <script>/* 漂流小镇 (Drift Town) — a 60-second 3D voxel collect-and-dodge game in the
  * spirit of Flotsam: pilot a raft, fish garbage out of the sea, dodge sharks,
  * and every few pieces a new building joins your floating town. Classic script:
@@ -4281,6 +4281,27 @@ void main() {
     dash: { cooldown: 3, speed: 15, time: 0.4 }, // the raft's burst of speed
     comboWindow: 4,          // seconds between pickups to keep a combo alive
     specialEvery: 8,         // seconds between special-item spawn attempts
+    /* Survival layer (design doc stage 0–1): workbench → shelter → four pieces
+     * of survival gear. Every number here is meant to be tuned from game.json
+     * without touching code. Costs are in the same {wood, plastic, metal} shape
+     * as the town buildings, so one cost line and one pay function serve both. */
+    survival: {
+      thirstRate: 1.5,            // canteen points drained per second
+      hungerRate: 0.6,            // food points drained per second (once the belly bar is on)
+      starveEvery: 1.6,           // seconds between hearts lost on an empty belly
+      selfSustainSec: 60,         // hold water and food above zero this long → town unlocked
+      shelterCountsAsTown: true,  // the shelter is a dwelling, so it counts toward 镇 x/6
+      rainEvery: 8, rainAmount: 8,        // 集雨器: rainwater into the canteen
+      fishEvery: 10, fishAmount: 6,       // 鱼篓: a little food over time
+      purifyEvery: 5, purifyAmount: 12,   // 净水器: steady clean water
+      foodDropEvery: 9, foodDropAmount: 26, // seconds between floating food, and its value
+      workbench: { wood: 4, plastic: 0, metal: 0 },
+      shelter: { wood: 8, plastic: 2, metal: 0 },
+      rainCatcher: { wood: 3, plastic: 2, metal: 0 },
+      fishBasket: { wood: 4, plastic: 0, metal: 0 },
+      scoopNet: { wood: 3, plastic: 0, metal: 0 },
+      purifier: { wood: 4, plastic: 0, metal: 2 }
+    },
     worldSize: 34,           // sea diameter in blocks
     seed: 7,                 // island shape
     palette: {
@@ -4842,6 +4863,14 @@ void main() {
     [0, 0.7, 0, 0.2, 0.14, 0.2, '#d8eefc'], [0, 0.3, 0, 0.66, 0.2, 0.66, '#eaf7ff']
   ];
 
+  /* Food bobbing in the water: a bait pail of small fish. Eating it is the fastest
+   *  way to top the belly bar back up without waiting on the fish basket. */
+  var FOOD_BOXES = [
+    [0, 0.3, 0, 0.72, 0.56, 0.72, '#8fb6c9'], [0, 0.6, 0, 0.78, 0.12, 0.78, '#6b8fa3'],
+    [0, 0.72, 0, 0.3, 0.12, 0.3, '#d8eefc'], [0.06, 0.74, 0.02, 0.5, 0.1, 0.34, '#9fd8e8'],
+    [-0.2, 0.78, -0.16, 0.26, 0.1, 0.3, '#7fc4d8'], [0.24, 0.8, -0.12, 0.22, 0.1, 0.26, '#9fd8e8']
+  ];
+
   var RING_BOXES = [
     [-0.58, 0.3, 0, 0.52, 0.52, 0.42, '#ffffff'], [0.58, 0.3, 0, 0.52, 0.52, 0.42, '#ffffff'],
     [0, 0.3, -0.58, 0.42, 0.52, 0.52, '#ffffff'], [0, 0.3, 0.58, 0.42, 0.52, 0.52, '#ffffff'],
@@ -4984,6 +5013,114 @@ void main() {
     [-1.75, 0.8, -2.35], [1.85, 0.8, -2.3], [-2.1, 0.8, -0.75],
     [2.15, 0.8, -0.7], [-1.65, 0.8, 0.95], [1.75, 0.8, 1.0]
   ];
+  /* --- Survival gear (design doc stage 0–1). Small models that sit on the deck:
+   *  the workbench you build everything at, the shelter that makes the raft a
+   *  home, and the four pieces that turn thirst and hunger into background. --- */
+  var WORKBENCH_BOXES = (function () {
+    var B = boxList(), i;
+    B.add(0, 0.62, 0, 1.24, 0.14, 0.72, '#c9a069');              // bench top
+    [[-0.5, -0.3], [0.5, -0.3], [-0.5, 0.3], [0.5, 0.3]].forEach(function (p) {
+      B.add(p[0], 0.3, p[1], 0.1, 0.6, 0.1, '#8f6135');          // legs
+    });
+    B.add(0, 0.42, -0.24, 1.1, 0.1, 0.1, '#8f6135');             // stretcher
+    for (i = 0; i < 3; i++) B.add(-0.34 + i * 0.34, 0.77, 0.08, 0.24, 0.14, 0.24, i % 2 ? '#aab4c0' : '#8fa3b8'); // tools
+    B.add(0.34, 0.92, -0.17, 0.07, 0.44, 0.07, '#7a5230');       // hammer
+    B.add(0.34, 1.16, -0.17, 0.3, 0.14, 0.14, '#8fa3b8');
+    B.add(-0.52, 1.2, -0.28, 0.08, 1.0, 0.08, '#6b4a2c');        // a post with a slate to plan on
+    B.add(-0.52, 1.52, -0.28, 0.08, 0.5, 0.62, '#e8dcc0');
+    return B;
+  })();
+  var SHELTER_BOXES = (function () {
+    var B = boxList(), i;
+    B.add(0, 0.72, 0, 1.9, 1.1, 1.6, '#d8a06a');                 // cabin wall
+    B.add(0, 1.34, 0, 2.05, 0.16, 1.72, '#b8875a');              // eave
+    for (i = 0; i < 3; i++) {                                    // pitched thatch roof
+      var w = 1.9 - i * 0.42;
+      B.add(0, 1.5 + i * 0.22, 0, w, 0.24, 1.5 - i * 0.3, i % 2 ? '#c9853f' : '#b8773a');
+    }
+    B.add(0, 0.62, 0.82, 0.5, 0.86, 0.1, '#7a4a28');             // door
+    B.add(0, 0.72, 0.86, 0.16, 0.16, 0.08, '#ffd98a', true);     // door light
+    B.add(-0.62, 0.9, 0.82, 0.36, 0.34, 0.07, '#bfeef2');        // window
+    B.add(0.62, 0.9, 0.82, 0.36, 0.34, 0.07, '#bfeef2');
+    B.add(0, 0.98, -0.82, 0.9, 0.5, 0.08, '#8f6135');            // a bedroll strapped on
+    B.add(0, 1.18, -0.86, 0.94, 0.18, 0.1, '#e8dcc0');
+    return B;
+  })();
+  var RAINCATCHER_BOXES = (function () {
+    var B = boxList(), i;
+    [[-0.44, -0.44], [0.44, -0.44], [-0.44, 0.44], [0.44, 0.44]].forEach(function (p) {
+      B.add(p[0], 0.52, p[1], 0.08, 1.04, 0.08, '#8fa3b8');      // frame
+    });
+    B.add(0, 1.06, 0, 1.16, 0.08, 1.16, '#5fb6d8');              // funnel mouth
+    B.add(0, 1.12, 0, 0.72, 0.08, 0.72, '#8fd0f5');
+    B.add(0, 0.5, 0, 0.76, 0.6, 0.76, '#4f97c4');                // tank
+    B.add(0, 0.82, 0, 0.8, 0.08, 0.8, '#6fb8dc');
+    B.add(0.42, 0.34, 0, 0.14, 0.36, 0.14, '#6fb8dc');           // tap
+    B.add(0.56, 0.24, 0, 0.24, 0.08, 0.08, '#8fd0f5');
+    for (i = 0; i < 3; i++) B.add(0, 0.16 + i * 0.14, 0, 0.86, 0.06, 0.86, '#3f7fa3');
+    return B;
+  })();
+  var FISHBASKET_BOXES = (function () {
+    var B = boxList(), i, j;
+    for (i = 0; i < 4; i++) {                                    // woven basket
+      B.add(0, 0.16 + i * 0.18, 0, 0.94 - i * 0.06, 0.18, 0.94 - i * 0.06, i % 2 ? '#c9a069' : '#b08a52');
+    }
+    for (i = -1; i <= 1; i++) for (j = -1; j <= 1; j++) {
+      if (!i && !j) continue;
+      B.add(i * 0.3, 0.44, j * 0.3, 0.1, 0.86, 0.1, '#a8763a'); // hoop ribs
+    }
+    B.add(0, 0.3, 0, 0.34, 0.14, 0.72, '#9fd8e8');              // a fish in the basket
+    B.add(0, 0.34, 0.34, 0.22, 0.12, 0.2, '#7fc4d8');
+    B.add(0, 0.66, 0, 0.5, 0.06, 0.5, '#7fd8b4');               // netting lid
+    return B;
+  })();
+  var SCOOPNET_BOXES = (function () {
+    var B = boxList(), i;
+    B.add(-0.56, 0.9, 0, 0.09, 1.8, 0.09, '#8f6135');           // handle
+    B.add(0.14, 1.68, 0, 1.2, 0.09, 0.09, '#a88a60');           // hoop arm
+    for (i = 0; i < 5; i++) {                                    // net ring
+      var a = i * Math.PI * 2 / 5;
+      B.add(0.14 + Math.cos(a) * 0.52, 1.68, Math.sin(a) * 0.52, 0.08, 0.08, 0.08, '#c9c0a8');
+    }
+    for (i = -2; i <= 2; i++) B.add(0.14 + i * 0.2, 1.54, 0, 0.05, 0.05, 0.9, '#7fd8b4');
+    for (i = -2; i <= 2; i++) B.add(0.14, 1.54, i * 0.18, 1.0, 0.05, 0.05, '#7fd8b4');
+    B.add(-0.56, 1.72, 0, 0.14, 0.14, 0.14, '#ff9f45');         // grip
+    return B;
+  })();
+  var PURIFIER_BOXES = (function () {
+    var B = boxList(), i;
+    B.add(0, 0.2, 0, 1.1, 0.18, 1.1, '#6b6f78');                // base plate
+    B.add(0, 0.72, 0, 0.82, 0.9, 0.82, '#aab4c0');              // boiler
+    B.add(0, 1.2, 0, 0.86, 0.12, 0.86, '#8f97a2');
+    for (i = 0; i < 3; i++) B.add(0, 0.44 + i * 0.24, 0.42, 0.5, 0.1, 0.06, '#c8d0d8'); // ribs
+    B.add(0, 1.5, 0, 0.28, 0.5, 0.28, '#8fa3b8');               // chimney / condenser
+    B.add(0, 1.78, 0, 0.44, 0.1, 0.44, '#7b8794');
+    B.add(0.52, 0.72, 0, 0.12, 0.9, 0.12, '#9aa4b0');           // output pipe
+    B.add(0.62, 0.34, 0, 0.32, 0.1, 0.1, '#6fb8dc');
+    B.add(0, 0.82, 0.44, 0.28, 0.2, 0.06, '#ffd98a', true);     // level window
+    B.add(-0.56, 0.94, 0, 0.1, 0.1, 0.6, '#c8d0d8');            // a little solar still panel
+    return B;
+  })();
+
+  /** The survival build order. Each step lists what it needs built first, so the
+   *  unlock chain of the design doc lives in one readable table:
+   *  workbench → shelter → { rain catcher, fish basket, scoop net → purifier }. */
+  var SURVIVAL_STEPS = [
+    { id: 'workbench', name: '工作台', boxes: WORKBENCH_BOXES, at: [0, 0.72, 2.05], scale: 1.0, needs: [],
+      short: '建造', desc: '解锁建造 · 木材加工', tip: '造出工作台，才能动手搭别的东西' },
+    { id: 'shelter', name: '庇护所', boxes: SHELTER_BOXES, at: [-1.5, 0.72, 1.1], scale: 1.05, needs: ['workbench'],
+      short: '床位+2', desc: '床位+2 · 存档点 · 生存装备图纸', tip: '有了遮风挡雨的家，才顾得上喝水吃饭' },
+    { id: 'rainCatcher', name: '集雨器', boxes: RAINCATCHER_BOXES, at: [1.85, 0.72, 0.55], scale: 0.95, needs: ['shelter'],
+      short: '自动蓄水', desc: '每 ' + R.survival.rainEvery + ' 秒 +' + R.survival.rainAmount + ' 水', tip: '' },
+    { id: 'fishBasket', name: '鱼篓', boxes: FISHBASKET_BOXES, at: [1.15, 0.72, -0.5], scale: 0.95, needs: ['shelter'],
+      short: '自动加餐', desc: '每 ' + R.survival.fishEvery + ' 秒 +' + R.survival.fishAmount + ' 食', tip: '' },
+    { id: 'scoopNet', name: '捞网', boxes: SCOOPNET_BOXES, at: [-1.9, 0.72, -1.4], scale: 0.95, needs: ['shelter'],
+      short: '打捞范围+50%', desc: '打捞范围 +50%', tip: '' },
+    { id: 'purifier', name: '净水器', boxes: PURIFIER_BOXES, at: [0.2, 0.72, 1.75], scale: 0.95,
+      needs: ['rainCatcher', 'workbench'],
+      short: '稳定供水', desc: '每 ' + R.survival.purifyEvery + ' 秒 +' + R.survival.purifyAmount + ' 水', tip: '' }
+  ];
+
   var MODEL_HEIGHT = { hero: 4.7, enemy: 1.1, pickup: 1.9 };
   /** The raft body is scaled to R.heroSize / MODEL_HEIGHT.hero; buildings counter-scale to stay legible. */
   var BUILDING_SCALE = 1.45;
@@ -5122,7 +5259,8 @@ void main() {
   hudQuad.position.set(0.5, 0.5, 0);
   hudScene.add(hudQuad);
   var cardData = null;
-  var boostRect = null; // hit area of the on-screen dash button, refreshed every frame
+  var boostRect = null;    // hit area of the on-screen dash button, refreshed every frame
+  var buildBtnRect = null; // hit area of the 建 button, set while the workbench stands
   function showCard(title, body, hint) { cardData = { title: title, body: body, hint: hint }; }
   function clearCard() { cardData = null; }
   function hudFont() { return Math.max(14, Math.min(22, Math.min(window.innerWidth || 1, window.innerHeight || 1) * 0.024)); }
@@ -5177,7 +5315,7 @@ void main() {
     var m = Math.max(8, Math.min(w, h) * 0.022);
     drawPill(m, m, [
       { text: '♥'.repeat(Math.max(0, hearts)) + '♡'.repeat(Math.max(0, R.hearts - hearts)), color: '#ff8a9a' },
-      { text: '镇 ' + buildings.length + '/6', color: '#ffe2a8' },
+      { text: '镇 ' + townCount() + '/' + townTarget(), color: '#ffe2a8' },
       { text: '民 ' + pop, color: '#c8f0ff' }
     ], font);
     // Material stockpile, and what the next building is still asking for.
@@ -5188,22 +5326,66 @@ void main() {
       { text: '铁 ' + res.metal, color: '#c8d0d8' }
     ];
     drawPill(m, m + font * 1.3 + 14, resParts, font);
-    // The canteen: a bar that turns red as it empties. This is the run's real clock.
-    var wBarW = Math.min(150, w * 0.3), wBarH = font * 0.62;
-    var wBarX = m, wBarY = m + font * 2.6 + 30;
-    var wFrac = clamp(canteen / maxWater, 0, 1);
-    hudCtx.fillStyle = 'rgba(14,18,40,0.5)';
-    roundRect(wBarX, wBarY, wBarW, wBarH, wBarH / 2); hudCtx.fill();
-    hudCtx.fillStyle = wFrac < 0.25 ? '#ff6b6b' : (wFrac < 0.5 ? '#ffc463' : '#5fd0f0');
-    roundRect(wBarX + 2, wBarY + 2, Math.max(0, (wBarW - 4) * wFrac), wBarH - 4, (wBarH - 4) / 2); hudCtx.fill();
-    hudCtx.strokeStyle = 'rgba(255,255,255,0.22)'; hudCtx.lineWidth = 1;
-    roundRect(wBarX, wBarY, wBarW, wBarH, wBarH / 2); hudCtx.stroke();
-    hudCtx.fillStyle = wFrac < 0.25 ? '#ffb4b4' : '#dff6ff';
-    hudCtx.font = '700 ' + (font * 0.72) + 'px ' + FONT;
-    hudCtx.fillText('水 ' + Math.round(canteen) + '/' + maxWater, wBarX + wBarW + 8, wBarY + wBarH - 2);
-    if (nextBuild < BUILDING_SPECS.length && !buildOffer) {
+    /* Two survival bars — water (canteen) and belly (food). The belly bar only
+     * appears once the fish basket stands, so stage 0 keeps its gentle feel.
+     * Canvas 2D only: no DOM nodes, no colour emoji (both break on WeChat). */
+    var barW = Math.min(150, w * 0.3), barH = font * 0.62;
+    var barX = m, barY = m + font * 2.6 + 30;
+    function survivalBar(label, value, max, y, lowColour, fullColour) {
+      var frac = clamp(max > 0 ? value / max : 0, 0, 1);
+      hudCtx.fillStyle = 'rgba(14,18,40,0.5)';
+      roundRect(barX, y, barW, barH, barH / 2); hudCtx.fill();
+      hudCtx.fillStyle = frac < 0.25 ? '#ff6b6b' : (frac < 0.5 ? lowColour : fullColour);
+      roundRect(barX + 2, y + 2, Math.max(0, (barW - 4) * frac), barH - 4, (barH - 4) / 2); hudCtx.fill();
+      hudCtx.strokeStyle = 'rgba(255,255,255,0.22)'; hudCtx.lineWidth = 1;
+      roundRect(barX, y, barW, barH, barH / 2); hudCtx.stroke();
+      hudCtx.fillStyle = frac < 0.25 ? '#ffb4b4' : '#dff6ff';
+      hudCtx.font = '700 ' + (font * 0.72) + 'px ' + FONT;
+      hudCtx.fillText(label + ' ' + Math.round(value) + '/' + max, barX + barW + 8, y + barH - 2);
+    }
+    survivalBar('水', canteen, maxWater, barY, '#ffc463', '#5fd0f0');
+    if (hasBuilt('fishBasket')) survivalBar('食', food, maxFood, barY + barH + 6, '#ffc463', '#8fd86a');
+    // The next survival step in the chain, its price, and whether it is affordable.
+    var hintY = barY + barH + (hasBuilt('fishBasket') ? barH + 14 : 8);
+    var step = nextSurvivalStep();
+    if (step) {
+      drawPill(m, hintY, [{
+        text: survivalHintText() + (hasBuilt('workbench') ? '  （B 打开建造）' : ''),
+        color: canAffordCost(stepCost(step)) ? '#9ff0b8' : '#ffb4a0'
+      }], font * 0.78);
+    } else if (!buildOffer) {
+      drawPill(m, hintY, [{ text: '生存装备齐备 · 打捞攒材料建镇', color: '#9ff0b8' }], font * 0.78);
+    }
+    /* Self-sustaining: the acceptance gate of stage 1, so it stays on screen as a
+     * standing line under the survival hint (not a 3-second toast that a
+     * screenshot can miss), plus a bright banner on the moment it first triggers. */
+    if (townReady) {
+      var srText = '口渴与饥饿可自持 —— 可以建立城镇了';
+      hudCtx.font = '700 ' + (font * 0.78) + 'px ' + FONT;
+      var srW = hudCtx.measureText(srText).width;
+      hudCtx.fillStyle = 'rgba(24,80,60,0.55)';
+      roundRect(m, hintY + font * 1.45, srW + 20, font * 1.45, 8); hudCtx.fill();
+      hudCtx.strokeStyle = 'rgba(160,255,190,0.55)'; hudCtx.lineWidth = 1;
+      roundRect(m, hintY + font * 1.45, srW + 20, font * 1.45, 8); hudCtx.stroke();
+      hudCtx.fillStyle = '#c8ffd8';
+      hudCtx.fillText(srText, m + 10, hintY + font * 2.45);
+    }
+    if (townReady && townReadyBanner > 0) { // the moment it first unlocks
+      hudCtx.globalAlpha = Math.min(1, townReadyBanner);
+      var trText = '可以建立城镇了！';
+      hudCtx.font = '800 ' + (font * 1.15) + 'px ' + FONT;
+      hudCtx.textAlign = 'center';
+      var trW = hudCtx.measureText(trText).width + 34;
+      hudCtx.fillStyle = 'rgba(24,80,60,0.72)';
+      roundRect((w - trW) / 2, h * 0.14, trW, font * 2.2, 12); hudCtx.fill();
+      hudCtx.fillStyle = '#c8ffd8';
+      hudCtx.fillText(trText, w / 2, h * 0.14 + font * 1.5);
+      hudCtx.textAlign = 'left';
+      hudCtx.globalAlpha = 1;
+    }
+    if (nextBuild < BUILDING_SPECS.length && !buildOffer && townReady) {
       var spec = BUILDING_SPECS[nextBuild], ok = canAfford(spec);
-      drawPill(m, wBarY + wBarH + 8, [{
+      drawPill(m, hintY + font * 1.5, [{
         text: '造' + spec.name + ' ' + costText(spec),
         color: ok ? '#9ff0b8' : '#ffb4a0'
       }], font * 0.78);
@@ -5215,8 +5397,8 @@ void main() {
     var cap = window.GAME && window.GAME.safeArea; // keep clear of WeChat's capsule button
     var ty = cap && typeof cap.bottom === 'number' && cap.bottom > 0 ? cap.bottom + 10 : m;
     drawPill(w - m - hudCtx.measureText(timerText).width - 20, ty, [{ text: timerText, color: '#fff' }], font);
-    if (shield > 0) drawPill(m, wBarY + wBarH + font * 1.6 + 22, [{ text: '救生圈 ' + Math.ceil(shield) + 's', color: '#bff0ff' }], font * 0.8);
-    if (combo >= 2 && comboShowT > 0) drawPill(m, wBarY + wBarH + font * 2.8 + 32, [{ text: '连击 x' + combo, color: '#ffc463' }], font * 0.85);
+    if (shield > 0) drawPill(m, hintY + font * 1.6 + 22, [{ text: '救生圈 ' + Math.ceil(shield) + 's', color: '#bff0ff' }], font * 0.8);
+    if (combo >= 2 && comboShowT > 0) drawPill(m, hintY + font * 2.8 + 32, [{ text: '连击 x' + combo, color: '#ffc463' }], font * 0.85);
     if (surgeShowT > 0) { // shark surge warning, right under the timer
       hudCtx.globalAlpha = Math.min(1, surgeShowT * 1.5);
       var swText = '鲨鱼潮！';
@@ -5285,6 +5467,65 @@ void main() {
     hudCtx.textAlign = 'center';
     hudCtx.fillText('⚡', bx, by + br * 0.34);
     hudCtx.globalAlpha = 1;
+    /* The 建 button: the workbench's build list. It only exists once the
+     * workbench stands (the design doc's stage-0 gate), sits above the dash
+     * button, and glows while something in the chain is affordable. */
+    if (hasBuilt('workbench') && !buildOffer && phase === 'playing') {
+      var canBuild = false, pool0 = offerableSteps();
+      for (var pb = 0; pb < pool0.length; pb++) if (canAffordCost(stepCost(pool0[pb]))) canBuild = true;
+      var wbr = 26, wbx = w - m - wbr - 10, wby = by - br - wbr - 12;
+      buildBtnRect = { x: wbx, y: wby, r: wbr + 10 };
+      hudCtx.globalAlpha = buildOpen ? 0.55 : 1;
+      hudCtx.fillStyle = canBuild ? 'rgba(60,120,70,0.72)' : 'rgba(14,18,40,0.5)';
+      hudCtx.beginPath(); hudCtx.arc(wbx, wby, wbr, 0, Math.PI * 2); hudCtx.fill();
+      hudCtx.strokeStyle = canBuild ? 'rgba(200,255,208,0.75)' : 'rgba(255,255,255,0.4)';
+      hudCtx.lineWidth = canBuild ? 3 : 2; hudCtx.stroke();
+      if (canBuild) { // a slow pulse so the eye finds it
+        hudCtx.globalAlpha = 0.25 + Math.sin(performance.now() / 260) * 0.18;
+        hudCtx.beginPath(); hudCtx.arc(wbx, wby, wbr + 4, 0, Math.PI * 2); hudCtx.stroke();
+        hudCtx.globalAlpha = buildOpen ? 0.55 : 1;
+      }
+      hudCtx.fillStyle = '#fff';
+      hudCtx.font = '800 ' + (wbr * 0.86) + 'px ' + FONT;
+      hudCtx.fillText('建', wbx, wby + wbr * 0.32);
+      hudCtx.globalAlpha = 1;
+    } else buildBtnRect = null;
+    /* The workbench build list: one card per step whose prerequisites stand.
+     * Same card language as the town blueprint choice, drawn in Canvas 2D. */
+    if (buildOpen && phase === 'playing') {
+      var sPool = offerableSteps();
+      var sCardW = Math.min(w * 0.27, 168), sCardH = sCardW * 0.72;
+      var sGap = Math.min(14, w * 0.02);
+      var sTotal = sCardW * sPool.length + sGap * Math.max(0, sPool.length - 1);
+      var sStartX = (w - sTotal) / 2, sY = h * 0.64;
+      hudCtx.fillStyle = 'rgba(8,14,26,0.42)';
+      hudCtx.fillRect(0, 0, w, h);
+      hudCtx.textAlign = 'center';
+      hudCtx.font = '800 ' + (font * 1.05) + 'px ' + FONT;
+      hudCtx.fillStyle = '#ffe2a8';
+      hudCtx.fillText('工作台 · 建造（← → 或点击）', w / 2, sY - font * 1.1);
+      buildCardRects = [];
+      for (var sc = 0; sc < sPool.length; sc++) {
+        var stp = sPool[sc], sCost = stepCost(stp), sOk = canAffordCost(sCost);
+        var scx = sStartX + sc * (sCardW + sGap);
+        buildCardRects.push({ x: scx, y: sY, w: sCardW, h: sCardH, id: stp.id });
+        hudCtx.fillStyle = sOk ? 'rgba(24,46,66,0.95)' : 'rgba(40,26,26,0.92)';
+        roundRect(scx, sY, sCardW, sCardH, 14); hudCtx.fill();
+        hudCtx.strokeStyle = sc === buildSel && sOk ? '#ffd166' : 'rgba(255,255,255,0.2)';
+        hudCtx.lineWidth = sc === buildSel ? 3 : 1;
+        roundRect(scx, sY, sCardW, sCardH, 14); hudCtx.stroke();
+        hudCtx.fillStyle = sOk ? '#fff' : 'rgba(255,255,255,0.45)';
+        hudCtx.font = '800 ' + (font * 1.05) + 'px ' + FONT;
+        hudCtx.fillText(stp.name, scx + sCardW / 2, sY + font * 1.7);
+        hudCtx.font = '700 ' + (font * 0.8) + 'px ' + FONT;
+        hudCtx.fillStyle = sOk ? '#9ff0b8' : '#ffb4a0';
+        hudCtx.fillText(costWords(sCost), scx + sCardW / 2, sY + font * 2.8);
+        hudCtx.fillStyle = '#c8e8ff';
+        hudCtx.font = '700 ' + (font * 0.76) + 'px ' + FONT;
+        hudCtx.fillText(stp.desc, scx + sCardW / 2, sY + sCardH - font * 0.8);
+      }
+      hudCtx.textAlign = 'left';
+    } else buildCardRects = null;
     // Floating world-space texts, projected onto the screen.
     for (var ft = 0; ft < floatingTexts.length; ft++) {
       var ftx = floatingTexts[ft];
@@ -5357,9 +5598,16 @@ void main() {
   var pop = 0;               // residents living on the raft
   var nextBuild = 0;         // index into BUILDING_SPECS of the building waiting to be paid for
   var baseHearts = R.hearts, baseSpeed = R.heroSpeed; // per-run baselines the buildings raise
-  /* Survival: the canteen drains as you haul garbage; empty means losing hearts.
-   * (Named `canteen`, not `water` — `water` is the sea mesh.) */
-  var canteen = 100, maxWater = 100;
+  /* Survival: the canteen and the belly. `canteen` drains as you haul garbage and
+   * `food` drains slowly from the moment the fish basket stands; either one at
+   * zero costs hearts. (Named `canteen`/`food`, not `water` — `water` is the sea
+   * mesh — and the water gainers are the rain catcher and the purifier.) */
+  var canteen = 100, maxWater = 100, food = 100, maxFood = 100;
+  var rainClock = 0, purifyClock = 0, hungerClock = 0, starveT = 0, foodDropT = 0;
+  var selfSustainT = 0;       // seconds both bars have stayed above zero
+  var townReady = false;      // self-sustained once → the town is unlocked
+  var townReadyBanner = 0;
+  var survivalModels = [], shelterCut = 0;
   var magnet = 0, tradeBonus = 0, shieldBonus = 0;
   /* The build choice: two blueprints on offer, the player picks one. */
   var buildOffer = null, buildOfferT = 0, offerCooldown = 6, buildSel = 0, buildCardRects = null;
@@ -5493,7 +5741,95 @@ void main() {
     fanfare([523, 659, 784], 0.09, 'triangle', 0.07);
     if (buildings.length >= BUILDING_SPECS.length) finish('town');
   }
-  /** Loot spawns right around the raft, so the next pickup is always a short
+  /* --- The survival build order (stage 1). The chain, not the wallet, is what
+   *  gates progress: a piece is offered only when its prerequisites stand. --- */
+  var SURV = R.survival;
+  var survival = [];          // ids of everything already standing on the raft
+  var buildOpen = false;      // true while the workbench build list is on screen
+  function hasBuilt(id) { return survival.indexOf(id) >= 0; }
+  function stepById(id) {
+    for (var i = 0; i < SURVIVAL_STEPS.length; i++) if (SURVIVAL_STEPS[i].id === id) return SURVIVAL_STEPS[i];
+    return null;
+  }
+  function stepCost(step) {
+    var c = SURV[step.id];
+    return c && typeof c === 'object' ? { wood: c.wood || 0, plastic: c.plastic || 0, metal: c.metal || 0 }
+      : { wood: 0, plastic: 0, metal: 0 };
+  }
+  function canAffordCost(cost) { return res.wood >= cost.wood && res.plastic >= cost.plastic && res.metal >= cost.metal; }
+  function costWords(cost) {
+    var parts = [];
+    if (cost.wood) parts.push('木' + cost.wood);
+    if (cost.plastic) parts.push('塑' + cost.plastic);
+    if (cost.metal) parts.push('铁' + cost.metal);
+    return parts.join(' ') || '免费';
+  }
+  /** The next survival step the chain is ready for, or null when everything stands. */
+  function nextSurvivalStep() {
+    for (var i = 0; i < SURVIVAL_STEPS.length; i++) {
+      var step = SURVIVAL_STEPS[i];
+      if (hasBuilt(step.id)) continue;
+      var ready = true;
+      for (var n = 0; n < step.needs.length; n++) if (!hasBuilt(step.needs[n])) ready = false;
+      if (ready) return step;
+    }
+    return null;
+  }
+  /** Everything the chain could offer right now (prerequisites met, not yet built). */
+  function offerableSteps() {
+    var out = [];
+    for (var i = 0; i < SURVIVAL_STEPS.length; i++) {
+      var step = SURVIVAL_STEPS[i];
+      if (hasBuilt(step.id)) continue;
+      var ready = true;
+      for (var n = 0; n < step.needs.length; n++) if (!hasBuilt(step.needs[n])) ready = false;
+      if (ready) out.push(step);
+    }
+    return out;
+  }
+  /** The one-line "build this next" prompt, with its price, or '' when done. */
+  function survivalHintText() {
+    var step = nextSurvivalStep();
+    if (!step) return '';
+    return '造' + step.name + ' ' + costWords(stepCost(step));
+  }
+  /** The workbench turns the deck into a building site: tap 建 or press B. */
+  function openBuildMenu() {
+    if (!hasBuilt('workbench') || buildOpen) return;
+    var pool = offerableSteps();
+    if (!pool.length) return;
+    buildOpen = true; buildSel = 0; buildCardRects = null;
+    blip(620, 0.1, 'sine', 0.04, 820);
+  }
+  function closeBuildMenu() { buildOpen = false; buildSel = 0; buildCardRects = null; }
+  function pickSurvival(id) {
+    var step = stepById(id);
+    if (!step || hasBuilt(step.id)) return false;
+    var cost = stepCost(step);
+    if (!canAffordCost(cost)) { addFT('材料不够！', hero.x, hero.z, '#ff9a96', 1.2); return false; }
+    for (var i = 0; i < survival.length; i++) if (survival[i] === step.id) return false;
+    res.wood -= cost.wood; res.plastic -= cost.plastic; res.metal -= cost.metal;
+    var model = voxelModel(step.boxes);
+    model.position.set(step.at[0], step.at[1], step.at[2]);
+    model.scale.setScalar(step.scale);
+    model.userData.pop = 0;
+    hero.node.userData.body.add(model);
+    model.userData.stepId = step.id;
+    survival.push(step.id);
+    survivalModels.push(model);
+    addFT(step.name + ' 落成！', hero.x, hero.z, '#ffe2a8', 2);
+    burst(hero.x, hero.y + R.heroSize, hero.z);
+    fanfare([523, 659, 784], 0.09, 'triangle', 0.07);
+    return true;
+  }
+  /** Build the next step in the chain, whatever it is (used by the autopilot). */
+  function buildNextSurvival() {
+    var step = nextSurvivalStep();
+    if (!step) return false;
+    return pickSurvival(step.id);
+  }
+
+  /* Loot spawns right around the raft, so the next pickup is always a short
    *  hop away and the loop keeps its rhythm. */
   function nearSea(minFromHero) {
     for (var tries = 0; tries < 300; tries++) {
@@ -5550,8 +5886,18 @@ void main() {
     node.add(glow);
     pickups.push({ x: p.x, z: p.z, phase: Math.random() * 6, drift: Math.random() * 6, node: node, glow: glow, special: 'water', value: 0, glowColor: '#9fe0ff', name: '淡水' });
   }
+  /** A bait pail of small fish in the water: the quick way to fill the belly bar. */
+  function addFoodDrop() {
+    var p = randomSeaSafe(5);
+    if (!p) return;
+    var node = makeCharacter('pickup', R.pickupSize, FOOD_BOXES);
+    var glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, color: '#c8f0b0', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    glow.scale.set(R.pickupSize * 3, R.pickupSize * 3, 1);
+    glow.position.y = R.pickupSize * 0.5;
+    node.add(glow);
+    pickups.push({ x: p.x, z: p.z, phase: Math.random() * 6, drift: Math.random() * 6, node: node, glow: glow, special: 'food', value: 0, glowColor: '#c8f0b0', name: '鱼干' });
+  }
   function addSpecial() {
-    if (hasSpecial()) return;
     var type = hearts < R.hearts ? 'ring' : (Math.random() < 0.45 ? 'chest' : null);
     if (!type) return;
     var p = randomSeaSafe(6);
@@ -5601,18 +5947,19 @@ void main() {
     phase = next;
     endedAt = performance.now();
     if (next !== 'playing' && drag) drag = null;
-    if (next === 'title') showCard(TITLE, '打捞垃圾换材料，材料够了自动盖楼。水壶会空，记得捞淡水。躲开鲨鱼的红色预警圈——⚡冲刺能帮你脱身。', '按任意键 / 点击屏幕开始');
+    if (next === 'title') showCard(TITLE, '打捞垃圾换材料。先造工作台，再盖庇护所，然后补齐四件生存装备——水与食能自持，才算站住了脚。躲开鲨鱼的红色预警圈，⚡冲刺能帮你脱身。', '按任意键 / 点击屏幕开始');
     else if (next === 'playing') clearCard();
     else if (next === 'won') {
       var head = lastReason === 'town' ? '漂流小镇落成！' : '小镇初具规模';
       showCard(head,
-        buildings.length + '/6 座建筑 · ' + pop + ' 位居民 · ' + pieces + ' 件垃圾 · ' + score + ' 分\n' + tallyLine() + '\n最佳: ' + best,
+        townCount() + '/' + townTarget() + ' 座建筑 · ' + pop + ' 位居民 · ' + pieces + ' 件垃圾 · ' + score + ' 分\n' + tallyLine() + '\n最佳: ' + best,
         '按任意键 / 点击屏幕再来一局');
     } else if (next === 'lost') {
       var why = lastReason === 'shark' ? '木筏被鲨鱼撞散了！'
-        : (lastReason === 'thirst' ? '水喝完了，船员撑不住了…' : '天黑了，垃圾漂走了…');
+        : lastReason === 'thirst' ? '水喝完了，船员撑不住了…'
+        : lastReason === 'hunger' ? '食物吃完了，船员饿垮了…' : '天黑了，垃圾漂走了…';
       showCard(why,
-        buildings.length + '/6 座建筑 · ' + pop + ' 位居民 · ' + pieces + ' 件垃圾 · ' + score + ' 分\n' + tallyLine() + '\n最佳: ' + best,
+        townCount() + '/' + townTarget() + ' 座建筑 · ' + pop + ' 位居民 · ' + pieces + ' 件垃圾 · ' + score + ' 分\n' + tallyLine() + '\n最佳: ' + best,
         '按任意键 / 点击屏幕再试一次');
     }
     post({ type: 'state', phase: phase, score: score });
@@ -5621,6 +5968,9 @@ void main() {
     clearEntities();
     buildings.forEach(function (b) { hero.node.userData.body.remove(b); });
     buildings = [];
+    survivalModels.forEach(function (b) { hero.node.userData.body.remove(b); });
+    survivalModels = []; survival = [];
+    buildOpen = false; buildSel = 0; buildCardRects = null; shelterCut = 0;
     score = 0; hearts = R.hearts; timeLeft = R.duration; elapsed = 0; spawnTimer = 0;
     invulnerable = 0; shield = 0; sinceShield = 0; paused = false;
     combo = 0; lastPick = -99; comboShowT = 0; specialTimer = 0; shake = 0; hurtFlash = 0; wakeTimer = 0;
@@ -5628,6 +5978,8 @@ void main() {
     res = { wood: 0, plastic: 0, metal: 0 }; pop = 0; nextBuild = 0;
     baseHearts = R.hearts; baseSpeed = R.heroSpeed;
     canteen = 100; maxWater = 100; magnet = 0; tradeBonus = 0; shieldBonus = 0;
+    food = 100; maxFood = 100; rainClock = 0; purifyClock = 0; hungerClock = 0;
+    starveT = 0; foodDropT = 0; selfSustainT = 0; townReady = false; townReadyBanner = 0;
     buildOffer = null; buildSel = 0; buildOfferT = 0; offerCooldown = 5;
     surgeT = 0; surgeShowT = 0; waterDry = 0; waterDropT = 0; guardT = 0;
     // Keep the patrolled zone away from where the raft starts.
@@ -5648,6 +6000,10 @@ void main() {
     setPhase(won ? 'won' : 'lost');
   }
   function canRestart() { return performance.now() - endedAt > 600; }
+  /** 镇 x/6 counts the town buildings plus the shelter: a home is a home. The
+   *  town still cannot win before the survival layer is self-sustaining. */
+  function townCount() { return buildings.length + (SURV.shelterCountsAsTown && hasBuilt('shelter') ? 1 : 0); }
+  function townTarget() { return 6; }
 
   /* 9. INPUT — screen-aligned: right is +x, up is -z (the camera never turns). */
   var keys = {};
@@ -5655,6 +6011,22 @@ void main() {
   window.addEventListener('keydown', function (event) {
     if (event.code === 'KeyM') { muted = !muted; return; }
     if (phase === 'playing' && event.code === 'KeyP') { paused = !paused; showPause(); return; }
+    // The workbench build list: ← / → pick, Enter builds, B / Esc closes.
+    if (buildOpen) {
+      var pool = offerableSteps();
+      if (event.code === 'ArrowLeft' || event.code === 'KeyA') { buildSel = Math.max(0, buildSel - 1); event.preventDefault(); return; }
+      if (event.code === 'ArrowRight' || event.code === 'KeyD') { buildSel = Math.min(pool.length - 1, buildSel + 1); event.preventDefault(); return; }
+      if (event.code === 'Enter' || event.code === 'Space' || event.code === 'NumpadEnter') {
+        if (pool[buildSel]) {
+          pickSurvival(pool[buildSel].id);
+          if (!offerableSteps().length) closeBuildMenu(); else buildSel = Math.min(buildSel, offerableSteps().length - 1);
+        }
+        event.preventDefault(); return;
+      }
+      if (event.code === 'KeyB' || event.code === 'Escape') { closeBuildMenu(); event.preventDefault(); return; }
+      return;
+    }
+    if (event.code === 'KeyB' && phase === 'playing' && !paused) { openBuildMenu(); event.preventDefault(); return; }
     // While a blueprint is on offer the run pauses and ← / → / Enter pick one.
     if (buildOffer) {
       if (event.code === 'ArrowLeft' || event.code === 'KeyA') { buildSel = Math.max(0, buildSel - 1); event.preventDefault(); return; }
@@ -5675,6 +6047,27 @@ void main() {
   canvas.addEventListener('pointerdown', function (event) {
     try { canvas.focus(); } catch (e) { /* focus is a desktop nicety */ }
     if (phase !== 'playing') { if (canRestart()) start(); return; }
+    // The workbench build list: tap a card to build it, tap elsewhere to close.
+    if (buildOpen) {
+      if (buildCardRects) {
+        for (var sb = 0; sb < buildCardRects.length; sb++) {
+          var sbR = buildCardRects[sb];
+          if (event.clientX >= sbR.x && event.clientX <= sbR.x + sbR.w
+              && event.clientY >= sbR.y && event.clientY <= sbR.y + sbR.h) {
+            pickSurvival(sbR.id);
+            if (!offerableSteps().length) closeBuildMenu();
+            return;
+          }
+        }
+      }
+      closeBuildMenu();
+      return;
+    }
+    // The 建 button (only there once the workbench stands) opens the build list.
+    if (buildBtnRect) {
+      var bbx = event.clientX - buildBtnRect.x, bby = event.clientY - buildBtnRect.y;
+      if (bbx * bbx + bby * bby <= buildBtnRect.r * buildBtnRect.r) { openBuildMenu(); return; }
+    }
     // Tapping a blueprint card picks it; the run is paused behind the offer.
     if (buildOffer && buildCardRects) {
       for (var bc = 0; bc < buildCardRects.length; bc++) {
@@ -5739,14 +6132,14 @@ void main() {
   /* 10. UPDATE */
   function update(dt, now) {
     // A blueprint on offer freezes the action: the choice is the decision point.
-    if (phase === 'playing' && !paused && !buildOffer) {
+    if (phase === 'playing' && !paused && !buildOffer && !buildOpen) {
       elapsed += dt;
       timeLeft = Math.max(0, timeLeft - dt);
       invulnerable = Math.max(0, invulnerable - dt);
       shield = Math.max(0, shield - dt);
       moveZone(dt);
       // Thirst: a gentle clock, not a death spiral. Refills are always near.
-      canteen = Math.max(0, canteen - dt * 1.5);
+      canteen = Math.max(0, canteen - dt * SURV.thirstRate);
       if (canteen <= 0) {
         waterDry = (waterDry || 0) + dt;
         if (waterDry > 1.2) {
@@ -5762,8 +6155,62 @@ void main() {
       // A canteen drifts in now and then, so refills are always reachable.
       waterDropT = (waterDropT || 0) + dt;
       if (waterDropT > 7 && canteen < maxWater * 0.75) { waterDropT = 0; addWaterDrop(); }
+      /* --- Survival gear: once something stands on the deck it works by itself,
+       *  which is what turns thirst and hunger from a panic into background. --- */
+      if (hasBuilt('rainCatcher')) {
+        rainClock += dt;
+        if (rainClock >= SURV.rainEvery) {
+          rainClock = 0;
+          canteen = Math.min(maxWater, canteen + SURV.rainAmount);
+          addFT('集雨 +' + SURV.rainAmount, hero.x - 1, hero.z, '#9fe0ff', 1);
+        }
+      } else rainClock = 0;
+      if (hasBuilt('purifier')) {
+        purifyClock += dt;
+        if (purifyClock >= SURV.purifyEvery) {
+          purifyClock = 0;
+          canteen = Math.min(maxWater, canteen + SURV.purifyAmount);
+          addFT('净水 +' + SURV.purifyAmount, hero.x + 1, hero.z, '#9fe0ff', 1);
+        }
+      } else purifyClock = 0;
+      /* --- Belly: the hunger bar only appears once the fish basket is built, so
+       *  stage 0 stays gentle and stage 1 adds the second clock. --- */
+      if (hasBuilt('fishBasket')) {
+        food = Math.max(0, food - dt * SURV.hungerRate);
+        hungerClock += dt;
+        if (hungerClock >= SURV.fishEvery) {
+          hungerClock = 0;
+          food = Math.min(maxFood, food + SURV.fishAmount);
+          addFT('鱼篓 +' + SURV.fishAmount, hero.x, hero.z + 1, '#c8f0b0', 1);
+        }
+        foodDropT += dt;
+        if (foodDropT > SURV.foodDropEvery && food < maxFood * 0.7) { foodDropT = 0; addFoodDrop(); }
+        if (food <= 0) {
+          starveT += dt;
+          if (starveT > SURV.starveEvery) {
+            starveT = 0;
+            if (invulnerable <= 0) {
+              hearts -= 1; invulnerable = 1.2; hurtFlash = 1; shake = 0.6;
+              addFT('饥饿 -1♥', hero.x, hero.z, '#ffcf9a', 1.3);
+              blip(130, 0.3, 'sawtooth', 0.05, 70);
+              if (hearts <= 0) { finish('hunger'); return; }
+            }
+          }
+        } else starveT = 0;
+      } else { food = maxFood; hungerClock = 0; starveT = 0; foodDropT = 0; }
+      /* --- Self-sustaining: both bars held above zero long enough that the crew
+       *  could stop collecting and still live. That is the gate on the town. --- */
+      if (hasBuilt('fishBasket') && canteen > 0 && food > 0) {
+        selfSustainT += dt;
+        if (!townReady && selfSustainT >= SURV.selfSustainSec) {
+          townReady = true; townReadyBanner = 3.5;
+          addFT('可以建立城镇了！', hero.x, hero.z, '#ffe2a8', 3);
+          fanfare([523, 659, 784, 1047], 0.13, 'triangle', 0.07);
+        }
+      } else selfSustainT = 0;
+      townReadyBanner = Math.max(0, townReadyBanner - dt);
       // The build choice becomes available once the stockpile covers a blueprint.
-      if (!buildOffer && nextBuild < BUILDING_SPECS.length && canAfford(BUILDING_SPECS[nextBuild])) {
+      if (!buildOffer && nextBuild < BUILDING_SPECS.length && canAfford(BUILDING_SPECS[nextBuild]) && townReady) {
         offerCooldown -= dt;
         if (offerCooldown <= 0) { offerBuild(); offerCooldown = 6; }
       }
@@ -5864,7 +6311,8 @@ void main() {
         var p = pickups[k];
         // Generous but not magnetic: the raft has to be roughly on top of a
         // piece to sweep it up. (`heroSize` alone is the hull's half-width.)
-        var reach = R.heroSize * 0.62 + R.pickupSize * 0.85 + magnet;
+        // The scoop net widens the base reach; the formula itself is unchanged.
+        var reach = (R.heroSize * 0.62 + R.pickupSize * 0.85 + magnet) * (hasBuilt('scoopNet') ? 1.5 : 1);
         if (Math.hypot(p.x - hero.x, p.z - hero.z) < reach) {
           scene.remove(p.node);
           pickups.splice(k, 1);
@@ -5873,6 +6321,11 @@ void main() {
             canteen = Math.min(maxWater, canteen + 34);
             addFT('淡水 +34', p.x, p.z, '#9fe0ff', 1.2);
             fanfare([740, 988], 0.09, 'sine', 0.055);
+            burst(p.x, floatY(p.x, p.z) + 0.8, p.z);
+          } else if (p.special === 'food') {
+            food = Math.min(maxFood, food + SURV.foodDropAmount);
+            addFT('鱼干 +' + SURV.foodDropAmount, p.x, p.z, '#c8f0b0', 1.2);
+            fanfare([620, 880], 0.09, 'sine', 0.055);
             burst(p.x, floatY(p.x, p.z) + 0.8, p.z);
           } else if (p.special === 'ring') {
             hearts = Math.min(R.hearts, hearts + 1);
@@ -5915,11 +6368,14 @@ void main() {
             blip(440, 0.35, 'sine', 0.06, 1100);
           }
           // Materials in hand: offer a blueprint when the stockpile can cover one.
-          if (!buildOffer && nextBuild < BUILDING_SPECS.length && canAfford(BUILDING_SPECS[nextBuild])) offerBuild();
+          // The town only opens up once the survival layer is self-sustaining
+          // (design doc: survival gear ships before the town, or the player is
+          // pulled two ways before they can even stand).
+          if (!buildOffer && townReady && nextBuild < BUILDING_SPECS.length && canAfford(BUILDING_SPECS[nextBuild])) offerBuild();
         }
       }
       while (pickups.length < R.maxPickups) addPickup();
-      if (timeLeft <= 0) finish(buildings.length >= 4 ? 'partial' : 'timeout');
+      if (timeLeft <= 0) finish(townCount() >= 4 ? 'partial' : 'timeout');
     }
 
     // Animate everything, also behind the cards.
@@ -6175,32 +6631,47 @@ void main() {
   window.__gameState = function () {
     return {
       phase: phase, paused: paused, score: score, best: best, target: R.target,
-      buildings: buildings.length, combo: combo, dashCd: Math.round(hero.dashCd * 100) / 100,
+      buildings: buildings.length, town: townCount(), townTarget: townTarget(), combo: combo, dashCd: Math.round(hero.dashCd * 100) / 100,
       time: Math.round(timeLeft * 100) / 100, hearts: hearts, shield: Math.round(shield * 100) / 100,
       water: Math.round(canteen), maxWater: maxWater, pop: pop,
+      food: Math.round(food), maxFood: maxFood, hungerOn: hasBuilt('fishBasket'),
+      survival: survival.slice(), next: (nextSurvivalStep() || {}).id || null,
+      selfSustain: Math.round(selfSustainT * 10) / 10, townReady: townReady, buildOpen: buildOpen,
       offer: buildOffer ? buildOffer.map(function (i) { return BUILDING_SPECS[i].name; }) : null,
       zone: { x: Math.round(zone.x * 100) / 100, z: Math.round(zone.z * 100) / 100, r: zone.r },
       hero: { x: Math.round(hero.x * 100) / 100, y: Math.round(hero.z * 100) / 100 },
-      pickups: pickups.map(function (p) { return { x: p.x, y: p.z }; }),
+      pickups: pickups.map(function (p) { return { x: p.x, y: p.z, kind: p.name }; }),
       enemies: enemies.map(function (e) { return { x: Math.round(e.x * 100) / 100, y: Math.round(e.z * 100) / 100 }; }),
       fps: Math.round(fps), renderer: 'webgl', heroMode: heroMode, world: { size: N }, heroOnScreen: heroOnScreen()
     };
   };
 
-  /* Playtest autopilot: answer blueprint choices so an unattended playtest can
-   * show the whole loop. Steering is left to the harness (it heads for the
-   * nearest pickup). Players never reach this. */
-  window.__autoplay = function () {
-    if (!buildOffer) return;
-    var bestIdx = 0, bestScore = -1;
-    for (var i = 0; i < buildOffer.length; i++) {
-      var sp = BUILDING_SPECS[buildOffer[i]];
-      if (!canAfford(sp)) continue;
-      var s2 = sp.pop * 2 + (sp.perk === 'maxHearts' ? 3 : 0) + (sp.perk === 'water' ? 3 : 0);
-      if (s2 > bestScore) { bestScore = s2; bestIdx = i; }
+  /* Playtest autopilot: answer blueprint choices and drive the survival chain,
+   * so an unattended playtest shows the whole stage-0 → stage-1 loop. Steering
+   * is left to the harness (it heads for the nearest pickup). Players never
+   * reach this. Two entry points: __autoplay (what the harness calls) and
+   * __survivalAutoplay (the same thing, under the name the task asked for). */
+  function survivalAutoplay() {
+    if (phase !== 'playing') return;
+    // A town blueprint card is up: pick the best affordable one.
+    if (buildOffer) {
+      var bestIdx = 0, bestScore = -1;
+      for (var i = 0; i < buildOffer.length; i++) {
+        var sp = BUILDING_SPECS[buildOffer[i]];
+        if (!canAfford(sp)) continue;
+        var s2 = sp.pop * 2 + (sp.perk === 'maxHearts' ? 3 : 0) + (sp.perk === 'water' ? 3 : 0);
+        if (s2 > bestScore) { bestScore = s2; bestIdx = i; }
+      }
+      pickBuild(bestIdx);
+      return;
     }
-    pickBuild(bestIdx);
-  };
+    // Build the next survival step as soon as it is affordable — the chain,
+    // not the clock, is what the playtest is meant to prove out.
+    var step = nextSurvivalStep();
+    if (step && canAffordCost(stepCost(step))) buildNextSurvival();
+  }
+  window.__autoplay = survivalAutoplay;
+  window.__survivalAutoplay = survivalAutoplay;
   /** The playtest autopilot steers toward the nearest safe pickup, ignoring the
    *  patrolled deep-water zone so it survives long enough to show the loop. */
   window.__pickupFilter = function (p) { return !inZone(p.x, p.z); };

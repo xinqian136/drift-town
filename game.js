@@ -47,6 +47,27 @@
     dash: { cooldown: 3, speed: 15, time: 0.4 }, // the raft's burst of speed
     comboWindow: 4,          // seconds between pickups to keep a combo alive
     specialEvery: 8,         // seconds between special-item spawn attempts
+    /* Survival layer (design doc stage 0–1): workbench → shelter → four pieces
+     * of survival gear. Every number here is meant to be tuned from game.json
+     * without touching code. Costs are in the same {wood, plastic, metal} shape
+     * as the town buildings, so one cost line and one pay function serve both. */
+    survival: {
+      thirstRate: 1.5,            // canteen points drained per second
+      hungerRate: 0.6,            // food points drained per second (once the belly bar is on)
+      starveEvery: 1.6,           // seconds between hearts lost on an empty belly
+      selfSustainSec: 60,         // hold water and food above zero this long → town unlocked
+      shelterCountsAsTown: true,  // the shelter is a dwelling, so it counts toward 镇 x/6
+      rainEvery: 8, rainAmount: 8,        // 集雨器: rainwater into the canteen
+      fishEvery: 10, fishAmount: 6,       // 鱼篓: a little food over time
+      purifyEvery: 5, purifyAmount: 12,   // 净水器: steady clean water
+      foodDropEvery: 9, foodDropAmount: 26, // seconds between floating food, and its value
+      workbench: { wood: 4, plastic: 0, metal: 0 },
+      shelter: { wood: 8, plastic: 2, metal: 0 },
+      rainCatcher: { wood: 3, plastic: 2, metal: 0 },
+      fishBasket: { wood: 4, plastic: 0, metal: 0 },
+      scoopNet: { wood: 3, plastic: 0, metal: 0 },
+      purifier: { wood: 4, plastic: 0, metal: 2 }
+    },
     worldSize: 34,           // sea diameter in blocks
     seed: 7,                 // island shape
     palette: {
@@ -608,6 +629,14 @@
     [0, 0.7, 0, 0.2, 0.14, 0.2, '#d8eefc'], [0, 0.3, 0, 0.66, 0.2, 0.66, '#eaf7ff']
   ];
 
+  /* Food bobbing in the water: a bait pail of small fish. Eating it is the fastest
+   *  way to top the belly bar back up without waiting on the fish basket. */
+  var FOOD_BOXES = [
+    [0, 0.3, 0, 0.72, 0.56, 0.72, '#8fb6c9'], [0, 0.6, 0, 0.78, 0.12, 0.78, '#6b8fa3'],
+    [0, 0.72, 0, 0.3, 0.12, 0.3, '#d8eefc'], [0.06, 0.74, 0.02, 0.5, 0.1, 0.34, '#9fd8e8'],
+    [-0.2, 0.78, -0.16, 0.26, 0.1, 0.3, '#7fc4d8'], [0.24, 0.8, -0.12, 0.22, 0.1, 0.26, '#9fd8e8']
+  ];
+
   var RING_BOXES = [
     [-0.58, 0.3, 0, 0.52, 0.52, 0.42, '#ffffff'], [0.58, 0.3, 0, 0.52, 0.52, 0.42, '#ffffff'],
     [0, 0.3, -0.58, 0.42, 0.52, 0.52, '#ffffff'], [0, 0.3, 0.58, 0.42, 0.52, 0.52, '#ffffff'],
@@ -750,6 +779,114 @@
     [-1.75, 0.8, -2.35], [1.85, 0.8, -2.3], [-2.1, 0.8, -0.75],
     [2.15, 0.8, -0.7], [-1.65, 0.8, 0.95], [1.75, 0.8, 1.0]
   ];
+  /* --- Survival gear (design doc stage 0–1). Small models that sit on the deck:
+   *  the workbench you build everything at, the shelter that makes the raft a
+   *  home, and the four pieces that turn thirst and hunger into background. --- */
+  var WORKBENCH_BOXES = (function () {
+    var B = boxList(), i;
+    B.add(0, 0.62, 0, 1.24, 0.14, 0.72, '#c9a069');              // bench top
+    [[-0.5, -0.3], [0.5, -0.3], [-0.5, 0.3], [0.5, 0.3]].forEach(function (p) {
+      B.add(p[0], 0.3, p[1], 0.1, 0.6, 0.1, '#8f6135');          // legs
+    });
+    B.add(0, 0.42, -0.24, 1.1, 0.1, 0.1, '#8f6135');             // stretcher
+    for (i = 0; i < 3; i++) B.add(-0.34 + i * 0.34, 0.77, 0.08, 0.24, 0.14, 0.24, i % 2 ? '#aab4c0' : '#8fa3b8'); // tools
+    B.add(0.34, 0.92, -0.17, 0.07, 0.44, 0.07, '#7a5230');       // hammer
+    B.add(0.34, 1.16, -0.17, 0.3, 0.14, 0.14, '#8fa3b8');
+    B.add(-0.52, 1.2, -0.28, 0.08, 1.0, 0.08, '#6b4a2c');        // a post with a slate to plan on
+    B.add(-0.52, 1.52, -0.28, 0.08, 0.5, 0.62, '#e8dcc0');
+    return B;
+  })();
+  var SHELTER_BOXES = (function () {
+    var B = boxList(), i;
+    B.add(0, 0.72, 0, 1.9, 1.1, 1.6, '#d8a06a');                 // cabin wall
+    B.add(0, 1.34, 0, 2.05, 0.16, 1.72, '#b8875a');              // eave
+    for (i = 0; i < 3; i++) {                                    // pitched thatch roof
+      var w = 1.9 - i * 0.42;
+      B.add(0, 1.5 + i * 0.22, 0, w, 0.24, 1.5 - i * 0.3, i % 2 ? '#c9853f' : '#b8773a');
+    }
+    B.add(0, 0.62, 0.82, 0.5, 0.86, 0.1, '#7a4a28');             // door
+    B.add(0, 0.72, 0.86, 0.16, 0.16, 0.08, '#ffd98a', true);     // door light
+    B.add(-0.62, 0.9, 0.82, 0.36, 0.34, 0.07, '#bfeef2');        // window
+    B.add(0.62, 0.9, 0.82, 0.36, 0.34, 0.07, '#bfeef2');
+    B.add(0, 0.98, -0.82, 0.9, 0.5, 0.08, '#8f6135');            // a bedroll strapped on
+    B.add(0, 1.18, -0.86, 0.94, 0.18, 0.1, '#e8dcc0');
+    return B;
+  })();
+  var RAINCATCHER_BOXES = (function () {
+    var B = boxList(), i;
+    [[-0.44, -0.44], [0.44, -0.44], [-0.44, 0.44], [0.44, 0.44]].forEach(function (p) {
+      B.add(p[0], 0.52, p[1], 0.08, 1.04, 0.08, '#8fa3b8');      // frame
+    });
+    B.add(0, 1.06, 0, 1.16, 0.08, 1.16, '#5fb6d8');              // funnel mouth
+    B.add(0, 1.12, 0, 0.72, 0.08, 0.72, '#8fd0f5');
+    B.add(0, 0.5, 0, 0.76, 0.6, 0.76, '#4f97c4');                // tank
+    B.add(0, 0.82, 0, 0.8, 0.08, 0.8, '#6fb8dc');
+    B.add(0.42, 0.34, 0, 0.14, 0.36, 0.14, '#6fb8dc');           // tap
+    B.add(0.56, 0.24, 0, 0.24, 0.08, 0.08, '#8fd0f5');
+    for (i = 0; i < 3; i++) B.add(0, 0.16 + i * 0.14, 0, 0.86, 0.06, 0.86, '#3f7fa3');
+    return B;
+  })();
+  var FISHBASKET_BOXES = (function () {
+    var B = boxList(), i, j;
+    for (i = 0; i < 4; i++) {                                    // woven basket
+      B.add(0, 0.16 + i * 0.18, 0, 0.94 - i * 0.06, 0.18, 0.94 - i * 0.06, i % 2 ? '#c9a069' : '#b08a52');
+    }
+    for (i = -1; i <= 1; i++) for (j = -1; j <= 1; j++) {
+      if (!i && !j) continue;
+      B.add(i * 0.3, 0.44, j * 0.3, 0.1, 0.86, 0.1, '#a8763a'); // hoop ribs
+    }
+    B.add(0, 0.3, 0, 0.34, 0.14, 0.72, '#9fd8e8');              // a fish in the basket
+    B.add(0, 0.34, 0.34, 0.22, 0.12, 0.2, '#7fc4d8');
+    B.add(0, 0.66, 0, 0.5, 0.06, 0.5, '#7fd8b4');               // netting lid
+    return B;
+  })();
+  var SCOOPNET_BOXES = (function () {
+    var B = boxList(), i;
+    B.add(-0.56, 0.9, 0, 0.09, 1.8, 0.09, '#8f6135');           // handle
+    B.add(0.14, 1.68, 0, 1.2, 0.09, 0.09, '#a88a60');           // hoop arm
+    for (i = 0; i < 5; i++) {                                    // net ring
+      var a = i * Math.PI * 2 / 5;
+      B.add(0.14 + Math.cos(a) * 0.52, 1.68, Math.sin(a) * 0.52, 0.08, 0.08, 0.08, '#c9c0a8');
+    }
+    for (i = -2; i <= 2; i++) B.add(0.14 + i * 0.2, 1.54, 0, 0.05, 0.05, 0.9, '#7fd8b4');
+    for (i = -2; i <= 2; i++) B.add(0.14, 1.54, i * 0.18, 1.0, 0.05, 0.05, '#7fd8b4');
+    B.add(-0.56, 1.72, 0, 0.14, 0.14, 0.14, '#ff9f45');         // grip
+    return B;
+  })();
+  var PURIFIER_BOXES = (function () {
+    var B = boxList(), i;
+    B.add(0, 0.2, 0, 1.1, 0.18, 1.1, '#6b6f78');                // base plate
+    B.add(0, 0.72, 0, 0.82, 0.9, 0.82, '#aab4c0');              // boiler
+    B.add(0, 1.2, 0, 0.86, 0.12, 0.86, '#8f97a2');
+    for (i = 0; i < 3; i++) B.add(0, 0.44 + i * 0.24, 0.42, 0.5, 0.1, 0.06, '#c8d0d8'); // ribs
+    B.add(0, 1.5, 0, 0.28, 0.5, 0.28, '#8fa3b8');               // chimney / condenser
+    B.add(0, 1.78, 0, 0.44, 0.1, 0.44, '#7b8794');
+    B.add(0.52, 0.72, 0, 0.12, 0.9, 0.12, '#9aa4b0');           // output pipe
+    B.add(0.62, 0.34, 0, 0.32, 0.1, 0.1, '#6fb8dc');
+    B.add(0, 0.82, 0.44, 0.28, 0.2, 0.06, '#ffd98a', true);     // level window
+    B.add(-0.56, 0.94, 0, 0.1, 0.1, 0.6, '#c8d0d8');            // a little solar still panel
+    return B;
+  })();
+
+  /** The survival build order. Each step lists what it needs built first, so the
+   *  unlock chain of the design doc lives in one readable table:
+   *  workbench → shelter → { rain catcher, fish basket, scoop net → purifier }. */
+  var SURVIVAL_STEPS = [
+    { id: 'workbench', name: '工作台', boxes: WORKBENCH_BOXES, at: [0, 0.72, 2.05], scale: 1.0, needs: [],
+      short: '建造', desc: '解锁建造 · 木材加工', tip: '造出工作台，才能动手搭别的东西' },
+    { id: 'shelter', name: '庇护所', boxes: SHELTER_BOXES, at: [-1.5, 0.72, 1.1], scale: 1.05, needs: ['workbench'],
+      short: '床位+2', desc: '床位+2 · 存档点 · 生存装备图纸', tip: '有了遮风挡雨的家，才顾得上喝水吃饭' },
+    { id: 'rainCatcher', name: '集雨器', boxes: RAINCATCHER_BOXES, at: [1.85, 0.72, 0.55], scale: 0.95, needs: ['shelter'],
+      short: '自动蓄水', desc: '每 ' + R.survival.rainEvery + ' 秒 +' + R.survival.rainAmount + ' 水', tip: '' },
+    { id: 'fishBasket', name: '鱼篓', boxes: FISHBASKET_BOXES, at: [1.15, 0.72, -0.5], scale: 0.95, needs: ['shelter'],
+      short: '自动加餐', desc: '每 ' + R.survival.fishEvery + ' 秒 +' + R.survival.fishAmount + ' 食', tip: '' },
+    { id: 'scoopNet', name: '捞网', boxes: SCOOPNET_BOXES, at: [-1.9, 0.72, -1.4], scale: 0.95, needs: ['shelter'],
+      short: '打捞范围+50%', desc: '打捞范围 +50%', tip: '' },
+    { id: 'purifier', name: '净水器', boxes: PURIFIER_BOXES, at: [0.2, 0.72, 1.75], scale: 0.95,
+      needs: ['rainCatcher', 'workbench'],
+      short: '稳定供水', desc: '每 ' + R.survival.purifyEvery + ' 秒 +' + R.survival.purifyAmount + ' 水', tip: '' }
+  ];
+
   var MODEL_HEIGHT = { hero: 4.7, enemy: 1.1, pickup: 1.9 };
   /** The raft body is scaled to R.heroSize / MODEL_HEIGHT.hero; buildings counter-scale to stay legible. */
   var BUILDING_SCALE = 1.45;
@@ -888,7 +1025,8 @@
   hudQuad.position.set(0.5, 0.5, 0);
   hudScene.add(hudQuad);
   var cardData = null;
-  var boostRect = null; // hit area of the on-screen dash button, refreshed every frame
+  var boostRect = null;    // hit area of the on-screen dash button, refreshed every frame
+  var buildBtnRect = null; // hit area of the 建 button, set while the workbench stands
   function showCard(title, body, hint) { cardData = { title: title, body: body, hint: hint }; }
   function clearCard() { cardData = null; }
   function hudFont() { return Math.max(14, Math.min(22, Math.min(window.innerWidth || 1, window.innerHeight || 1) * 0.024)); }
@@ -943,7 +1081,7 @@
     var m = Math.max(8, Math.min(w, h) * 0.022);
     drawPill(m, m, [
       { text: '♥'.repeat(Math.max(0, hearts)) + '♡'.repeat(Math.max(0, R.hearts - hearts)), color: '#ff8a9a' },
-      { text: '镇 ' + buildings.length + '/6', color: '#ffe2a8' },
+      { text: '镇 ' + townCount() + '/' + townTarget(), color: '#ffe2a8' },
       { text: '民 ' + pop, color: '#c8f0ff' }
     ], font);
     // Material stockpile, and what the next building is still asking for.
@@ -954,22 +1092,66 @@
       { text: '铁 ' + res.metal, color: '#c8d0d8' }
     ];
     drawPill(m, m + font * 1.3 + 14, resParts, font);
-    // The canteen: a bar that turns red as it empties. This is the run's real clock.
-    var wBarW = Math.min(150, w * 0.3), wBarH = font * 0.62;
-    var wBarX = m, wBarY = m + font * 2.6 + 30;
-    var wFrac = clamp(canteen / maxWater, 0, 1);
-    hudCtx.fillStyle = 'rgba(14,18,40,0.5)';
-    roundRect(wBarX, wBarY, wBarW, wBarH, wBarH / 2); hudCtx.fill();
-    hudCtx.fillStyle = wFrac < 0.25 ? '#ff6b6b' : (wFrac < 0.5 ? '#ffc463' : '#5fd0f0');
-    roundRect(wBarX + 2, wBarY + 2, Math.max(0, (wBarW - 4) * wFrac), wBarH - 4, (wBarH - 4) / 2); hudCtx.fill();
-    hudCtx.strokeStyle = 'rgba(255,255,255,0.22)'; hudCtx.lineWidth = 1;
-    roundRect(wBarX, wBarY, wBarW, wBarH, wBarH / 2); hudCtx.stroke();
-    hudCtx.fillStyle = wFrac < 0.25 ? '#ffb4b4' : '#dff6ff';
-    hudCtx.font = '700 ' + (font * 0.72) + 'px ' + FONT;
-    hudCtx.fillText('水 ' + Math.round(canteen) + '/' + maxWater, wBarX + wBarW + 8, wBarY + wBarH - 2);
-    if (nextBuild < BUILDING_SPECS.length && !buildOffer) {
+    /* Two survival bars — water (canteen) and belly (food). The belly bar only
+     * appears once the fish basket stands, so stage 0 keeps its gentle feel.
+     * Canvas 2D only: no DOM nodes, no colour emoji (both break on WeChat). */
+    var barW = Math.min(150, w * 0.3), barH = font * 0.62;
+    var barX = m, barY = m + font * 2.6 + 30;
+    function survivalBar(label, value, max, y, lowColour, fullColour) {
+      var frac = clamp(max > 0 ? value / max : 0, 0, 1);
+      hudCtx.fillStyle = 'rgba(14,18,40,0.5)';
+      roundRect(barX, y, barW, barH, barH / 2); hudCtx.fill();
+      hudCtx.fillStyle = frac < 0.25 ? '#ff6b6b' : (frac < 0.5 ? lowColour : fullColour);
+      roundRect(barX + 2, y + 2, Math.max(0, (barW - 4) * frac), barH - 4, (barH - 4) / 2); hudCtx.fill();
+      hudCtx.strokeStyle = 'rgba(255,255,255,0.22)'; hudCtx.lineWidth = 1;
+      roundRect(barX, y, barW, barH, barH / 2); hudCtx.stroke();
+      hudCtx.fillStyle = frac < 0.25 ? '#ffb4b4' : '#dff6ff';
+      hudCtx.font = '700 ' + (font * 0.72) + 'px ' + FONT;
+      hudCtx.fillText(label + ' ' + Math.round(value) + '/' + max, barX + barW + 8, y + barH - 2);
+    }
+    survivalBar('水', canteen, maxWater, barY, '#ffc463', '#5fd0f0');
+    if (hasBuilt('fishBasket')) survivalBar('食', food, maxFood, barY + barH + 6, '#ffc463', '#8fd86a');
+    // The next survival step in the chain, its price, and whether it is affordable.
+    var hintY = barY + barH + (hasBuilt('fishBasket') ? barH + 14 : 8);
+    var step = nextSurvivalStep();
+    if (step) {
+      drawPill(m, hintY, [{
+        text: survivalHintText() + (hasBuilt('workbench') ? '  （B 打开建造）' : ''),
+        color: canAffordCost(stepCost(step)) ? '#9ff0b8' : '#ffb4a0'
+      }], font * 0.78);
+    } else if (!buildOffer) {
+      drawPill(m, hintY, [{ text: '生存装备齐备 · 打捞攒材料建镇', color: '#9ff0b8' }], font * 0.78);
+    }
+    /* Self-sustaining: the acceptance gate of stage 1, so it stays on screen as a
+     * standing line under the survival hint (not a 3-second toast that a
+     * screenshot can miss), plus a bright banner on the moment it first triggers. */
+    if (townReady) {
+      var srText = '口渴与饥饿可自持 —— 可以建立城镇了';
+      hudCtx.font = '700 ' + (font * 0.78) + 'px ' + FONT;
+      var srW = hudCtx.measureText(srText).width;
+      hudCtx.fillStyle = 'rgba(24,80,60,0.55)';
+      roundRect(m, hintY + font * 1.45, srW + 20, font * 1.45, 8); hudCtx.fill();
+      hudCtx.strokeStyle = 'rgba(160,255,190,0.55)'; hudCtx.lineWidth = 1;
+      roundRect(m, hintY + font * 1.45, srW + 20, font * 1.45, 8); hudCtx.stroke();
+      hudCtx.fillStyle = '#c8ffd8';
+      hudCtx.fillText(srText, m + 10, hintY + font * 2.45);
+    }
+    if (townReady && townReadyBanner > 0) { // the moment it first unlocks
+      hudCtx.globalAlpha = Math.min(1, townReadyBanner);
+      var trText = '可以建立城镇了！';
+      hudCtx.font = '800 ' + (font * 1.15) + 'px ' + FONT;
+      hudCtx.textAlign = 'center';
+      var trW = hudCtx.measureText(trText).width + 34;
+      hudCtx.fillStyle = 'rgba(24,80,60,0.72)';
+      roundRect((w - trW) / 2, h * 0.14, trW, font * 2.2, 12); hudCtx.fill();
+      hudCtx.fillStyle = '#c8ffd8';
+      hudCtx.fillText(trText, w / 2, h * 0.14 + font * 1.5);
+      hudCtx.textAlign = 'left';
+      hudCtx.globalAlpha = 1;
+    }
+    if (nextBuild < BUILDING_SPECS.length && !buildOffer && townReady) {
       var spec = BUILDING_SPECS[nextBuild], ok = canAfford(spec);
-      drawPill(m, wBarY + wBarH + 8, [{
+      drawPill(m, hintY + font * 1.5, [{
         text: '造' + spec.name + ' ' + costText(spec),
         color: ok ? '#9ff0b8' : '#ffb4a0'
       }], font * 0.78);
@@ -981,8 +1163,8 @@
     var cap = window.GAME && window.GAME.safeArea; // keep clear of WeChat's capsule button
     var ty = cap && typeof cap.bottom === 'number' && cap.bottom > 0 ? cap.bottom + 10 : m;
     drawPill(w - m - hudCtx.measureText(timerText).width - 20, ty, [{ text: timerText, color: '#fff' }], font);
-    if (shield > 0) drawPill(m, wBarY + wBarH + font * 1.6 + 22, [{ text: '救生圈 ' + Math.ceil(shield) + 's', color: '#bff0ff' }], font * 0.8);
-    if (combo >= 2 && comboShowT > 0) drawPill(m, wBarY + wBarH + font * 2.8 + 32, [{ text: '连击 x' + combo, color: '#ffc463' }], font * 0.85);
+    if (shield > 0) drawPill(m, hintY + font * 1.6 + 22, [{ text: '救生圈 ' + Math.ceil(shield) + 's', color: '#bff0ff' }], font * 0.8);
+    if (combo >= 2 && comboShowT > 0) drawPill(m, hintY + font * 2.8 + 32, [{ text: '连击 x' + combo, color: '#ffc463' }], font * 0.85);
     if (surgeShowT > 0) { // shark surge warning, right under the timer
       hudCtx.globalAlpha = Math.min(1, surgeShowT * 1.5);
       var swText = '鲨鱼潮！';
@@ -1051,6 +1233,65 @@
     hudCtx.textAlign = 'center';
     hudCtx.fillText('⚡', bx, by + br * 0.34);
     hudCtx.globalAlpha = 1;
+    /* The 建 button: the workbench's build list. It only exists once the
+     * workbench stands (the design doc's stage-0 gate), sits above the dash
+     * button, and glows while something in the chain is affordable. */
+    if (hasBuilt('workbench') && !buildOffer && phase === 'playing') {
+      var canBuild = false, pool0 = offerableSteps();
+      for (var pb = 0; pb < pool0.length; pb++) if (canAffordCost(stepCost(pool0[pb]))) canBuild = true;
+      var wbr = 26, wbx = w - m - wbr - 10, wby = by - br - wbr - 12;
+      buildBtnRect = { x: wbx, y: wby, r: wbr + 10 };
+      hudCtx.globalAlpha = buildOpen ? 0.55 : 1;
+      hudCtx.fillStyle = canBuild ? 'rgba(60,120,70,0.72)' : 'rgba(14,18,40,0.5)';
+      hudCtx.beginPath(); hudCtx.arc(wbx, wby, wbr, 0, Math.PI * 2); hudCtx.fill();
+      hudCtx.strokeStyle = canBuild ? 'rgba(200,255,208,0.75)' : 'rgba(255,255,255,0.4)';
+      hudCtx.lineWidth = canBuild ? 3 : 2; hudCtx.stroke();
+      if (canBuild) { // a slow pulse so the eye finds it
+        hudCtx.globalAlpha = 0.25 + Math.sin(performance.now() / 260) * 0.18;
+        hudCtx.beginPath(); hudCtx.arc(wbx, wby, wbr + 4, 0, Math.PI * 2); hudCtx.stroke();
+        hudCtx.globalAlpha = buildOpen ? 0.55 : 1;
+      }
+      hudCtx.fillStyle = '#fff';
+      hudCtx.font = '800 ' + (wbr * 0.86) + 'px ' + FONT;
+      hudCtx.fillText('建', wbx, wby + wbr * 0.32);
+      hudCtx.globalAlpha = 1;
+    } else buildBtnRect = null;
+    /* The workbench build list: one card per step whose prerequisites stand.
+     * Same card language as the town blueprint choice, drawn in Canvas 2D. */
+    if (buildOpen && phase === 'playing') {
+      var sPool = offerableSteps();
+      var sCardW = Math.min(w * 0.27, 168), sCardH = sCardW * 0.72;
+      var sGap = Math.min(14, w * 0.02);
+      var sTotal = sCardW * sPool.length + sGap * Math.max(0, sPool.length - 1);
+      var sStartX = (w - sTotal) / 2, sY = h * 0.64;
+      hudCtx.fillStyle = 'rgba(8,14,26,0.42)';
+      hudCtx.fillRect(0, 0, w, h);
+      hudCtx.textAlign = 'center';
+      hudCtx.font = '800 ' + (font * 1.05) + 'px ' + FONT;
+      hudCtx.fillStyle = '#ffe2a8';
+      hudCtx.fillText('工作台 · 建造（← → 或点击）', w / 2, sY - font * 1.1);
+      buildCardRects = [];
+      for (var sc = 0; sc < sPool.length; sc++) {
+        var stp = sPool[sc], sCost = stepCost(stp), sOk = canAffordCost(sCost);
+        var scx = sStartX + sc * (sCardW + sGap);
+        buildCardRects.push({ x: scx, y: sY, w: sCardW, h: sCardH, id: stp.id });
+        hudCtx.fillStyle = sOk ? 'rgba(24,46,66,0.95)' : 'rgba(40,26,26,0.92)';
+        roundRect(scx, sY, sCardW, sCardH, 14); hudCtx.fill();
+        hudCtx.strokeStyle = sc === buildSel && sOk ? '#ffd166' : 'rgba(255,255,255,0.2)';
+        hudCtx.lineWidth = sc === buildSel ? 3 : 1;
+        roundRect(scx, sY, sCardW, sCardH, 14); hudCtx.stroke();
+        hudCtx.fillStyle = sOk ? '#fff' : 'rgba(255,255,255,0.45)';
+        hudCtx.font = '800 ' + (font * 1.05) + 'px ' + FONT;
+        hudCtx.fillText(stp.name, scx + sCardW / 2, sY + font * 1.7);
+        hudCtx.font = '700 ' + (font * 0.8) + 'px ' + FONT;
+        hudCtx.fillStyle = sOk ? '#9ff0b8' : '#ffb4a0';
+        hudCtx.fillText(costWords(sCost), scx + sCardW / 2, sY + font * 2.8);
+        hudCtx.fillStyle = '#c8e8ff';
+        hudCtx.font = '700 ' + (font * 0.76) + 'px ' + FONT;
+        hudCtx.fillText(stp.desc, scx + sCardW / 2, sY + sCardH - font * 0.8);
+      }
+      hudCtx.textAlign = 'left';
+    } else buildCardRects = null;
     // Floating world-space texts, projected onto the screen.
     for (var ft = 0; ft < floatingTexts.length; ft++) {
       var ftx = floatingTexts[ft];
@@ -1123,9 +1364,16 @@
   var pop = 0;               // residents living on the raft
   var nextBuild = 0;         // index into BUILDING_SPECS of the building waiting to be paid for
   var baseHearts = R.hearts, baseSpeed = R.heroSpeed; // per-run baselines the buildings raise
-  /* Survival: the canteen drains as you haul garbage; empty means losing hearts.
-   * (Named `canteen`, not `water` — `water` is the sea mesh.) */
-  var canteen = 100, maxWater = 100;
+  /* Survival: the canteen and the belly. `canteen` drains as you haul garbage and
+   * `food` drains slowly from the moment the fish basket stands; either one at
+   * zero costs hearts. (Named `canteen`/`food`, not `water` — `water` is the sea
+   * mesh — and the water gainers are the rain catcher and the purifier.) */
+  var canteen = 100, maxWater = 100, food = 100, maxFood = 100;
+  var rainClock = 0, purifyClock = 0, hungerClock = 0, starveT = 0, foodDropT = 0;
+  var selfSustainT = 0;       // seconds both bars have stayed above zero
+  var townReady = false;      // self-sustained once → the town is unlocked
+  var townReadyBanner = 0;
+  var survivalModels = [], shelterCut = 0;
   var magnet = 0, tradeBonus = 0, shieldBonus = 0;
   /* The build choice: two blueprints on offer, the player picks one. */
   var buildOffer = null, buildOfferT = 0, offerCooldown = 6, buildSel = 0, buildCardRects = null;
@@ -1259,7 +1507,95 @@
     fanfare([523, 659, 784], 0.09, 'triangle', 0.07);
     if (buildings.length >= BUILDING_SPECS.length) finish('town');
   }
-  /** Loot spawns right around the raft, so the next pickup is always a short
+  /* --- The survival build order (stage 1). The chain, not the wallet, is what
+   *  gates progress: a piece is offered only when its prerequisites stand. --- */
+  var SURV = R.survival;
+  var survival = [];          // ids of everything already standing on the raft
+  var buildOpen = false;      // true while the workbench build list is on screen
+  function hasBuilt(id) { return survival.indexOf(id) >= 0; }
+  function stepById(id) {
+    for (var i = 0; i < SURVIVAL_STEPS.length; i++) if (SURVIVAL_STEPS[i].id === id) return SURVIVAL_STEPS[i];
+    return null;
+  }
+  function stepCost(step) {
+    var c = SURV[step.id];
+    return c && typeof c === 'object' ? { wood: c.wood || 0, plastic: c.plastic || 0, metal: c.metal || 0 }
+      : { wood: 0, plastic: 0, metal: 0 };
+  }
+  function canAffordCost(cost) { return res.wood >= cost.wood && res.plastic >= cost.plastic && res.metal >= cost.metal; }
+  function costWords(cost) {
+    var parts = [];
+    if (cost.wood) parts.push('木' + cost.wood);
+    if (cost.plastic) parts.push('塑' + cost.plastic);
+    if (cost.metal) parts.push('铁' + cost.metal);
+    return parts.join(' ') || '免费';
+  }
+  /** The next survival step the chain is ready for, or null when everything stands. */
+  function nextSurvivalStep() {
+    for (var i = 0; i < SURVIVAL_STEPS.length; i++) {
+      var step = SURVIVAL_STEPS[i];
+      if (hasBuilt(step.id)) continue;
+      var ready = true;
+      for (var n = 0; n < step.needs.length; n++) if (!hasBuilt(step.needs[n])) ready = false;
+      if (ready) return step;
+    }
+    return null;
+  }
+  /** Everything the chain could offer right now (prerequisites met, not yet built). */
+  function offerableSteps() {
+    var out = [];
+    for (var i = 0; i < SURVIVAL_STEPS.length; i++) {
+      var step = SURVIVAL_STEPS[i];
+      if (hasBuilt(step.id)) continue;
+      var ready = true;
+      for (var n = 0; n < step.needs.length; n++) if (!hasBuilt(step.needs[n])) ready = false;
+      if (ready) out.push(step);
+    }
+    return out;
+  }
+  /** The one-line "build this next" prompt, with its price, or '' when done. */
+  function survivalHintText() {
+    var step = nextSurvivalStep();
+    if (!step) return '';
+    return '造' + step.name + ' ' + costWords(stepCost(step));
+  }
+  /** The workbench turns the deck into a building site: tap 建 or press B. */
+  function openBuildMenu() {
+    if (!hasBuilt('workbench') || buildOpen) return;
+    var pool = offerableSteps();
+    if (!pool.length) return;
+    buildOpen = true; buildSel = 0; buildCardRects = null;
+    blip(620, 0.1, 'sine', 0.04, 820);
+  }
+  function closeBuildMenu() { buildOpen = false; buildSel = 0; buildCardRects = null; }
+  function pickSurvival(id) {
+    var step = stepById(id);
+    if (!step || hasBuilt(step.id)) return false;
+    var cost = stepCost(step);
+    if (!canAffordCost(cost)) { addFT('材料不够！', hero.x, hero.z, '#ff9a96', 1.2); return false; }
+    for (var i = 0; i < survival.length; i++) if (survival[i] === step.id) return false;
+    res.wood -= cost.wood; res.plastic -= cost.plastic; res.metal -= cost.metal;
+    var model = voxelModel(step.boxes);
+    model.position.set(step.at[0], step.at[1], step.at[2]);
+    model.scale.setScalar(step.scale);
+    model.userData.pop = 0;
+    hero.node.userData.body.add(model);
+    model.userData.stepId = step.id;
+    survival.push(step.id);
+    survivalModels.push(model);
+    addFT(step.name + ' 落成！', hero.x, hero.z, '#ffe2a8', 2);
+    burst(hero.x, hero.y + R.heroSize, hero.z);
+    fanfare([523, 659, 784], 0.09, 'triangle', 0.07);
+    return true;
+  }
+  /** Build the next step in the chain, whatever it is (used by the autopilot). */
+  function buildNextSurvival() {
+    var step = nextSurvivalStep();
+    if (!step) return false;
+    return pickSurvival(step.id);
+  }
+
+  /* Loot spawns right around the raft, so the next pickup is always a short
    *  hop away and the loop keeps its rhythm. */
   function nearSea(minFromHero) {
     for (var tries = 0; tries < 300; tries++) {
@@ -1316,8 +1652,18 @@
     node.add(glow);
     pickups.push({ x: p.x, z: p.z, phase: Math.random() * 6, drift: Math.random() * 6, node: node, glow: glow, special: 'water', value: 0, glowColor: '#9fe0ff', name: '淡水' });
   }
+  /** A bait pail of small fish in the water: the quick way to fill the belly bar. */
+  function addFoodDrop() {
+    var p = randomSeaSafe(5);
+    if (!p) return;
+    var node = makeCharacter('pickup', R.pickupSize, FOOD_BOXES);
+    var glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, color: '#c8f0b0', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    glow.scale.set(R.pickupSize * 3, R.pickupSize * 3, 1);
+    glow.position.y = R.pickupSize * 0.5;
+    node.add(glow);
+    pickups.push({ x: p.x, z: p.z, phase: Math.random() * 6, drift: Math.random() * 6, node: node, glow: glow, special: 'food', value: 0, glowColor: '#c8f0b0', name: '鱼干' });
+  }
   function addSpecial() {
-    if (hasSpecial()) return;
     var type = hearts < R.hearts ? 'ring' : (Math.random() < 0.45 ? 'chest' : null);
     if (!type) return;
     var p = randomSeaSafe(6);
@@ -1367,18 +1713,19 @@
     phase = next;
     endedAt = performance.now();
     if (next !== 'playing' && drag) drag = null;
-    if (next === 'title') showCard(TITLE, '打捞垃圾换材料，材料够了自动盖楼。水壶会空，记得捞淡水。躲开鲨鱼的红色预警圈——⚡冲刺能帮你脱身。', '按任意键 / 点击屏幕开始');
+    if (next === 'title') showCard(TITLE, '打捞垃圾换材料。先造工作台，再盖庇护所，然后补齐四件生存装备——水与食能自持，才算站住了脚。躲开鲨鱼的红色预警圈，⚡冲刺能帮你脱身。', '按任意键 / 点击屏幕开始');
     else if (next === 'playing') clearCard();
     else if (next === 'won') {
       var head = lastReason === 'town' ? '漂流小镇落成！' : '小镇初具规模';
       showCard(head,
-        buildings.length + '/6 座建筑 · ' + pop + ' 位居民 · ' + pieces + ' 件垃圾 · ' + score + ' 分\n' + tallyLine() + '\n最佳: ' + best,
+        townCount() + '/' + townTarget() + ' 座建筑 · ' + pop + ' 位居民 · ' + pieces + ' 件垃圾 · ' + score + ' 分\n' + tallyLine() + '\n最佳: ' + best,
         '按任意键 / 点击屏幕再来一局');
     } else if (next === 'lost') {
       var why = lastReason === 'shark' ? '木筏被鲨鱼撞散了！'
-        : (lastReason === 'thirst' ? '水喝完了，船员撑不住了…' : '天黑了，垃圾漂走了…');
+        : lastReason === 'thirst' ? '水喝完了，船员撑不住了…'
+        : lastReason === 'hunger' ? '食物吃完了，船员饿垮了…' : '天黑了，垃圾漂走了…';
       showCard(why,
-        buildings.length + '/6 座建筑 · ' + pop + ' 位居民 · ' + pieces + ' 件垃圾 · ' + score + ' 分\n' + tallyLine() + '\n最佳: ' + best,
+        townCount() + '/' + townTarget() + ' 座建筑 · ' + pop + ' 位居民 · ' + pieces + ' 件垃圾 · ' + score + ' 分\n' + tallyLine() + '\n最佳: ' + best,
         '按任意键 / 点击屏幕再试一次');
     }
     post({ type: 'state', phase: phase, score: score });
@@ -1387,6 +1734,9 @@
     clearEntities();
     buildings.forEach(function (b) { hero.node.userData.body.remove(b); });
     buildings = [];
+    survivalModels.forEach(function (b) { hero.node.userData.body.remove(b); });
+    survivalModels = []; survival = [];
+    buildOpen = false; buildSel = 0; buildCardRects = null; shelterCut = 0;
     score = 0; hearts = R.hearts; timeLeft = R.duration; elapsed = 0; spawnTimer = 0;
     invulnerable = 0; shield = 0; sinceShield = 0; paused = false;
     combo = 0; lastPick = -99; comboShowT = 0; specialTimer = 0; shake = 0; hurtFlash = 0; wakeTimer = 0;
@@ -1394,6 +1744,8 @@
     res = { wood: 0, plastic: 0, metal: 0 }; pop = 0; nextBuild = 0;
     baseHearts = R.hearts; baseSpeed = R.heroSpeed;
     canteen = 100; maxWater = 100; magnet = 0; tradeBonus = 0; shieldBonus = 0;
+    food = 100; maxFood = 100; rainClock = 0; purifyClock = 0; hungerClock = 0;
+    starveT = 0; foodDropT = 0; selfSustainT = 0; townReady = false; townReadyBanner = 0;
     buildOffer = null; buildSel = 0; buildOfferT = 0; offerCooldown = 5;
     surgeT = 0; surgeShowT = 0; waterDry = 0; waterDropT = 0; guardT = 0;
     // Keep the patrolled zone away from where the raft starts.
@@ -1414,6 +1766,10 @@
     setPhase(won ? 'won' : 'lost');
   }
   function canRestart() { return performance.now() - endedAt > 600; }
+  /** 镇 x/6 counts the town buildings plus the shelter: a home is a home. The
+   *  town still cannot win before the survival layer is self-sustaining. */
+  function townCount() { return buildings.length + (SURV.shelterCountsAsTown && hasBuilt('shelter') ? 1 : 0); }
+  function townTarget() { return 6; }
 
   /* 9. INPUT — screen-aligned: right is +x, up is -z (the camera never turns). */
   var keys = {};
@@ -1421,6 +1777,22 @@
   window.addEventListener('keydown', function (event) {
     if (event.code === 'KeyM') { muted = !muted; return; }
     if (phase === 'playing' && event.code === 'KeyP') { paused = !paused; showPause(); return; }
+    // The workbench build list: ← / → pick, Enter builds, B / Esc closes.
+    if (buildOpen) {
+      var pool = offerableSteps();
+      if (event.code === 'ArrowLeft' || event.code === 'KeyA') { buildSel = Math.max(0, buildSel - 1); event.preventDefault(); return; }
+      if (event.code === 'ArrowRight' || event.code === 'KeyD') { buildSel = Math.min(pool.length - 1, buildSel + 1); event.preventDefault(); return; }
+      if (event.code === 'Enter' || event.code === 'Space' || event.code === 'NumpadEnter') {
+        if (pool[buildSel]) {
+          pickSurvival(pool[buildSel].id);
+          if (!offerableSteps().length) closeBuildMenu(); else buildSel = Math.min(buildSel, offerableSteps().length - 1);
+        }
+        event.preventDefault(); return;
+      }
+      if (event.code === 'KeyB' || event.code === 'Escape') { closeBuildMenu(); event.preventDefault(); return; }
+      return;
+    }
+    if (event.code === 'KeyB' && phase === 'playing' && !paused) { openBuildMenu(); event.preventDefault(); return; }
     // While a blueprint is on offer the run pauses and ← / → / Enter pick one.
     if (buildOffer) {
       if (event.code === 'ArrowLeft' || event.code === 'KeyA') { buildSel = Math.max(0, buildSel - 1); event.preventDefault(); return; }
@@ -1441,6 +1813,27 @@
   canvas.addEventListener('pointerdown', function (event) {
     try { canvas.focus(); } catch (e) { /* focus is a desktop nicety */ }
     if (phase !== 'playing') { if (canRestart()) start(); return; }
+    // The workbench build list: tap a card to build it, tap elsewhere to close.
+    if (buildOpen) {
+      if (buildCardRects) {
+        for (var sb = 0; sb < buildCardRects.length; sb++) {
+          var sbR = buildCardRects[sb];
+          if (event.clientX >= sbR.x && event.clientX <= sbR.x + sbR.w
+              && event.clientY >= sbR.y && event.clientY <= sbR.y + sbR.h) {
+            pickSurvival(sbR.id);
+            if (!offerableSteps().length) closeBuildMenu();
+            return;
+          }
+        }
+      }
+      closeBuildMenu();
+      return;
+    }
+    // The 建 button (only there once the workbench stands) opens the build list.
+    if (buildBtnRect) {
+      var bbx = event.clientX - buildBtnRect.x, bby = event.clientY - buildBtnRect.y;
+      if (bbx * bbx + bby * bby <= buildBtnRect.r * buildBtnRect.r) { openBuildMenu(); return; }
+    }
     // Tapping a blueprint card picks it; the run is paused behind the offer.
     if (buildOffer && buildCardRects) {
       for (var bc = 0; bc < buildCardRects.length; bc++) {
@@ -1505,14 +1898,14 @@
   /* 10. UPDATE */
   function update(dt, now) {
     // A blueprint on offer freezes the action: the choice is the decision point.
-    if (phase === 'playing' && !paused && !buildOffer) {
+    if (phase === 'playing' && !paused && !buildOffer && !buildOpen) {
       elapsed += dt;
       timeLeft = Math.max(0, timeLeft - dt);
       invulnerable = Math.max(0, invulnerable - dt);
       shield = Math.max(0, shield - dt);
       moveZone(dt);
       // Thirst: a gentle clock, not a death spiral. Refills are always near.
-      canteen = Math.max(0, canteen - dt * 1.5);
+      canteen = Math.max(0, canteen - dt * SURV.thirstRate);
       if (canteen <= 0) {
         waterDry = (waterDry || 0) + dt;
         if (waterDry > 1.2) {
@@ -1528,8 +1921,62 @@
       // A canteen drifts in now and then, so refills are always reachable.
       waterDropT = (waterDropT || 0) + dt;
       if (waterDropT > 7 && canteen < maxWater * 0.75) { waterDropT = 0; addWaterDrop(); }
+      /* --- Survival gear: once something stands on the deck it works by itself,
+       *  which is what turns thirst and hunger from a panic into background. --- */
+      if (hasBuilt('rainCatcher')) {
+        rainClock += dt;
+        if (rainClock >= SURV.rainEvery) {
+          rainClock = 0;
+          canteen = Math.min(maxWater, canteen + SURV.rainAmount);
+          addFT('集雨 +' + SURV.rainAmount, hero.x - 1, hero.z, '#9fe0ff', 1);
+        }
+      } else rainClock = 0;
+      if (hasBuilt('purifier')) {
+        purifyClock += dt;
+        if (purifyClock >= SURV.purifyEvery) {
+          purifyClock = 0;
+          canteen = Math.min(maxWater, canteen + SURV.purifyAmount);
+          addFT('净水 +' + SURV.purifyAmount, hero.x + 1, hero.z, '#9fe0ff', 1);
+        }
+      } else purifyClock = 0;
+      /* --- Belly: the hunger bar only appears once the fish basket is built, so
+       *  stage 0 stays gentle and stage 1 adds the second clock. --- */
+      if (hasBuilt('fishBasket')) {
+        food = Math.max(0, food - dt * SURV.hungerRate);
+        hungerClock += dt;
+        if (hungerClock >= SURV.fishEvery) {
+          hungerClock = 0;
+          food = Math.min(maxFood, food + SURV.fishAmount);
+          addFT('鱼篓 +' + SURV.fishAmount, hero.x, hero.z + 1, '#c8f0b0', 1);
+        }
+        foodDropT += dt;
+        if (foodDropT > SURV.foodDropEvery && food < maxFood * 0.7) { foodDropT = 0; addFoodDrop(); }
+        if (food <= 0) {
+          starveT += dt;
+          if (starveT > SURV.starveEvery) {
+            starveT = 0;
+            if (invulnerable <= 0) {
+              hearts -= 1; invulnerable = 1.2; hurtFlash = 1; shake = 0.6;
+              addFT('饥饿 -1♥', hero.x, hero.z, '#ffcf9a', 1.3);
+              blip(130, 0.3, 'sawtooth', 0.05, 70);
+              if (hearts <= 0) { finish('hunger'); return; }
+            }
+          }
+        } else starveT = 0;
+      } else { food = maxFood; hungerClock = 0; starveT = 0; foodDropT = 0; }
+      /* --- Self-sustaining: both bars held above zero long enough that the crew
+       *  could stop collecting and still live. That is the gate on the town. --- */
+      if (hasBuilt('fishBasket') && canteen > 0 && food > 0) {
+        selfSustainT += dt;
+        if (!townReady && selfSustainT >= SURV.selfSustainSec) {
+          townReady = true; townReadyBanner = 3.5;
+          addFT('可以建立城镇了！', hero.x, hero.z, '#ffe2a8', 3);
+          fanfare([523, 659, 784, 1047], 0.13, 'triangle', 0.07);
+        }
+      } else selfSustainT = 0;
+      townReadyBanner = Math.max(0, townReadyBanner - dt);
       // The build choice becomes available once the stockpile covers a blueprint.
-      if (!buildOffer && nextBuild < BUILDING_SPECS.length && canAfford(BUILDING_SPECS[nextBuild])) {
+      if (!buildOffer && nextBuild < BUILDING_SPECS.length && canAfford(BUILDING_SPECS[nextBuild]) && townReady) {
         offerCooldown -= dt;
         if (offerCooldown <= 0) { offerBuild(); offerCooldown = 6; }
       }
@@ -1630,7 +2077,8 @@
         var p = pickups[k];
         // Generous but not magnetic: the raft has to be roughly on top of a
         // piece to sweep it up. (`heroSize` alone is the hull's half-width.)
-        var reach = R.heroSize * 0.62 + R.pickupSize * 0.85 + magnet;
+        // The scoop net widens the base reach; the formula itself is unchanged.
+        var reach = (R.heroSize * 0.62 + R.pickupSize * 0.85 + magnet) * (hasBuilt('scoopNet') ? 1.5 : 1);
         if (Math.hypot(p.x - hero.x, p.z - hero.z) < reach) {
           scene.remove(p.node);
           pickups.splice(k, 1);
@@ -1639,6 +2087,11 @@
             canteen = Math.min(maxWater, canteen + 34);
             addFT('淡水 +34', p.x, p.z, '#9fe0ff', 1.2);
             fanfare([740, 988], 0.09, 'sine', 0.055);
+            burst(p.x, floatY(p.x, p.z) + 0.8, p.z);
+          } else if (p.special === 'food') {
+            food = Math.min(maxFood, food + SURV.foodDropAmount);
+            addFT('鱼干 +' + SURV.foodDropAmount, p.x, p.z, '#c8f0b0', 1.2);
+            fanfare([620, 880], 0.09, 'sine', 0.055);
             burst(p.x, floatY(p.x, p.z) + 0.8, p.z);
           } else if (p.special === 'ring') {
             hearts = Math.min(R.hearts, hearts + 1);
@@ -1681,11 +2134,14 @@
             blip(440, 0.35, 'sine', 0.06, 1100);
           }
           // Materials in hand: offer a blueprint when the stockpile can cover one.
-          if (!buildOffer && nextBuild < BUILDING_SPECS.length && canAfford(BUILDING_SPECS[nextBuild])) offerBuild();
+          // The town only opens up once the survival layer is self-sustaining
+          // (design doc: survival gear ships before the town, or the player is
+          // pulled two ways before they can even stand).
+          if (!buildOffer && townReady && nextBuild < BUILDING_SPECS.length && canAfford(BUILDING_SPECS[nextBuild])) offerBuild();
         }
       }
       while (pickups.length < R.maxPickups) addPickup();
-      if (timeLeft <= 0) finish(buildings.length >= 4 ? 'partial' : 'timeout');
+      if (timeLeft <= 0) finish(townCount() >= 4 ? 'partial' : 'timeout');
     }
 
     // Animate everything, also behind the cards.
@@ -1941,32 +2397,47 @@
   window.__gameState = function () {
     return {
       phase: phase, paused: paused, score: score, best: best, target: R.target,
-      buildings: buildings.length, combo: combo, dashCd: Math.round(hero.dashCd * 100) / 100,
+      buildings: buildings.length, town: townCount(), townTarget: townTarget(), combo: combo, dashCd: Math.round(hero.dashCd * 100) / 100,
       time: Math.round(timeLeft * 100) / 100, hearts: hearts, shield: Math.round(shield * 100) / 100,
       water: Math.round(canteen), maxWater: maxWater, pop: pop,
+      food: Math.round(food), maxFood: maxFood, hungerOn: hasBuilt('fishBasket'),
+      survival: survival.slice(), next: (nextSurvivalStep() || {}).id || null,
+      selfSustain: Math.round(selfSustainT * 10) / 10, townReady: townReady, buildOpen: buildOpen,
       offer: buildOffer ? buildOffer.map(function (i) { return BUILDING_SPECS[i].name; }) : null,
       zone: { x: Math.round(zone.x * 100) / 100, z: Math.round(zone.z * 100) / 100, r: zone.r },
       hero: { x: Math.round(hero.x * 100) / 100, y: Math.round(hero.z * 100) / 100 },
-      pickups: pickups.map(function (p) { return { x: p.x, y: p.z }; }),
+      pickups: pickups.map(function (p) { return { x: p.x, y: p.z, kind: p.name }; }),
       enemies: enemies.map(function (e) { return { x: Math.round(e.x * 100) / 100, y: Math.round(e.z * 100) / 100 }; }),
       fps: Math.round(fps), renderer: 'webgl', heroMode: heroMode, world: { size: N }, heroOnScreen: heroOnScreen()
     };
   };
 
-  /* Playtest autopilot: answer blueprint choices so an unattended playtest can
-   * show the whole loop. Steering is left to the harness (it heads for the
-   * nearest pickup). Players never reach this. */
-  window.__autoplay = function () {
-    if (!buildOffer) return;
-    var bestIdx = 0, bestScore = -1;
-    for (var i = 0; i < buildOffer.length; i++) {
-      var sp = BUILDING_SPECS[buildOffer[i]];
-      if (!canAfford(sp)) continue;
-      var s2 = sp.pop * 2 + (sp.perk === 'maxHearts' ? 3 : 0) + (sp.perk === 'water' ? 3 : 0);
-      if (s2 > bestScore) { bestScore = s2; bestIdx = i; }
+  /* Playtest autopilot: answer blueprint choices and drive the survival chain,
+   * so an unattended playtest shows the whole stage-0 → stage-1 loop. Steering
+   * is left to the harness (it heads for the nearest pickup). Players never
+   * reach this. Two entry points: __autoplay (what the harness calls) and
+   * __survivalAutoplay (the same thing, under the name the task asked for). */
+  function survivalAutoplay() {
+    if (phase !== 'playing') return;
+    // A town blueprint card is up: pick the best affordable one.
+    if (buildOffer) {
+      var bestIdx = 0, bestScore = -1;
+      for (var i = 0; i < buildOffer.length; i++) {
+        var sp = BUILDING_SPECS[buildOffer[i]];
+        if (!canAfford(sp)) continue;
+        var s2 = sp.pop * 2 + (sp.perk === 'maxHearts' ? 3 : 0) + (sp.perk === 'water' ? 3 : 0);
+        if (s2 > bestScore) { bestScore = s2; bestIdx = i; }
+      }
+      pickBuild(bestIdx);
+      return;
     }
-    pickBuild(bestIdx);
-  };
+    // Build the next survival step as soon as it is affordable — the chain,
+    // not the clock, is what the playtest is meant to prove out.
+    var step = nextSurvivalStep();
+    if (step && canAffordCost(stepCost(step))) buildNextSurvival();
+  }
+  window.__autoplay = survivalAutoplay;
+  window.__survivalAutoplay = survivalAutoplay;
   /** The playtest autopilot steers toward the nearest safe pickup, ignoring the
    *  patrolled deep-water zone so it survives long enough to show the loop. */
   window.__pickupFilter = function (p) { return !inZone(p.x, p.z); };

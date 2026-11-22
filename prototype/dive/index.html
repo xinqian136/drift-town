@@ -1,0 +1,2685 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#04121e">
+<title>漂流小镇 · 潜水原型（R7 验证）</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden;
+    background: #04121e; color: #dff2ff;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none; overscroll-behavior: none;
+  }
+  #stage { position: fixed; inset: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+  /* 右侧操作按钮：DOM 覆盖层（真按钮，pointerdown + stopPropagation）。
+     不用 Canvas 内绘制按钮，是为了让"采集按钮"在 DOM 里可被直接审查/自动化点击。 */
+  .gbtn {
+    position: absolute; border-radius: 999px; box-sizing: border-box;
+    border: 2px solid rgba(190, 230, 255, .42);
+    background: rgba(12, 44, 66, .52);
+    color: #dff2ff; font-family: inherit; font-weight: 700;
+    letter-spacing: .06em; padding: 0; margin: 0;
+    touch-action: none; -webkit-user-select: none; user-select: none;
+    transition: background .07s linear, border-color .07s linear, transform .07s linear, opacity .12s linear;
+  }
+  .gbtn.big { font-size: 18px; }
+  .gbtn.small { font-size: 12px; line-height: 1.14; padding: 0 3px; letter-spacing: 0; }
+  .gbtn.hot { background: rgba(120, 205, 240, .55); border-color: #d6f4ff; }
+  .gbtn.down { transform: scale(.94); background: rgba(150, 220, 250, .68); }
+  .gbtn.off { opacity: .28; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv"></canvas>
+  <button id="btnGrab" class="gbtn big hidden" type="button">采集</button>
+  <button id="btnUp"   class="gbtn small hidden" type="button">上浮</button>
+  <button id="btnDown" class="gbtn small hidden" type="button">下潜</button>
+</div>
+<script>
+/* =============================================================================
+ * 漂流小镇 · 潜水玩法独立原型
+ * 目的：验证设计文档 R7「手机端 3D 自由泳操作困难」的缓解方案
+ *       —— 俯视平面移动 + 深度分层 + 氧气压力 —— 是否真的可行、是否真的好玩。
+ * 技术：纯 Canvas 2D，零外部依赖，零图片资源，双击 index.html 即可玩。
+ *
+ * 设计文档出处：
+ *   docs/GAME_DESIGN.md  6.1 资源数据库 Tier 分层 / 七·阶段4「深海经营」/ 九·风险表 R7
+ *   docs/UNLOCK_CHAIN.md 五·建议2「手机潜水必须俯视化」
+ * ========================================================================== */
+(function () {
+  'use strict';
+
+  /* ===========================================================================
+   * 一、玩法数值设计（先算，再写代码）
+   * ---------------------------------------------------------------------------
+   * 目标时长：单次下潜 45–60 秒（对应设计文档 4.2「氧气初始 60s」）。
+   * 目标手感：「再抓一条就上浮」——玩家在氧气还剩 20%–35% 时产生可观测的犹豫。
+   *
+   * 【氧气】60 秒。它不是一个"计时器"，而是三件事的公共货币：
+   *   1) 待在深水的时间成本（按层倍率扣）
+   *   2) 采集的动作成本（一次抓取的瞬间扣）
+   *   3) 回程的路费（上浮每层要时间，且负重越重越慢 → 路费越高）
+   *   → 只要"回程路费"随收获增长，玩家每多拿一件，安全线就往上抬一次。
+   *     这是本原型的核心张力来源（见 TUNE.carryPenalty 注释）。
+   *
+   * 【为什么上浮比下潜慢】下潜 1.15s/层，上浮 1.9s/层。真实潜水如此（浮力），
+   *   玩法则由此产生不对称风险：往下走很便宜，往回走很贵 → 深水是"进得去出不来"。
+   *
+   * 【一层能采几个】见 TUNE 尾部「容量测算」。
+   * =========================================================================== */
+
+  var TUNE = {
+    /* ---- 氧气 ---- */
+    oxygenMax: 60,            // 文档 4.2：初始 60s
+
+    /* 分层消耗倍率（每秒）。
+     * 文档原文只给了"深水 ×1.6"。实测（__calibrate / __sweep2）：
+     *   ×1.6 时深水 12 件里能拿 6.6–6.8 件，贪婪惩罚只有 4–6%，
+     *   玩家几乎不需要挑选，"多拿一件"的收益不显著；
+     *   ×2.2 时能拿 5.5–6.3 件，超贪死亡率惩罚升到 8–10%，
+     *   且"必然放弃 6 件"成为常态，挑选哪几件才成立。
+     * 停在这里不再往上调：×2.5 时深水收益会低于浅水，破坏"深水更值"的直觉。 */
+    layerOxygenMult: { 1: 1.0, 2: 1.5, 3: 2.2 },
+
+    /* 换层（下潜/上浮）过程中的额外消耗倍率：游动比呆着更费氧 */
+    transitOxygenMult: 1.35,
+    descendSecPerLayer: 1.15, // 下潜：快
+    ascendSecPerLayer: 1.90,  // 上浮：慢（这是"回程路费"的主体）
+
+    /* 一次采集的瞬时氧气成本（按层递增：深水的东西更重/更难弄） */
+    grabCost: { 1: 0.8, 2: 1.6, 3: 2.5 },
+
+    /* 负重惩罚：每件 +3% 时间成本，上限 40%。
+     * ⚠ 如实记录：我最初假设"没有负重惩罚，压力就只是枯燥的算术，机制必需这一条"。
+     *   __calibrate（深水 ×2.2，每组 48 局）**否定了这个假设**：
+     *     - carry=0 时 EV 曲线已经是单峰的（最优撤退阈值落在内点 1.0），
+     *       说明"存在一个最优的贪"由氧气消耗 + 回程路费本身就能撑起来；
+     *     - carry 0 / 0.02 / 0.03 / 0.05 的峰值格在 EV 与"纠结段"上差异
+     *       落在样本噪声内，看不到可信的优劣。
+     *   保留 0.03 仅因为"潜得越久背得越重、回程越慢"符合直觉且无害，
+     *   **不是因为它被证明必要**。详见 REPORT.md §4.4。 */
+    carryPenalty: 0.03,
+    carryCap: 0.40,
+
+    /* ---- 移动 ---- */
+    swimSpeed: 220,                       // 世界单位/秒（浅水）
+    layerSpeedMult: { 1: 1.00, 2: 0.95, 3: 0.88 }, // 越深越拖
+    grabRange: 84,                        // 采集判定半径（触屏友好，给得很宽）
+    playerRadius: 17,
+
+    /* ---- 世界 ---- */
+    worldW: 1800,
+    worldH: 1400,
+    itemCount: { 1: 11, 2: 11, 3: 12 },
+
+    /* ---- 危险 ---- */
+    sharkHitOxygen: 15,      // 文档 4.2 口径：被咬扣 15 秒氧气
+    sharkInvuln: 1.6,        // 咬完的无敌时间，避免连续掉氧
+    currentPush: 78,         // 深水暗流推力（世界单位/秒）
+
+    /* ---- 逃跑鱼 ---- */
+    fleeAlert: 190,          // 玩家进入这个距离，鱼开始逃
+    fleeSpeed: { 1: 0, 2: 96, 3: 124 },   // 浅水不逃（教学层）
+    fleeStamina: { 1: 0, 2: 2.4, 3: 3.2 },// 逃这么久就没力气，给玩家追上它的窗口
+    fleeRest: { 1: 0, 2: 1.3, 3: 1.1 },
+
+    /* ---- 判定的"犹豫"阈值（只用于 HARNESS 统计，不影响手感） ---- */
+    hesitationBand: [0.35, 1.6], // slack 落在 [0.35,1.6]×单件成本 → 记为犹豫帧
+    reserveWarnBand: 0,          // 余量贴近安全线 ±2s 的窗口中心
+
+    /* ---- 深水密度（验证 R3：潜水不能碾压海面）----
+     * 扫描发现：deepMult=2.2 时，深水 7 件全在玩家能力内 → 贪婪策略的期望收益
+     * 反而低于保守策略（112 vs 132），因为"贪"只增加死亡风险而不额外产出。
+     * 一个被严格支配的策略说明**压力没有回报**，等于没有赌博。
+     * 修正：深水层加密度（12 件）并提高单位价值，让"多拿一件"确实值钱。 */
+    safeGrabWindow: 2.0
+  };
+
+  /* ---- 容量测算（写在这里，方便改数值时立刻复核） ---------------------------
+   * 设计时的估算；**实测值**见 __calibrate 的输出（每组 48 局，深水 ×2.2）：
+   *   平衡策略单局平均拿 5.5–6.3 件 → 放弃 5.7–6.5 件（必须挑选）；
+   *   最贪策略拿 6.4–7.1 件，但死亡 10–12%；
+   *   最保守策略只拿 4.3–4.8 件但 0% 死亡。
+   *
+   * 估算推导（空手直奔深水）：
+   *   下潜 2 层          = 2 × 1.15 × 1.35 ≈ 3.1 氧
+   *   深水可用           ≈ 60 − 3.1 = 56.9
+   *   单件成本(carry≈3)  ≈ 300单位 / (220×0.88×0.85) × 2.2 + 2.5 ≈ 10.5 氧
+   *   需常备回程路费     = 3 × 1.9 × 1.35 / 0.85 ≈ 9.1 氧
+   *   → 能拿 ≈ (56.9 − 9.1) / 10.5 ≈ 4.5 件（深水共 12 件）→ 必须挑，清不完。
+   * 浅水一趟：11 件 × 约 2.0 氧 ≈ 22 氧 → 氧气够用，但总价值远低于深水。
+   * 这正是想要的取舍：浅水安全但穷，深水富但要赌。
+   * ------------------------------------------------------------------------ */
+
+  var LAYERS = {
+    1: {
+      key: 'shallow', name: '浅水层', range: '0–15m', short: '浅',
+      top: '#2f86ad', bottom: '#124f6d', fog: 'rgba(120,205,235,0.10)',
+      oxygenMult: TUNE.layerOxygenMult[1], speedMult: TUNE.layerSpeedMult[1],
+      grabCost: TUNE.grabCost[1]
+    },
+    2: {
+      key: 'mid', name: '中层带', range: '15–40m', short: '中',
+      top: '#155a7d', bottom: '#0a3450', fog: 'rgba(60,150,190,0.10)',
+      oxygenMult: TUNE.layerOxygenMult[2], speedMult: TUNE.layerSpeedMult[2],
+      grabCost: TUNE.grabCost[2]
+    },
+    3: {
+      key: 'deep', name: '深水区', range: '40–70m', short: '深',
+      top: '#0a2a42', bottom: '#03101c', fog: 'rgba(30,90,130,0.12)',
+      oxygenMult: TUNE.layerOxygenMult[3], speedMult: TUNE.layerSpeedMult[3],
+      grabCost: TUNE.grabCost[3]
+    }
+  };
+
+  /* ---- 可采集物（数值对齐设计文档 4.3 的菜品成本链：海藻 < 银鳞鱼 < 深海蟹） ---- */
+  var ITEM_DEFS = {
+    kelp:    { name: '海藻',     value: 3,  tier: 1, shape: 'kelp',   flee: true },
+    shell:   { name: '沙贝壳',   value: 4,  tier: 1, shape: 'shell',  flee: false },
+    sardine: { name: '沙丁鱼',   value: 5,  tier: 1, shape: 'fish',   flee: false },
+    jar:     { name: '陶罐',     value: 10, tier: 2, shape: 'jar',    flee: false },
+    silver:  { name: '银鳞鱼',   value: 12, tier: 2, shape: 'fish',   flee: true },
+    octo:    { name: '章鱼',     value: 15, tier: 2, shape: 'octo',   flee: true },
+    crab:    { name: '深海蟹',   value: 30, tier: 3, shape: 'crab',   flee: true },
+    coral:   { name: '发光珊瑚', value: 35, tier: 3, shape: 'coral',  flee: false },
+    relic:   { name: '沉城文物', value: 45, tier: 3, shape: 'relic',  flee: false }
+  };
+
+  var SPAWN_TABLE = {
+    // 浅水：数量多但便宜，氧气几乎用不完 → 教玩家"水下怎么动"
+    1: ['kelp', 'kelp', 'kelp', 'kelp', 'shell', 'shell', 'shell', 'sardine', 'sardine', 'sardine', 'sardine'],
+    // 中层：过渡带，有鲨鱼，开始出现"值不值得"的判断
+    2: ['jar', 'jar', 'jar', 'jar', 'silver', 'silver', 'silver', 'silver', 'octo', 'octo', 'octo'],
+    // 深水：★ 密度必须显著高于玩家能力上限，否则"挑哪几件"的抉择不存在 → 贪婪无回报。
+    // 12 件 vs 单趟能拿 4–5 件，剩下 7 件是玩家必须主动放弃的东西。
+    3: ['crab', 'crab', 'crab', 'crab', 'coral', 'coral', 'coral', 'coral', 'relic', 'relic', 'relic', 'relic']
+  };
+
+  var TIER_COLOR = { 1: '#8fe3c0', 2: '#7fc9ff', 3: '#ffd98a' };
+
+  /* ===========================================================================
+   * 二、工具
+   * ========================================================================== */
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function nowMs() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
+
+  function makeRng(seed) {
+    var s = (seed >>> 0) || 1;
+    return function () {
+      s ^= s << 13; s >>>= 0;
+      s ^= s >> 17;
+      s ^= s << 5; s >>>= 0;
+      return s / 4294967296;
+    };
+  }
+
+  /* ===========================================================================
+   * 三、运行时状态
+   * ========================================================================== */
+  var cv = document.getElementById('cv');
+  var ctx = cv.getContext('2d');
+  var btnGrab = document.getElementById('btnGrab');
+  var btnUp = document.getElementById('btnUp');
+  var btnDown = document.getElementById('btnDown');
+
+  var VW = 390, VH = 844, DPR = 1;
+  var LAY = null;
+
+  var S = {
+    phase: 'title',        // title | diving | transit | settled | blackout
+    mode: 'topdown',       // topdown | free3d（free3d 只做"输入负担"对照，不是 3D 渲染）
+    clock: 0,              // 动画时钟（秒，一直走）
+    elapsed: 0,            // 本局存活时间
+
+    oxygen: TUNE.oxygenMax,
+    depth: 1,              // 1/2/3；0 = 水面（结算态）
+    bag: [],               // [{key,name,value,tier}]
+    lost: false,           // 氧气耗尽，本次收获全丢
+
+    hero: { x: 900, y: 700, vx: 0, vy: 0, face: -Math.PI / 2, invuln: 0, hitFlash: 0 },
+    items: [],             // 当前层的可采集物
+    itemsByLayer: { 1: [], 2: [], 3: [] },
+    sharks: [],
+    currents: [],
+    particles: [],
+
+    transit: null,         // {dir, t, dur, from, to, forced}
+    settle: null,          // 结算数据快照
+    cam: { x: 900, y: 700 },
+    shake: 0,
+    grabFlash: 0,
+    hintTimer: 0,
+
+    // 统计（HARNESS 用）
+    stats: null,
+    rand: Math.random
+  };
+
+  /* ===========================================================================
+   * 四、布局 / 自适应
+   * ========================================================================== */
+  function resize() {
+    VW = Math.max(320, window.innerWidth || 390);
+    VH = Math.max(360, window.innerHeight || 844);
+    DPR = Math.min(2.5, window.devicePixelRatio || 1);
+    cv.width = Math.round(VW * DPR);
+    cv.height = Math.round(VH * DPR);
+    cv.style.width = VW + 'px';
+    cv.style.height = VH + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    LAY = computeLayout();
+    applyDomLayout();
+  }
+
+  /* 竖屏：右侧竖排（采集在下、上浮/下潜在上）
+   * 横屏：右下横排（采集在最右、上浮/下潜在左）
+   * 两种都保证：左手拇指管摇杆，右手拇指管全部按钮，不需要换手。 */
+  function computeLayout() {
+    var portrait = VH >= VW;
+    var r = clamp(Math.min(VW, VH) * 0.118, 40, 74);
+    var pad = Math.max(14, Math.round(Math.min(VW, VH) * 0.03));
+    var small = r * 0.60;
+    var collect = { x: VW - r - pad, y: VH - r - pad, r: r };
+    var up, down;
+    if (portrait) {
+      up   = { x: VW - r - pad, y: VH - r - pad - (r + small + 16), r: small };
+      down = { x: VW - r - pad, y: VH - r - pad - (r + small + 16) * 2, r: small };
+    } else {
+      up   = { x: VW - r - pad - (r + small + 14),     y: VH - r - pad, r: small };
+      down = { x: VW - r - pad - (r + small + 14) * 2, y: VH - r - pad, r: small };
+    }
+    return {
+      portrait: portrait, collect: collect, up: up, down: down,
+      joyR: clamp(r * 1.8, 56, 96),
+      barX: pad, barY: pad + 6, barW: VW - pad * 2, barH: clamp(VH * 0.036, 22, 34)
+    };
+  }
+
+  function placeBtn(el, rect) {
+    el.style.left = (rect.x - rect.r) + 'px';
+    el.style.top = (rect.y - rect.r) + 'px';
+    el.style.width = (rect.r * 2) + 'px';
+    el.style.height = (rect.r * 2) + 'px';
+    el.style.borderRadius = '999px';
+  }
+
+  function applyDomLayout() {
+    if (!LAY) return;
+    placeBtn(btnGrab, LAY.collect);
+    placeBtn(btnUp, LAY.up);
+    placeBtn(btnDown, LAY.down);
+  }
+
+  function showButtons(on) {
+    [btnGrab, btnUp, btnDown].forEach(function (b) {
+      b.classList.toggle('hidden', !on);
+    });
+  }
+
+  /* ===========================================================================
+   * 五、输入：多点触控（按 pointerId 跟踪）+ 键盘
+   * ========================================================================== */
+  var stick = null;          // { id, ox, oy, x, y }  摇杆是"动态原点"：手指按在哪就以哪为圆心
+  var keyState = {};
+  var btnPointer = {};       // buttonKey -> pointerId（同一指不能同时按两个钮）
+  var heldLayer = { up: false, down: false };
+  var aiStick = null;        // 由 __autoplay 写入，优先于人类输入
+  var aiGrabQueued = false;
+
+  function stickVector() {
+    if (aiStick) return aiStick;
+    var x = 0, y = 0;
+    if (keyState.arrowleft || keyState.a) x -= 1;
+    if (keyState.arrowright || keyState.d) x += 1;
+    if (keyState.arrowup || keyState.w) y -= 1;
+    if (keyState.arrowdown || keyState.s) y += 1;
+    if (stick) {
+      var dx = stick.x - stick.ox, dy = stick.y - stick.oy;
+      var len = Math.hypot(dx, dy);
+      if (len > 9) {                       // 死区 9px，防止手指微抖导致漂移
+        var mag = Math.min(1, len / (LAY.joyR * 0.72));
+        x = (dx / len) * mag;
+        y = (dy / len) * mag;
+      }
+    }
+    var m = Math.hypot(x, y);
+    if (m > 1) { x /= m; y /= m; m = 1; }
+    return { x: x, y: y, mag: m };
+  }
+
+  function hitButton(px, py) {
+    if (!LAY) return null;
+    var list = [['collect', LAY.collect], ['up', LAY.up], ['down', LAY.down]];
+    for (var i = 0; i < list.length; i++) {
+      var k = list[i][0], r = list[i][1];
+      // 判定半径放宽 12px：触屏点按有误差，宁可给宽一点
+      if (Math.hypot(px - r.x, py - r.y) <= r.r + 12) return k;
+    }
+    return null;
+  }
+
+  cv.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    if (S.phase === 'title') { startRun(); return; }
+    if (S.phase === 'settled' || S.phase === 'blackout') { startRun(); return; }
+
+    // 按钮区域优先：这里再挡一次，保证"点按钮绝不触发摇杆"
+    var hit = hitButton(e.clientX, e.clientY);
+    if (hit) { e.stopPropagation(); pressButton(hit, e.pointerId); return; }
+
+    if (!stick) {
+      stick = { id: e.pointerId, ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY };
+      try { cv.setPointerCapture(e.pointerId); } catch (err) { /* 老浏览器忽略 */ }
+    }
+  }, { passive: false });
+
+  cv.addEventListener('pointermove', function (e) {
+    if (stick && e.pointerId === stick.id) {
+      stick.x = e.clientX;
+      stick.y = e.clientY;
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  function endPointer(e) {
+    if (stick && e.pointerId === stick.id) stick = null;
+    for (var k in btnPointer) {
+      if (btnPointer[k] === e.pointerId) {
+        delete btnPointer[k];
+        heldLayer[k] = false;
+        elFor(k).classList.remove('down');
+      }
+    }
+  }
+  cv.addEventListener('pointerup', endPointer);
+  cv.addEventListener('pointercancel', endPointer);
+  window.addEventListener('pointerup', endPointer);
+  window.addEventListener('pointercancel', endPointer);
+
+  function elFor(k) {
+    return k === 'collect' ? btnGrab : (k === 'up' ? btnUp : btnDown);
+  }
+
+  /* 按钮动作：全部绑定在 pointerdown 上（不是 click）——触屏上 pointerdown 才有
+     "按下去就响应"的手感，click 会等到抬起，多出 80–150ms 延迟。 */
+  function pressButton(k, pointerId) {
+    if (pointerId !== undefined && btnPointer[k] === pointerId) return;
+    if (pointerId !== undefined) btnPointer[k] = pointerId;
+    var el = elFor(k);
+    el.classList.add('down');
+    // down 的视觉回弹交给 pointerup；即便 pointerup 丢了，180ms 后也会自己复原
+    setTimeout(function () { el.classList.remove('down'); }, 180);
+
+    if (k === 'collect') { aiGrabQueued = false; tryGrab(); }
+    else if (k === 'up') {
+      if (S.mode === 'free3d') heldLayer.up = true;
+      else beginTransit(-1);
+    } else if (k === 'down') {
+      if (S.mode === 'free3d') heldLayer.down = true;
+      else beginTransit(1);
+    }
+  }
+
+  /* DOM 按钮：pointerdown + stopPropagation（验收要求）。
+     按钮是 canvas 的兄弟节点，事件本来就不会冒泡到 canvas；
+     stopPropagation 是为了同时挡住可能挂在 document 上的手势/滚动逻辑。 */
+  [['collect', btnGrab], ['up', btnUp], ['down', btnDown]].forEach(function (pair) {
+    var k = pair[0], el = pair[1];
+    el.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (S.phase === 'title' || S.phase === 'settled' || S.phase === 'blackout') { startRun(); return; }
+      pressButton(k, e.pointerId);
+    }, { passive: false });
+    el.addEventListener('pointerup', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      delete btnPointer[k];
+      heldLayer[k] = false;
+      el.classList.remove('down');
+    }, { passive: false });
+    el.addEventListener('pointercancel', function (e) {
+      delete btnPointer[k];
+      heldLayer[k] = false;
+      el.classList.remove('down');
+    }, { passive: false });
+    // 兜底：阻止长按选中/上下文菜单
+    el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  });
+
+  /* 键盘（桌面调试）：方向键/WASD 移动，空格采集，Q 上浮，E 下潜 */
+  var KEYMAP = {
+    arrowleft: 'arrowleft', a: 'a', arrowright: 'arrowright', d: 'd',
+    arrowup: 'arrowup', w: 'w', arrowdown: 'arrowdown', s: 's'
+  };
+  window.addEventListener('keydown', function (e) {
+    var k = (e.key || '').toLowerCase();
+    if (KEYMAP[k]) { keyState[k] = true; e.preventDefault(); return; }
+    if (e.repeat) return;
+    if (k === ' ' || k === 'spacebar') {
+      e.preventDefault();
+      if (S.phase === 'title' || S.phase === 'settled' || S.phase === 'blackout') startRun();
+      else tryGrab();
+    } else if (k === 'q') {
+      if (S.phase === 'diving') beginTransit(-1);
+    } else if (k === 'e') {
+      if (S.phase === 'diving') beginTransit(1);
+    } else if (k === 'enter') {
+      if (S.phase === 'title' || S.phase === 'settled' || S.phase === 'blackout') startRun();
+    }
+  });
+  window.addEventListener('keyup', function (e) {
+    var k = (e.key || '').toLowerCase();
+    if (KEYMAP[k]) keyState[k] = false;
+  });
+  window.addEventListener('blur', function () { keyState = {}; stick = null; });
+
+  /* ===========================================================================
+   * 六、开一局：生成三个深度层
+   * ========================================================================== */
+  function resetStats() {
+    S.stats = {
+      grabsByLayer: { 1: 0, 2: 0, 3: 0 },
+      valueByLayer: { 1: 0, 2: 0, 3: 0 },
+      sharkHits: 0,
+      maxDepth: 1,
+      timeByLayer: { 1: 0, 2: 0, 3: 0 },
+      /* ---- 犹豫感测量（v2）----
+       * v1 只统计"驻留在危险余量区间多久"，结果发现它对所有调参都不敏感
+       * （扫描表里每一行的 hesitationSec 都≈1.2–1.5s）——一个不随输入变化的
+       * 指标等于没有指标。v2 改成统计"可观测的决策事件"：
+       */
+      hesitationSec: 0,        // 处于危险余量区间且有目标可选的总时长
+      hesitationEpisodes: 0,   // 上述区间被切分成多少段（段数多 = 反复纠结）
+      episodesWithTarget: 0,   // 其中"手边真有东西可捡"的段数
+      _inHes: false,
+      grabInHesitationBand: 0, // ★ 在"刚好够再贪一件"的区间里按下采集的次数（犹豫的实体化）
+      gambleGrab: 0,           // 抓完之后氧气低于安全上浮线 → 真·赌博动作
+      gambleSurvived: 0,       // 上述赌博动作中活下来的次数
+      nearMissSec: 0,          // 氧气在安全线 ±2s 内徘徊的时间（最紧张的一段）
+      lastGrabOxygenPct: null, // 最后一次采集时的氧气百分比
+      grabOxygenPct: [],       // 每次采集时的氧气百分比（用于画分布）
+      simultaneousInputFrames: 0, // 需要同时维持 2 个连续输入通道的帧（3D 输入负担代理）
+      _framesTotal: 0,            // 总帧数（用来算 dualChannelShare 的分母）
+      transitSec: 0,
+      trimAlignFail: 0,         // free3d 模式：因"微深度"没对准而抓空的次数
+      deathCause: null,         // { oxygen|shark|transit: 次数 }
+      lastCause: null           // 本局尚未结算的死因标记（每次 forceSurface 前设置）
+    };
+  }
+
+  function startRun() {
+    S.phase = 'diving';
+    S.oxygen = TUNE.oxygenMax;
+    S.depth = 1;
+    S.bag = [];
+    S.lost = false;
+    S.elapsed = 0;
+    S.transit = null;
+    S.settle = null;
+    S.shake = 0;
+    S.grabFlash = 0;
+    S.hintTimer = 0;
+    S.particles.length = 0;
+    aiStick = null;            // 清掉上一局/上一段自检残留的自动输入
+    heldLayer.up = false;
+    heldLayer.down = false;
+    stick = null;
+    resetStats();
+
+    var rnd = S.rand;
+    var heroX = TUNE.worldW * 0.5 + (rnd() - 0.5) * 120;
+    var heroY = TUNE.worldH * 0.5 + (rnd() - 0.5) * 120;
+    S.hero.x = heroX; S.hero.y = heroY;
+    S.hero.vx = 0; S.hero.vy = 0; S.hero.invuln = 1.2; S.hero.hitFlash = 0;
+    S.cam.x = heroX; S.cam.y = heroY;
+
+    S.itemsByLayer = { 1: [], 2: [], 3: [] };
+    for (var d = 1; d <= 3; d++) {
+      S.itemsByLayer[d] = spawnLayerItems(d, rnd);
+    }
+    S.items = S.itemsByLayer[1];
+    S.sharks = spawnSharks(rnd);
+    S.currents = spawnCurrents(rnd);
+    refreshButtons();
+  }
+
+  function spawnLayerItems(depth, rnd) {
+    var table = SPAWN_TABLE[depth];
+    var out = [];
+    var margin = 130;
+    var tries = 0;
+    var minGap = 150;
+    while (out.length < TUNE.itemCount[depth] && tries < 900) {
+      tries++;
+      var x = margin + rnd() * (TUNE.worldW - margin * 2);
+      var y = margin + rnd() * (TUNE.worldH - margin * 2);
+      var ok = true;
+      for (var i = 0; i < out.length; i++) {
+        if (Math.hypot(out[i].x - x, out[i].y - y) < minGap) { ok = false; break; }
+      }
+      if (!ok) continue;
+      var key = table[Math.floor(rnd() * table.length)];
+      var def = ITEM_DEFS[key];
+      out.push({
+        key: key, name: def.name, value: def.value, tier: def.tier, shape: def.shape,
+        x: x, y: y, r: 22 + def.tier * 3,
+        flee: def.flee, fleeT: 0, restT: 0, phase: rnd() * Math.PI * 2,
+        // free3d 对照用：这一件要求玩家维持的"微深度"目标（-1..1）
+        trim: rnd() * 2 - 1
+      });
+    }
+    return out;
+  }
+
+  function spawnSharks(rnd) {
+    var out = [];
+    // 中层 1 条巡游，深水 2 条（更凶）
+    var specs = [
+      { layer: 2, x: TUNE.worldW * (0.25 + rnd() * 0.5), y: TUNE.worldH * (0.25 + rnd() * 0.5), speed: 88, r: 30 },
+      { layer: 3, x: TUNE.worldW * (0.15 + rnd() * 0.3), y: TUNE.worldH * (0.6 + rnd() * 0.3), speed: 104, r: 34 },
+      { layer: 3, x: TUNE.worldW * (0.6 + rnd() * 0.3), y: TUNE.worldH * (0.1 + rnd() * 0.3), speed: 96, r: 32 }
+    ];
+    for (var i = 0; i < specs.length; i++) {
+      var s = specs[i];
+      out.push({
+        layer: s.layer, x: s.x, y: s.y, r: s.r, speed: s.speed,
+        angle: rnd() * Math.PI * 2, turn: 0,
+        state: 'patrol',      // patrol | alert | charge | stun
+        stateT: 0, alertR: 300, detectR: 250, chargeSpeed: s.speed * 2.3,
+        cd: 0
+      });
+    }
+    return out;
+  }
+
+  function spawnCurrents(rnd) {
+    var out = [];
+    for (var i = 0; i < 3; i++) {
+      out.push({
+        layer: 3,
+        x: rnd() * TUNE.worldW, y: rnd() * TUNE.worldH,
+        w: 380 + rnd() * 260, h: 190 + rnd() * 130,
+        ax: Math.cos(rnd() * Math.PI * 2) * 0.6,
+        ay: Math.sin(rnd() * Math.PI * 2) * 0.6,
+        phase: rnd() * Math.PI * 2
+      });
+    }
+    return out;
+  }
+
+  /* ===========================================================================
+   * 七、氧气 / 回程路费
+   * ========================================================================== */
+  function carrySlow() {
+    // 时间成本倍率：负重越多，游动与上浮都越慢
+    return 1 / (1 - Math.min(TUNE.carryCap, S.bag.length * TUNE.carryPenalty));
+  }
+
+  /* 从当前层"安全回到水面"需要多少氧气。
+   * 这是整个原型的核心可读性设计：不告诉玩家这个数，犹豫就变成"猜"；
+   * 告诉了他，犹豫才变成"算得出的赌局"。 */
+  function reserveOxygen(depth, carryCount) {
+    if (depth <= 0) return 0;
+    var slow = 1 / (1 - Math.min(TUNE.carryCap, carryCount * TUNE.carryPenalty));
+    return depth * TUNE.ascendSecPerLayer * TUNE.transitOxygenMult * slow;
+  }
+
+  function currentReserve() { return reserveOxygen(S.depth, S.bag.length); }
+
+  /* 估算"再抓一件"还要几个氧气（HARNESS 与 UI 提示共用） */
+  function estimatedItemCost() {
+    var L = LAYERS[S.depth] || LAYERS[1];
+    var speed = TUNE.swimSpeed * L.speedMult / carrySlow();
+    var travel = (300 / Math.max(60, speed)) * L.oxygenMult;
+    return travel + L.grabCost + (L.key === 'shallow' ? 0 : 1.4);
+  }
+
+  /* ===========================================================================
+   * 八、动作
+   * ========================================================================== */
+  function tryGrab() {
+    if (S.phase !== 'diving') return false;
+    var h = S.hero;
+    var best = null, bestD = 1e9;
+    for (var i = 0; i < S.items.length; i++) {
+      var it = S.items[i];
+      var d = Math.hypot(it.x - h.x, it.y - h.y);
+      if (d < bestD && d <= TUNE.grabRange + it.r) { bestD = d; best = it; }
+    }
+    if (!best) { S.grabFlash = -0.18; return false; }   // 空点：短促的灰色反馈
+
+    /* ★ 「再抓一条就上浮」的直接观测点。
+     * 在按下采集的那一刻，如果玩家已经处在"氧气刚好够再走一件"的区间里，
+     * 这一次采集就是设计文档支柱 3 所描述的那种抉择的实体化。
+     * 在动手之前记录，因为抓完之后余量必然变小，那就不算"抉择"而算"后果"了。 */
+    var slackBefore = S.oxygen - currentReserve();
+    var estBefore = estimatedItemCost();
+    var inBandBefore = (slackBefore > estBefore * TUNE.hesitationBand[0] &&
+      slackBefore < estBefore * TUNE.hesitationBand[1]);
+    if (inBandBefore) S.stats.grabInHesitationBand++;
+
+    // free3d 对照模式：还要求"微深度"对齐，否则抓不到（模拟 3D 的第三个连续轴）
+    if (S.mode === 'free3d') {
+      var align = 1 - Math.abs((S.hero.trim || 0) - best.trim) / 2;
+      if (align < 0.80) {
+        S.grabFlash = -0.22;
+        S.hintTimer = 1.2;
+        S.stats.trimAlignFail++;
+        return false;
+      }
+    }
+
+    var L = LAYERS[S.depth];
+    S.oxygen -= L.grabCost;
+    S.bag.push({ key: best.key, name: best.name, value: best.value, tier: best.tier });
+    S.stats.grabsByLayer[S.depth]++;
+    S.stats.valueByLayer[S.depth] += best.value;
+    S.stats.grabOxygenPct.push(Math.round(S.oxygen / TUNE.oxygenMax * 100));
+    S.stats.lastGrabOxygenPct = Math.round(S.oxygen / TUNE.oxygenMax * 100);
+
+    // 「再抓一条就上浮」的可观测证据：这一抓之后，氧气已跌破安全上浮线。
+    // 它把"贪"这个抽象动机变成了一个可以数出来的事件。
+    if (S.oxygen < currentReserve()) S.stats.gambleGrab++;
+
+    S.grabFlash = 1;
+    burst(best.x, best.y, 14, best.tier);
+    S.items.splice(S.items.indexOf(best), 1);
+    if (S.oxygen <= 0) { S.oxygen = 0; forceSurface(); }
+    refreshButtons();
+    return true;
+  }
+
+  function beginTransit(dir) {
+    if (S.phase !== 'diving') return false;
+    var from = S.depth;
+    var to = from + dir;
+    if (dir > 0 && from >= 3) return false;
+    if (dir < 0 && from <= 1) to = 0;      // 浅水上浮 = 回水面结算
+    if (to < 0) return false;
+
+    var base = dir > 0 ? TUNE.descendSecPerLayer : TUNE.ascendSecPerLayer;
+    S.transit = {
+      dir: dir, t: 0, dur: base * carrySlow(), from: from, to: to, forced: false
+    };
+    S.phase = 'transit';
+    S.hero.vx = 0; S.hero.vy = 0;
+    refreshButtons();
+    return true;
+  }
+
+  /* 氧气耗尽：强制上浮，且本次收获全部损失（文档 4.2） */
+  function recordDeath(cause) {
+    if (!S.stats) return;
+    S.stats.deathCause = S.stats.deathCause || {};
+    S.stats.deathCause[cause] = (S.stats.deathCause[cause] || 0) + 1;
+  }
+
+  function forceSurface() {
+    if (S.phase !== 'diving' && S.phase !== 'transit') return;
+    S.lost = true;
+    /* 记录死因：氧气分三种耗尽方式，它们的可玩性含义完全不同——
+     *   oxygen  呆在层里耗尽      → 纯粹的贪心算术错误
+     *   shark   被咬掉 15s 后归零 → 躲闪失败的复合惩罚
+     *   transit 上浮途中耗尽      → 出事了却回不去，最戏剧性的一种
+     * 分开统计才能判断压力曲线该调哪一段。 */
+    recordDeath(S.stats && S.stats.lastCause ? S.stats.lastCause : 'oxygen');
+    S.transit = {
+      dir: -1, t: 0,
+      dur: Math.max(1.4, S.depth * TUNE.ascendSecPerLayer * 0.55),
+      from: S.depth, to: 0, forced: true
+    };
+    S.phase = 'transit';
+    S.shake = 1;
+    refreshButtons();
+  }
+
+  function finishTransit() {
+    var tr = S.transit;
+    S.transit = null;
+    if (tr.to === 0) {
+      // 回到水面 → 结算
+      S.depth = 0;
+      S.items = [];
+      S.settle = {
+        lost: tr.forced || S.lost,
+        bag: S.bag.slice(),
+        total: S.bag.reduce(function (a, b) { return a + b.value; }, 0),
+        elapsed: S.elapsed,
+        stats: S.stats
+      };
+      /* 结算口径（文档 4.2「耗尽则损失本次收获」）：
+       * total 保留"本来值多少"，banked 才是"实际带回去多少"。
+       * 早先我把 total 直接清零，结果结算界面出现「原价值 0」这种自相矛盾的读数
+       * ——明明是满载 8 件沉底的。教训：失败态也要保留真实数值，否则玩家学不到教训。 */
+      S.settle.banked = S.settle.lost ? 0 : S.settle.total;
+      if (S.settle.lost) S.phase = 'blackout';
+      else S.phase = 'settled';
+      showButtons(false);
+      return;
+    }
+    S.depth = tr.to;
+    S.items = S.itemsByLayer[S.depth];
+    S.stats.maxDepth = Math.max(S.stats.maxDepth, S.depth);
+    S.hero.invuln = Math.max(S.hero.invuln, 1.0);   // 换层落地给 1 秒无敌，避免一出来就被咬
+    S.phase = 'diving';
+    refreshButtons();
+  }
+
+  /* 按钮可见性 + 文案 + 可用态，三件事必须一起改，否则会出现
+     "按钮藏起来了但状态还开着"这类只在真机上暴露的 bug。 */
+  function refreshButtons() {
+    var diving = (S.phase === 'diving');
+    var playing = diving || S.phase === 'transit';
+    showButtons(playing);
+    if (!playing) return;
+
+    if (S.mode === 'free3d') {
+      btnUp.textContent = '上升';
+      btnDown.textContent = '下潜';
+      btnDown.classList.toggle('off', !diving);
+      btnUp.classList.toggle('off', !diving);
+      return;
+    }
+    // 浅水层按「上浮」= 回水面结算；这一点由过场提示（"上浮 · 返回水面"）交代清楚，
+    // 按钮本身只写两个字，避免在 60px 的圆里塞长文案。
+    btnUp.textContent = '上浮';
+    btnDown.textContent = (S.depth >= 3) ? '最深' : '下潜';
+    btnDown.classList.toggle('off', !diving || S.depth >= 3);
+    btnUp.classList.toggle('off', !diving);
+  }
+
+  /* ===========================================================================
+   * 九、每帧更新
+   * ========================================================================== */
+  function step(dt) {
+    S.clock += dt;
+    updateParticles(dt);
+
+    if (S.phase === 'title' || S.phase === 'settled' || S.phase === 'blackout') return;
+
+    S.elapsed += dt;
+    S.shake = Math.max(0, S.shake - dt * 2.6);
+    S.grabFlash = S.grabFlash > 0 ? Math.max(0, S.grabFlash - dt * 4) : Math.min(0, S.grabFlash + dt * 4);
+    S.hintTimer = Math.max(0, S.hintTimer - dt);
+
+    if (S.phase === 'transit') { updateTransit(dt); return; }
+    if (S.phase !== 'diving') return;
+
+    S.stats.timeByLayer[S.depth] += dt;
+    updatePlayer(dt);
+    updateItems(dt);
+    updateSharks(dt);
+    updateOxygen(dt);
+    updateCamera(dt);
+    trackHesitation(dt);
+    trackInputBurden(dt);
+  }
+
+  function updateTransit(dt) {
+    var tr = S.transit;
+    if (!tr) return;
+    tr.t += dt;
+    S.oxygen -= dt * TUNE.transitOxygenMult;
+    S.stats.transitSec += dt;
+    if (S.oxygen <= 0) {
+      S.oxygen = 0;
+      /* 已经在上浮途中把氧气用光，同样算失败：这是"再贪一件"最贵的代价。
+         不在这里处理的话，玩家会学会"反正已经在回程了，氧气归零也没事"，
+         那整条压力曲线就塌了。 */
+      if (!tr.forced) {
+        S.lost = true; tr.forced = true; S.shake = 1;
+        recordDeath('transit');
+      }
+    }
+    if (tr.t >= tr.dur) finishTransit();
+  }
+
+  function updateOxygen(dt) {
+    var L = LAYERS[S.depth];
+    S.oxygen -= dt * L.oxygenMult;
+    if (S.oxygen <= 0) {
+      S.oxygen = 0;
+      S.stats.lastCause = S.stats.lastCause || 'oxygen';
+      forceSurface();
+    }
+  }
+
+  function updatePlayer(dt) {
+    var h = S.hero;
+    var L = LAYERS[S.depth];
+    var v = stickVector();
+    var slow = carrySlow();
+
+    // free3d 对照：维持"微深度"需要一直按着上/下其中一个 → 第二个连续输入通道
+    h.trim = (S.mode === 'free3d') ? (h.trim || 0) : 0;
+
+    var speed = TUNE.swimSpeed * L.speedMult / slow;
+    var thrusting = false;
+    if (S.mode === 'free3d') {
+      if (heldLayer.down) { h.trim = clamp((h.trim || 0) + dt * 1.6, -1, 1); thrusting = true; }
+      else if (heldLayer.up) { h.trim = clamp((h.trim || 0) - dt * 1.6, -1, 1); thrusting = true; }
+      else { h.trim = (h.trim || 0) * Math.max(0, 1 - dt * 1.1); } // 松手就漂回去
+      if (thrusting) speed *= 0.82;
+    }
+
+    var ax = v.x * speed, ay = v.y * speed;
+
+    // 深水暗流：位置相关的推力
+    if (S.depth === 3 && S.currents) {
+      for (var i = 0; i < S.currents.length; i++) {
+        var c = S.currents[i];
+        if (Math.abs(h.x - c.x) < c.w * 0.5 && Math.abs(h.y - c.y) < c.h * 0.5) {
+          var w = Math.sin(S.clock * 0.9 + c.phase);
+          ax += c.ax * TUNE.currentPush * w;
+          ay += c.ay * TUNE.currentPush * w;
+        }
+      }
+    }
+
+    // 平滑加速（手感：瞬间满速会让触屏很难微调）
+    h.vx = lerp(h.vx, ax, Math.min(1, dt * 9));
+    h.vy = lerp(h.vy, ay, Math.min(1, dt * 9));
+
+    h.x = clamp(h.x + h.vx * dt, 40, TUNE.worldW - 40);
+    h.y = clamp(h.y + h.vy * dt, 40, TUNE.worldH - 40);
+
+    var sp = Math.hypot(h.vx, h.vy);
+    if (sp > 8) h.face = Math.atan2(h.vy, h.vx);
+    h.invuln = Math.max(0, h.invuln - dt);
+    h.hitFlash = Math.max(0, h.hitFlash - dt * 2);
+
+    if (sp > 40 && S.rand() < dt * 22) {
+      S.particles.push({
+        kind: 'bubble', x: h.x - Math.cos(h.face) * 14, y: h.y - Math.sin(h.face) * 14,
+        vx: (S.rand() - 0.5) * 12, vy: -22 - S.rand() * 18,
+        life: 1.0, maxLife: 1.0, r: 1.4 + S.rand() * 2.4
+      });
+    }
+  }
+
+  function updateItems(dt) {
+    var h = S.hero;
+    var L = LAYERS[S.depth];
+    for (var i = 0; i < S.items.length; i++) {
+      var it = S.items[i];
+      it.phase += dt * 1.6;
+      if (!it.flee) { it.bob = Math.sin(it.phase) * 3; continue; }
+      it.bob = Math.sin(it.phase) * 3;
+
+      var dx = it.x - h.x, dy = it.y - h.y;
+      var d = Math.hypot(dx, dy) || 1;
+      var alertR = TUNE.fleeAlert;
+
+      if (d < alertR) {
+        if (it.fleeT > 0) {
+          // 正在逃：远离玩家，但比玩家慢 → 追得上
+          it.fleeT -= dt;
+          var fs = TUNE.fleeSpeed[S.depth];
+          it.x = clamp(it.x + (dx / d) * fs * dt, 60, TUNE.worldW - 60);
+          it.y = clamp(it.y + (dy / d) * fs * dt, 60, TUNE.worldH - 60);
+          if (S.rand() < dt * 8) {
+            S.particles.push({
+              kind: 'bubble', x: it.x, y: it.y, vx: (S.rand() - 0.5) * 20, vy: -16,
+              life: 0.6, maxLife: 0.6, r: 1.2
+            });
+          }
+        } else if (it.restT > 0) {
+          it.restT -= dt;
+        } else {
+          it.fleeT = TUNE.fleeStamina[S.depth] || 0;
+        }
+      } else {
+        if (it.fleeT > 0) { it.fleeT = 0; it.restT = TUNE.fleeRest[S.depth] || 0; }
+      }
+    }
+  }
+
+  function updateSharks(dt) {
+    var h = S.hero;
+    for (var i = 0; i < S.sharks.length; i++) {
+      var sh = S.sharks[i];
+      if (sh.layer !== S.depth) { sh.state = 'patrol'; sh.stateT = 0; continue; }
+      var dx = h.x - sh.x, dy = h.y - sh.y;
+      var d = Math.hypot(dx, dy) || 1;
+      sh.stateT += dt;
+      sh.cd = Math.max(0, sh.cd - dt);
+
+      if (sh.state === 'patrol') {
+        sh.angle += Math.sin(S.clock * 0.5 + i) * dt * 0.9;
+        sh.x += Math.cos(sh.angle) * sh.speed * dt;
+        sh.y += Math.sin(sh.angle) * sh.speed * dt;
+        if (sh.x < 90 || sh.x > TUNE.worldW - 90) { sh.angle = Math.PI - sh.angle; sh.x = clamp(sh.x, 90, TUNE.worldW - 90); }
+        if (sh.y < 90 || sh.y > TUNE.worldH - 90) { sh.angle = -sh.angle; sh.y = clamp(sh.y, 90, TUNE.worldH - 90); }
+        if (d < sh.detectR && sh.cd <= 0 && h.invuln <= 0) {
+          sh.state = 'alert'; sh.stateT = 0;      // 预警：给玩家 0.55s 反应时间
+        }
+      } else if (sh.state === 'alert') {
+        sh.angle = Math.atan2(dy, dx);
+        if (sh.stateT > 0.55) { sh.state = 'charge'; sh.stateT = 0; }
+      } else if (sh.state === 'charge') {
+        sh.x += Math.cos(sh.angle) * sh.chargeSpeed * dt;
+        sh.y += Math.sin(sh.angle) * sh.chargeSpeed * dt;
+        if (d < sh.r + TUNE.playerRadius && h.invuln <= 0) {
+          // 命中：扣 15 秒氧气 + 击退
+          S.oxygen = Math.max(0, S.oxygen - TUNE.sharkHitOxygen);
+          S.stats.sharkHits++;
+          h.invuln = TUNE.sharkInvuln;
+          h.hitFlash = 1;
+          S.shake = 1;
+          var kx = dx / d, ky = dy / d;
+          h.x = clamp(h.x - kx * 90, 40, TUNE.worldW - 40);
+          h.y = clamp(h.y - ky * 90, 40, TUNE.worldH - 40);
+          sh.state = 'stun'; sh.stateT = 0;
+          burst(h.x, h.y, 20, 3);
+          if (S.oxygen <= 0) { S.oxygen = 0; S.stats.lastCause = 'shark'; forceSurface(); return; }
+        }
+        if (sh.stateT > 0.85) { sh.state = 'stun'; sh.stateT = 0; }
+      } else if (sh.state === 'stun') {
+        if (sh.stateT > 1.7) { sh.state = 'patrol'; sh.cd = 1.4; sh.stateT = 0; }
+      }
+    }
+  }
+
+  function updateCamera(dt) {
+    var h = S.hero;
+    var k = Math.min(1, dt * 6);
+    S.cam.x = lerp(S.cam.x, h.x, k);
+    S.cam.y = lerp(S.cam.y, h.y, k);
+  }
+
+  /* ---- 犹豫感测量（v2）：数"可观测的决策事件"，而不是数"呆在危险区间多久" -----------------
+   * 为什么改：v1 指标在 8 组参数扫描下几乎不变（全部 ≈1.2–1.5s），说明它测的是
+   * "氧气曲线的形状"而不是"玩家的抉择"，无法用来判断手感。v2 改为三个可分辨的量：
+   *
+   *  1) hesitationEpisodes —— 进入"余量不够再抓一件、但又没到必死"的区间并被切分成几段。
+   *     段数多 = 玩家反复进出纠结状态（好的犹豫感）；只有 1 段且很短 = 一掠而过。
+   *  2) gambleGrab —— 抓完之后氧气已跌破安全上浮线的动作。这是"再抓一条就上浮"的
+   *     可观测证据：这一个动作本身就是一次真实的赌博。
+   *  3) grabOxygenPct —— 每次采集时的氧气百分比。健康的手感应当是"低氧采集"占一定比重；
+   *     如果采集全发生在氧气 60% 以上，说明压力根本没建立。
+   * ---------------------------------------------------------------------------------- */
+  function trackHesitation(dt) {
+    if (S.phase !== 'diving') return;
+    var slack = S.oxygen - currentReserve();
+    var est = estimatedItemCost();
+    var lo = est * TUNE.hesitationBand[0];
+    var hi = est * TUNE.hesitationBand[1];
+    var inHes = (slack > lo && slack < hi);
+
+    if (inHes) {
+      S.stats.hesitationSec += dt;
+      if (!S.stats._inHes) {
+        S.stats._inHes = true;
+        S.stats.hesitationEpisodes++;
+        if (S.items.length > 0) S.stats.episodesWithTarget++;
+      }
+    } else if (S.stats._inHes) {
+      S.stats._inHes = false;
+    }
+
+    if (Math.abs(slack - TUNE.reserveWarnBand) < 2.0) S.stats.nearMissSec += dt;
+  }
+
+  /* 输入负担测量：需要同时维持几个"连续"输入通道。
+   * 俯视方案永远 ≤ 1（摇杆）；free3d 对照在移动 + 维持微深度时 = 2。
+   * 这是 R7 最核心的量化证据。 */
+  function trackInputBurden(dt) {
+    var v = stickVector();
+    var moving = v.mag > 0.15;
+    var secondChannel = false;
+    if (S.mode === 'free3d') secondChannel = (heldLayer.up || heldLayer.down);
+    S.stats._framesTotal++;
+    if (moving && secondChannel) S.stats.simultaneousInputFrames++;
+  }
+
+  /* ===========================================================================
+   * 十、粒子
+   * ========================================================================== */
+  function burst(x, y, n, tier) {
+    for (var i = 0; i < n; i++) {
+      var a = S.rand() * Math.PI * 2;
+      var sp = 40 + S.rand() * 130;
+      S.particles.push({
+        kind: 'spark', x: x, y: y,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        life: 0.7, maxLife: 0.7, r: 2 + S.rand() * 3, tier: tier
+      });
+    }
+  }
+
+  function updateParticles(dt) {
+    var p = S.particles;
+    for (var i = p.length - 1; i >= 0; i--) {
+      var q = p[i];
+      q.life -= dt;
+      if (q.life <= 0) { p.splice(i, 1); continue; }
+      q.x += q.vx * dt;
+      q.y += q.vy * dt;
+      if (q.kind === 'spark') { q.vx *= 0.94; q.vy *= 0.94; }
+      else { q.vy -= dt * 6; }
+    }
+    if (p.length > 260) p.splice(0, p.length - 260);
+  }
+
+  /* ===========================================================================
+   * 十一、渲染
+   * ========================================================================== */
+  var bgCache = { key: '', grad: null };
+
+  function viewScale() {
+    // 保证不同屏幕看到的"世界范围"大致一致，手感不随设备漂移
+    return clamp(Math.min(VW, VH) / 620, 0.5, 1.4);
+  }
+
+  function worldTransform(scale) {
+    var camX = S.cam.x, camY = S.cam.y;
+    var halfW = VW / scale / 2, halfH = VH / scale / 2;
+    camX = clamp(camX, Math.min(halfW, TUNE.worldW / 2), Math.max(TUNE.worldW - halfW, TUNE.worldW / 2));
+    camY = clamp(camY, Math.min(halfH, TUNE.worldH / 2), Math.max(TUNE.worldH - halfH, TUNE.worldH / 2));
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.translate(VW / 2, VH / 2);
+    ctx.scale(scale, scale);
+    ctx.translate(-camX, -camY);
+    // 震屏只作用于世界层：HUD 跟着抖会让人看不清氧气条，反而更慌但也更看不准
+    if (S.shake > 0.01) {
+      ctx.translate((Math.random() - 0.5) * 14 * S.shake / scale,
+        (Math.random() - 0.5) * 14 * S.shake / scale);
+    }
+  }
+
+  function render() {
+    if (!LAY) return;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+    var depthForBg = S.depth === 0 ? 1 : S.depth;
+    drawWater(depthForBg);
+
+    var scale = viewScale();
+    ctx.save();
+    worldTransform(scale);
+
+    if (S.depth === 3 && S.phase !== 'settled' && S.phase !== 'blackout') drawCurrents();
+    drawItems(scale);
+    if (S.phase !== 'settled' && S.phase !== 'blackout') {
+      drawSharks();
+      drawHero();
+    }
+    drawParticles();
+
+    ctx.restore();
+
+    if (S.phase === 'title') { drawTitle(); return; }
+    if (S.phase === 'settled' || S.phase === 'blackout') { drawSettle(); return; }
+
+    drawHud();
+    if (S.phase === 'transit') drawTransitOverlay();
+    drawStick();
+    drawButtonsHint();
+  }
+
+  function drawWater(depth) {
+    var L = LAYERS[depth] || LAYERS[1];
+    var key = depth + '_' + VW + '_' + VH;
+    if (bgCache.key !== key) {
+      var g = ctx.createLinearGradient(0, 0, 0, VH);
+      g.addColorStop(0, L.top);
+      g.addColorStop(1, L.bottom);
+      bgCache = { key: key, grad: g };
+    }
+    ctx.fillStyle = bgCache.grad;
+    ctx.fillRect(0, 0, VW, VH);
+
+    // 水面光柱：只在浅水，越深越没有光（强化"深度分层"的直觉）
+    if (depth === 1) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (var i = 0; i < 5; i++) {
+        var x = ((i * 0.23 + S.clock * 0.012) % 1.25 - 0.12) * VW;
+        var w = VW * 0.09;
+        var g2 = ctx.createLinearGradient(x, 0, x + w, VH * 0.9);
+        g2.addColorStop(0, 'rgba(190,240,255,0.13)');
+        g2.addColorStop(1, 'rgba(190,240,255,0)');
+        ctx.fillStyle = g2;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x + w, 0);
+        ctx.lineTo(x + w * 2.3, VH);
+        ctx.lineTo(x + w * 0.55, VH);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    } else if (depth >= 2) {
+      // 中层/深水的悬浮微粒，制造"水很厚"的体感
+      ctx.save();
+      ctx.globalAlpha = depth === 3 ? 0.20 : 0.13;
+      ctx.fillStyle = '#bfe6ff';
+      for (var j = 0; j < 26; j++) {
+        var px = ((j * 0.173 + S.clock * 0.006 * (j % 3 + 1)) % 1) * VW;
+        var py = ((j * 0.317 + S.clock * 0.01) % 1) * VH;
+        ctx.beginPath();
+        ctx.arc(px, py, 1.2 + (j % 3) * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // 暗角：越深越黑，把"下潜"的压迫感做出来
+    var vig = ctx.createRadialGradient(VW / 2, VH / 2, Math.min(VW, VH) * 0.20,
+      VW / 2, VH / 2, Math.max(VW, VH) * 0.78);
+    var alpha = depth === 1 ? 0.20 : (depth === 2 ? 0.34 : 0.52);
+    vig.addColorStop(0, 'rgba(0,0,0,0)');
+    vig.addColorStop(1, 'rgba(0,4,10,' + alpha + ')');
+    ctx.fillStyle = vig;
+    ctx.fillRect(0, 0, VW, VH);
+  }
+
+  function drawCurrents() {
+    ctx.save();
+    for (var i = 0; i < S.currents.length; i++) {
+      var c = S.currents[i];
+      var w = Math.sin(S.clock * 0.9 + c.phase);
+      ctx.globalAlpha = 0.10 + Math.abs(w) * 0.10;
+      ctx.strokeStyle = '#8fd8ff';
+      ctx.lineWidth = 2;
+      for (var k = 0; k < 5; k++) {
+        var off = (k - 2) * 34;
+        ctx.beginPath();
+        ctx.moveTo(c.x - c.w / 2, c.y + off);
+        ctx.quadraticCurveTo(c.x, c.y + off + Math.sin(S.clock + k) * 26,
+          c.x + c.w / 2, c.y + off);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawItems(scale) {
+    var h = S.hero;
+    for (var i = 0; i < S.items.length; i++) {
+      var it = S.items[i];
+      var d = Math.hypot(it.x - h.x, it.y - h.y);
+      var inRange = d <= TUNE.grabRange + it.r;
+      var col = TIER_COLOR[it.tier];
+
+      ctx.save();
+      ctx.translate(it.x, it.y + (it.bob || 0));
+
+      // 光晕：设计文档支柱1「可收集物要有明确光晕与色彩编码」
+      var glow = ctx.createRadialGradient(0, 0, 0, 0, 0, it.r * 2.5);
+      glow.addColorStop(0, hexA(col, 0.30));
+      glow.addColorStop(1, hexA(col, 0));
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(0, 0, it.r * 2.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 可采集时的高亮圈（触屏关键：让玩家一眼知道"这个能按了"）
+      if (inRange) {
+        var pulse = 0.55 + Math.sin(S.clock * 7) * 0.35;
+        ctx.strokeStyle = hexA(col, pulse);
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(0, 0, it.r + 9, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      drawItemShape(it, col, it.r);
+
+      // 名字 + 价值：把"这件值多少"摆在玩家眼前，是犹豫感成立的前提
+      if (inRange || d < 260) {
+        ctx.font = '600 ' + Math.round(12 / Math.max(0.75, scale)) + 'px system-ui, "Microsoft YaHei", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(6,20,30,0.55)';
+        var label = it.name + ' ' + it.value;
+        var tw = ctx.measureText(label).width;
+        ctx.fillRect(-tw / 2 - 5, -it.r - 26, tw + 10, 17);
+        ctx.fillStyle = col;
+        ctx.fillText(label, 0, -it.r - 13);
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawItemShape(it, col, r) {
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = col;
+    ctx.fillStyle = hexA(col, 0.30);
+
+    if (it.shape === 'kelp') {
+      for (var k = -1; k <= 1; k++) {
+        ctx.beginPath();
+        ctx.moveTo(k * 7, r * 0.7);
+        ctx.quadraticCurveTo(k * 7 + Math.sin(S.clock * 2 + k) * 9, 0, k * 5, -r * 0.8);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.ellipse(k * 7 + Math.sin(S.clock * 2 + k) * 5, -r * 0.2, 5, 3.2, 0.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    } else if (it.shape === 'shell') {
+      ctx.beginPath();
+      ctx.moveTo(0, r * 0.55);
+      for (var a = 0; a <= 5; a++) {
+        var ang = Math.PI + (a / 5) * Math.PI;
+        ctx.lineTo(Math.cos(ang) * r * 0.85, Math.sin(ang) * r * 0.85 + r * 0.1);
+      }
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      for (var b = 1; b < 5; b++) {
+        var a2 = Math.PI + (b / 5) * Math.PI;
+        ctx.beginPath();
+        ctx.moveTo(0, r * 0.1);
+        ctx.lineTo(Math.cos(a2) * r * 0.8, Math.sin(a2) * r * 0.8 + r * 0.1);
+        ctx.stroke();
+      }
+    } else if (it.shape === 'fish') {
+      ctx.beginPath();
+      ctx.ellipse(0, 0, r * 0.72, r * 0.42, 0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(r * 0.66, 0);
+      ctx.lineTo(r * 1.15, -r * 0.36);
+      ctx.lineTo(r * 1.15, r * 0.36);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#061821';
+      ctx.beginPath();
+      ctx.arc(-r * 0.38, -r * 0.08, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (it.shape === 'jar') {
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.5, r * 0.7);
+      ctx.quadraticCurveTo(-r * 0.85, 0, -r * 0.36, -r * 0.45);
+      ctx.lineTo(-r * 0.36, -r * 0.72);
+      ctx.lineTo(r * 0.36, -r * 0.72);
+      ctx.lineTo(r * 0.36, -r * 0.45);
+      ctx.quadraticCurveTo(r * 0.85, 0, r * 0.5, r * 0.7);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+    } else if (it.shape === 'octo') {
+      ctx.beginPath();
+      ctx.arc(0, -r * 0.2, r * 0.5, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      for (var t = 0; t < 4; t++) {
+        var tx = (t - 1.5) * r * 0.32;
+        ctx.beginPath();
+        ctx.moveTo(tx, -r * 0.05);
+        ctx.quadraticCurveTo(tx + Math.sin(S.clock * 3 + t) * 8, r * 0.4, tx + Math.cos(S.clock * 2 + t) * 9, r * 0.75);
+        ctx.stroke();
+      }
+    } else if (it.shape === 'crab') {
+      ctx.beginPath();
+      ctx.ellipse(0, 0, r * 0.6, r * 0.42, 0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      for (var c = -1; c <= 1; c += 2) {
+        ctx.beginPath();
+        ctx.arc(c * r * 0.82, -r * 0.28, r * 0.24, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+        for (var L = 0; L < 3; L++) {
+          ctx.beginPath();
+          ctx.moveTo(c * r * 0.45, r * 0.16 + L * r * 0.14);
+          ctx.lineTo(c * r * 0.95, r * 0.42 + L * r * 0.16);
+          ctx.stroke();
+        }
+      }
+    } else if (it.shape === 'coral') {
+      var branches = [[0, 0], [-0.55, -0.9], [0.55, -0.9], [-0.25, -0.45], [0.25, -0.45], [0, -1.05]];
+      for (var bi = 0; bi < branches.length; bi++) {
+        ctx.beginPath();
+        ctx.moveTo(0, r * 0.8);
+        ctx.lineTo(branches[bi][0] * r, branches[bi][1] * r);
+        ctx.lineWidth = bi === 0 ? 3 : 1.8;
+        ctx.stroke();
+      }
+      ctx.lineWidth = 2;
+      for (var gi = 1; gi < branches.length; gi++) {
+        ctx.beginPath();
+        ctx.arc(branches[gi][0] * r, branches[gi][1] * r, 2.6, 0, Math.PI * 2);
+        ctx.fillStyle = hexA(col, 0.85);
+        ctx.fill();
+      }
+    } else { // relic
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.34, r * 0.8);
+      ctx.lineTo(-r * 0.52, -r * 0.55);
+      ctx.lineTo(0, -r * 0.95);
+      ctx.lineTo(r * 0.52, -r * 0.55);
+      ctx.lineTo(r * 0.34, r * 0.8);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, -r * 0.6);
+      ctx.lineTo(0, r * 0.55);
+      ctx.stroke();
+    }
+  }
+
+  function drawSharks() {
+    for (var i = 0; i < S.sharks.length; i++) {
+      var sh = S.sharks[i];
+      if (sh.layer !== S.depth) continue;
+      ctx.save();
+      ctx.translate(sh.x, sh.y);
+      ctx.rotate(sh.angle);
+
+      if (sh.state === 'alert') {
+        var p = 1 - sh.stateT / 0.55;
+        ctx.strokeStyle = 'rgba(255,120,90,' + (0.35 + p * 0.6) + ')';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(0, 0, sh.r + 16 + p * 26, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      var bodyCol = (sh.state === 'charge') ? '#ff9b7a' : '#5b7d8f';
+      ctx.fillStyle = bodyCol;
+      ctx.strokeStyle = '#0a1a24';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(sh.r * 1.5, 0);
+      ctx.quadraticCurveTo(sh.r * 0.2, -sh.r * 0.62, -sh.r * 0.9, -sh.r * 0.20);
+      ctx.lineTo(-sh.r * 1.5, -sh.r * 0.62);
+      ctx.lineTo(-sh.r * 1.15, 0);
+      ctx.lineTo(-sh.r * 1.5, sh.r * 0.62);
+      ctx.lineTo(-sh.r * 0.9, sh.r * 0.20);
+      ctx.quadraticCurveTo(sh.r * 0.2, sh.r * 0.62, sh.r * 1.5, 0);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, -sh.r * 0.1);
+      ctx.lineTo(-sh.r * 0.35, -sh.r * 0.85);
+      ctx.lineTo(sh.r * 0.2, -sh.r * 0.35);
+      ctx.closePath();
+      ctx.fillStyle = bodyCol;
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function drawHero() {
+    var h = S.hero;
+    ctx.save();
+    ctx.translate(h.x, h.y);
+    ctx.rotate(h.face);
+
+    if (h.hitFlash > 0) {
+      ctx.strokeStyle = 'rgba(255,110,90,' + h.hitFlash + ')';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, 0, TUNE.playerRadius + 12, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (h.invuln > 0) {
+      ctx.strokeStyle = 'rgba(160,240,255,0.45)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, TUNE.playerRadius + 8, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    var kick = Math.sin(S.clock * 9) * (Math.hypot(h.vx, h.vy) > 30 ? 1 : 0.25);
+    // 脚蹼
+    ctx.fillStyle = '#2f6f8a';
+    for (var f = -1; f <= 1; f += 2) {
+      ctx.save();
+      ctx.translate(-TUNE.playerRadius * 0.9, f * 6);
+      ctx.rotate(kick * 0.5 * f);
+      ctx.beginPath();
+      ctx.ellipse(-7, 0, 10, 4.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    // 身体
+    ctx.fillStyle = '#1f4c63';
+    ctx.strokeStyle = '#0a1a24';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, TUNE.playerRadius, TUNE.playerRadius * 0.72, 0, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
+    // 面镜
+    ctx.fillStyle = '#a8e9ff';
+    ctx.beginPath();
+    ctx.ellipse(TUNE.playerRadius * 0.42, 0, 6.5, 7.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#0a1a24';
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawParticles() {
+    for (var i = 0; i < S.particles.length; i++) {
+      var p = S.particles[i];
+      var a = clamp(p.life / p.maxLife, 0, 1);
+      if (p.kind === 'spark') {
+        ctx.fillStyle = hexA(TIER_COLOR[p.tier || 1], a * 0.9);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r * a, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = 'rgba(200,240,255,' + (a * 0.55) + ')';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(0.5, p.r * (0.6 + (1 - a) * 0.8)), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  function hexA(hex, a) {
+    var r = parseInt(hex.slice(1, 3), 16);
+    var g = parseInt(hex.slice(3, 5), 16);
+    var b = parseInt(hex.slice(5, 7), 16);
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+  }
+
+  /* ---- HUD ---- */
+  function drawHud() {
+    var L = LAYERS[S.depth] || LAYERS[1];
+    var pad = LAY.barX, y = LAY.barY, w = LAY.barW, h = LAY.barH;
+
+    // 氧气条底
+    ctx.fillStyle = 'rgba(3,14,22,0.72)';
+    roundRect(pad - 4, y - 4, w + 8, h + 8, 10);
+    ctx.fill();
+
+    var frac = clamp(S.oxygen / TUNE.oxygenMax, 0, 1);
+    var reserveFrac = clamp(currentReserve() / TUNE.oxygenMax, 0, 1);
+
+    // 危险配色：<30% 转橙，<15% 转红并呼吸闪烁
+    var col = '#6fe3b8';
+    if (frac < 0.30) col = '#ffc95c';
+    if (frac < 0.15) col = '#ff6b5a';
+    var breathe = frac < 0.15 ? (0.72 + Math.sin(S.clock * 9) * 0.28) : 1;
+
+    ctx.save();
+    ctx.globalAlpha = breathe;
+    var g = ctx.createLinearGradient(pad, 0, pad + w * frac, 0);
+    g.addColorStop(0, col);
+    g.addColorStop(1, hexA(col, 0.55));
+    ctx.fillStyle = g;
+    roundRect(pad, y, Math.max(2, w * frac), h, h / 2);
+    ctx.fill();
+    ctx.restore();
+
+    // ★ 回程安全线：红色刻线随收获上移，这是"贪心"最直观的代价可视化
+    if (reserveFrac > 0.005) {
+      var rx = pad + w * reserveFrac;
+      ctx.strokeStyle = 'rgba(255,90,70,0.95)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(rx, y - 5);
+      ctx.lineTo(rx, y + h + 5);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255,90,70,0.95)';
+      ctx.beginPath();
+      ctx.moveTo(rx, y - 9);
+      ctx.lineTo(rx - 5, y - 15);
+      ctx.lineTo(rx + 5, y - 15);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // 边框
+    ctx.strokeStyle = 'rgba(180,230,255,0.35)';
+    ctx.lineWidth = 1.5;
+    roundRect(pad, y, w, h, h / 2);
+    ctx.stroke();
+
+    // 数字
+    ctx.font = '700 ' + Math.round(h * 0.62) + 'px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#eaf7ff';
+    ctx.fillText('氧气 ' + S.oxygen.toFixed(1) + ' / ' + TUNE.oxygenMax, pad + h * 0.7, y + h / 2);
+
+    // 回程路费读数
+    ctx.textAlign = 'right';
+    var slack = S.oxygen - currentReserve();
+    var txt = '上浮需 ' + currentReserve().toFixed(1) + ' · 余量 ' + slack.toFixed(1);
+    ctx.font = '600 ' + Math.round(h * 0.50) + 'px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = slack < 0 ? '#ff6b5a' : (slack < 6 ? '#ffc95c' : 'rgba(220,244,255,0.85)');
+    ctx.fillText(txt, pad + w - h * 0.5, y + h / 2);
+
+    // 深度计（左侧三格，强化"分层"心智模型，而不是连续 3D 深度）
+    drawDepthGauge();
+
+    // 收获面板
+    drawBagPanel();
+
+    // 当前层名字
+    ctx.textAlign = 'center';
+    ctx.font = '700 15px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(220,244,255,0.82)';
+    ctx.fillText(L.name + ' · ' + L.range + ' · 耗氧 ×' + L.oxygenMult.toFixed(1),
+      VW / 2, LAY.barY + LAY.barH + 26);
+
+    if (slack < 0) {
+      ctx.font = '700 20px system-ui, "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = 'rgba(255,90,70,' + (0.6 + Math.sin(S.clock * 10) * 0.4) + ')';
+      ctx.fillText('氧气不足以安全上浮', VW / 2, LAY.barY + LAY.barH + 58);
+    }
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawDepthGauge() {
+    var x = LAY.barX + 20, top = LAY.barY + LAY.barH + 88, seg = 62, gap = 8;
+    var names = ['深', '中', '浅'];
+    for (var i = 0; i < 3; i++) {
+      var depthVal = 3 - i;       // 上=深
+      var y = top + i * (seg + gap);
+      var active = (S.depth === depthVal);
+      ctx.fillStyle = active ? 'rgba(140,225,255,0.85)' : 'rgba(120,180,210,0.16)';
+      roundRect(x - 20, y, 26, seg, 6);
+      ctx.fill();
+      ctx.fillStyle = active ? '#04141f' : 'rgba(180,220,240,0.55)';
+      ctx.font = '700 15px system-ui, "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(names[i], x - 7, y + seg / 2);
+    }
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawBagPanel() {
+    var byName = {}, order = [];
+    for (var i = 0; i < S.bag.length; i++) {
+      var b = S.bag[i];
+      if (!byName[b.key]) { byName[b.key] = { name: b.name, tier: b.tier, n: 0, v: 0 }; order.push(b.key); }
+      byName[b.key].n++; byName[b.key].v += b.value;
+    }
+    var total = S.bag.reduce(function (a, c) { return a + c.value; }, 0);
+    var lineH = 18;
+    var rows = order.length;
+    var panelH = 30 + rows * lineH + 22;
+    var pw = 155;
+    var px = VW - pw - LAY.barX;
+    var py = LAY.barY + LAY.barH + 74;
+
+    ctx.fillStyle = 'rgba(3,14,22,0.58)';
+    roundRect(px, py, pw, panelH, 10);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(150,210,240,0.22)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = '700 13px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(200,235,255,0.9)';
+    ctx.fillText('本次收获 ' + S.bag.length + ' 件', px + 12, py + 17);
+
+    for (var r = 0; r < rows; r++) {
+      var d = byName[order[r]];
+      var yy = py + 36 + r * lineH;
+      ctx.fillStyle = TIER_COLOR[d.tier];
+      ctx.font = '600 13px system-ui, "Microsoft YaHei", sans-serif';
+      ctx.fillText(d.name + ' ×' + d.n, px + 12, yy);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgba(220,244,255,0.75)';
+      ctx.fillText('+' + d.v, px + pw - 12, yy);
+      ctx.textAlign = 'left';
+    }
+
+    ctx.strokeStyle = 'rgba(150,210,240,0.2)';
+    ctx.beginPath();
+    ctx.moveTo(px + 10, py + 30 + rows * lineH);
+    ctx.lineTo(px + pw - 10, py + 30 + rows * lineH);
+    ctx.stroke();
+
+    ctx.font = '700 15px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = '#ffd98a';
+    ctx.textAlign = 'left';
+    ctx.fillText('总价值', px + 12, py + panelH - 15);
+    ctx.textAlign = 'right';
+    ctx.fillText(String(total), px + pw - 12, py + panelH - 15);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawTransitOverlay() {
+    var tr = S.transit;
+    if (!tr) return;
+    var t = clamp(tr.t / tr.dur, 0, 1);
+    var dirTxt = tr.forced ? '氧气耗尽 · 强制上浮'
+      : (tr.dir > 0 ? '下潜中' : (tr.to === 0 ? '上浮 · 返回水面' : '上浮中'));
+    ctx.save();
+    ctx.fillStyle = 'rgba(2,10,18,0.42)';
+    ctx.fillRect(0, 0, VW, VH);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = tr.forced ? '#ff6b5a' : '#dff2ff';
+    ctx.font = '700 26px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillText(dirTxt, VW / 2, VH / 2 - 24);
+
+    var bw = Math.min(VW * 0.6, 320), bh = 8;
+    ctx.fillStyle = 'rgba(160,220,255,0.2)';
+    roundRect(VW / 2 - bw / 2, VH / 2 + 4, bw, bh, 4);
+    ctx.fill();
+    ctx.fillStyle = tr.forced ? '#ff6b5a' : '#6fe3b8';
+    roundRect(VW / 2 - bw / 2, VH / 2 + 4, bw * t, bh, 4);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawStick() {
+    // 静态提示圈：告诉玩家"左半屏按住就能游"
+    var cx = LAY.joyR + 26, cy = VH - LAY.joyR - 26;
+    if (!stick) {
+      ctx.save();
+      ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = '#bfe6ff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, LAY.joyR * 0.66, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 0.42;
+      ctx.font = '600 12px system-ui, "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#bfe6ff';
+      ctx.fillText('按住游泳', cx, cy + 4);
+      ctx.restore();
+      return;
+    }
+    // 动态原点摇杆：手指按在哪，圆心就在哪
+    var v = stickVector();
+    var ox = stick.ox, oy = stick.oy;
+    ctx.save();
+    ctx.globalAlpha = 0.34;
+    ctx.strokeStyle = '#bfe6ff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(ox, oy, LAY.joyR * 0.78, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.86;
+    ctx.fillStyle = 'rgba(150,225,255,0.55)';
+    ctx.beginPath();
+    ctx.arc(ox + v.x * LAY.joyR * 0.62, oy + v.y * LAY.joyR * 0.62, LAY.joyR * 0.26, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawButtonsHint() {
+    // 采集按钮的可按状态高亮（有东西在范围内 → 发光提示）
+    if (S.phase !== 'diving') return;
+    var h = S.hero, any = false;
+    for (var i = 0; i < S.items.length; i++) {
+      if (Math.hypot(S.items[i].x - h.x, S.items[i].y - h.y) <= TUNE.grabRange + S.items[i].r) { any = true; break; }
+    }
+    btnGrab.classList.toggle('hot', any);
+  }
+
+  /* ---- 标题 / 结算 ---- */
+  function drawTitle() {
+    ctx.save();
+    ctx.fillStyle = 'rgba(2,8,14,0.62)';
+    ctx.fillRect(0, 0, VW, VH);
+    var cy = VH * 0.34;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#eaf7ff';
+    ctx.font = '700 ' + Math.round(Math.min(VW, VH) * 0.072) + 'px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillText('潜水原型', VW / 2, cy);
+    ctx.font = '600 ' + Math.round(Math.min(VW, VH) * 0.038) + 'px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(160,215,245,0.9)';
+    ctx.fillText('验证 R7：俯视平面移动能否替代 3D 自由泳', VW / 2, cy + 34);
+
+    var lines = [
+      '左手拇指按住屏幕左侧任意位置 → 游泳',
+      '右手拇指：采集（右下）/ 上浮 / 下潜',
+      '键盘：方向键移动 · 空格采集 · Q 上浮 · E 下潜',
+      '',
+      '氧气 60 秒，耗尽则本次收获全部丢失',
+      '红色刻线 = 回到水面所需的氧气，越贪越高'
+    ];
+    var fs = Math.round(Math.min(VW, VH) * 0.032);
+    ctx.font = '500 ' + fs + 'px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(210,238,255,0.85)';
+    for (var i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], VW / 2, cy + 78 + i * (fs * 1.7));
+    }
+
+    var pulse = 0.55 + Math.sin(S.clock * 3) * 0.45;
+    ctx.font = '700 ' + Math.round(Math.min(VW, VH) * 0.042) + 'px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(140,235,200,' + pulse + ')';
+    ctx.fillText('点按任意处开始下潜', VW / 2, VH * 0.84);
+    ctx.restore();
+  }
+
+  function drawSettle() {
+    var st = S.settle;
+    var lost = S.phase === 'blackout';
+    ctx.save();
+    ctx.fillStyle = lost ? 'rgba(24,4,4,0.78)' : 'rgba(2,12,20,0.76)';
+    ctx.fillRect(0, 0, VW, VH);
+
+    var cx = VW / 2;
+    var y = VH * 0.16;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = lost ? '#ff6b5a' : '#8fe3c0';
+    ctx.font = '700 ' + Math.round(Math.min(VW, VH) * 0.062) + 'px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillText(lost ? '氧气耗尽 · 空手而归' : '上浮成功', cx, y);
+    y += 30;
+    ctx.font = '500 ' + Math.round(Math.min(VW, VH) * 0.033) + 'px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(200,232,250,0.8)';
+    ctx.fillText('存活 ' + st.elapsed.toFixed(1) + ' 秒 · 最深 ' + (st.lost ? '深水区' : LAYERS[Math.max(1, st.stats.maxDepth)].name), cx, y);
+
+    // 清单
+    y += 34;
+    var byName = {}, order = [];
+    for (var i = 0; i < st.bag.length; i++) {
+      var b = st.bag[i];
+      if (!byName[b.key]) { byName[b.key] = { name: b.name, tier: b.tier, n: 0, v: 0 }; order.push(b.key); }
+      byName[b.key].n++; byName[b.key].v += b.value;
+    }
+    if (order.length === 0) {
+      ctx.fillStyle = 'rgba(200,232,250,0.6)';
+      ctx.fillText('（什么都没带上来）', cx, y + 16);
+      y += 50;
+    } else {
+      var rowH = Math.round(Math.min(VW, VH) * 0.055);
+      for (var r = 0; r < order.length; r++) {
+        var d = byName[order[r]];
+        ctx.textAlign = 'left';
+        ctx.fillStyle = lost ? 'rgba(170,190,200,0.55)' : TIER_COLOR[d.tier];
+        ctx.font = '600 ' + Math.round(rowH * 0.44) + 'px system-ui, "Microsoft YaHei", sans-serif';
+        ctx.fillText(d.name + ' ×' + d.n, VW * 0.18, y + r * rowH);
+        ctx.textAlign = 'right';
+        ctx.fillText(lost ? '损失' : '+' + d.v, VW * 0.82, y + r * rowH);
+      }
+      y += order.length * rowH + 18;
+    }
+
+    ctx.textAlign = 'center';
+    ctx.font = '700 ' + Math.round(Math.min(VW, VH) * 0.05) + 'px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = lost ? 'rgba(255,120,100,0.85)' : '#ffd98a';
+    var bankedNow = (typeof st.banked === 'number') ? st.banked : (lost ? 0 : st.total);
+    ctx.fillText(lost
+      ? ('带回 0 · 沉了 ' + st.total + ' 的货')
+      : ('总价值 ' + bankedNow), cx, y);
+    y += 34;
+
+    // 给出"这局是怎么决策的"诊断，帮评审看懂数据
+    ctx.font = '500 ' + Math.round(Math.min(VW, VH) * 0.030) + 'px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(190,225,245,0.72)';
+    var s2 = st.stats;
+    ctx.fillText('浅水 ' + s2.grabsByLayer[1] + ' 件 · 中层 ' + s2.grabsByLayer[2] + ' 件 · 深水 ' + s2.grabsByLayer[3] + ' 件', cx, y);
+    y += 22;
+    ctx.fillText('被鲨鱼咬 ' + s2.sharkHits + ' 次 · 犹豫时长 ' + s2.hesitationSec.toFixed(1) + ' 秒', cx, y);
+
+    var pulse = 0.5 + Math.sin(S.clock * 3) * 0.5;
+    ctx.font = '700 ' + Math.round(Math.min(VW, VH) * 0.040) + 'px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(140,235,200,' + pulse + ')';
+    ctx.fillText('点按任意处再来一次', cx, VH * 0.9);
+    ctx.restore();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  /* ===========================================================================
+   * 十二、主循环
+   * ========================================================================== */
+  var FREEZE = false;        // 截图/自检用：冻结模拟，但保留渲染
+  var lastT = 0;
+  function frame(t) {
+    var dt = lastT ? (t - lastT) / 1000 : 0.016;
+    lastT = t;
+    if (dt > 0.05) dt = 0.05;     // 切标签页回来时不要让氧气瞬间掉光
+    if (!FREEZE) step(dt);
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  /* ===========================================================================
+   * 十二·B、确定性截图状态（供 headless 验证使用）
+   * ---------------------------------------------------------------------------
+   * 用 ?shot=xxx 打开页面即可得到一张固定画面的截图，不需要人去掐时机，
+   * 也不需要 puppeteer 之类的外部依赖。这是"自己用浏览器截图验证"的落地方式。
+   * ========================================================================== */
+  function setupShot(name) {
+    FREEZE = true;
+    S.clock = 6.2;            // 固定相位：气泡/珊瑚摆动的动画姿态可复现
+    S.rand = makeRng(20261122);
+
+    if (name === 'title') { S.phase = 'title'; return; }
+
+    startRun();
+    S.clock = 6.2;
+    S.rand = makeRng(20261122);
+
+    // 把主角与目标物摆到镜头中心附近，保证截图构图稳定
+    function placeHero(mode) {
+      var it = S.items[0];
+      if (it) {
+        if (mode === 'near') { S.hero.x = it.x - 60; S.hero.y = it.y + 40; }
+        else { S.hero.x = it.x + 150; S.hero.y = it.y + 110; }
+      }
+      S.cam.x = S.hero.x; S.cam.y = S.hero.y;
+    }
+
+    if (name === 'shallow') {
+      S.depth = 1; S.items = S.itemsByLayer[1];
+      S.oxygen = 47.5;
+      S.bag = [
+        { key: 'kelp', name: '海藻', value: 3, tier: 1 },
+        { key: 'kelp', name: '海藻', value: 3, tier: 1 },
+        { key: 'shell', name: '沙贝壳', value: 4, tier: 1 },
+        { key: 'sardine', name: '沙丁鱼', value: 5, tier: 1 }
+      ];
+      placeHero('near');
+      S.hero.invuln = 0;
+    } else if (name === 'mid') {
+      S.depth = 2; S.items = S.itemsByLayer[2];
+      S.oxygen = 31.2;
+      S.bag = [
+        { key: 'kelp', name: '海藻', value: 3, tier: 1 },
+        { key: 'sardine', name: '沙丁鱼', value: 5, tier: 1 },
+        { key: 'jar', name: '陶罐', value: 10, tier: 2 },
+        { key: 'silver', name: '银鳞鱼', value: 12, tier: 2 }
+      ];
+      placeHero('near');
+      // 让一条鲨鱼处于 alert 预警态，把"危险"画进截图
+      var sh = S.sharks[0];
+      sh.layer = 2; sh.state = 'alert'; sh.stateT = 0.18;
+      sh.x = S.hero.x + 150; sh.y = S.hero.y - 60;
+      S.hero.invuln = 0;
+    } else if (name === 'deep') {
+      S.depth = 3; S.items = S.itemsByLayer[3];
+      S.oxygen = 18.4;
+      S.bag = [
+        { key: 'jar', name: '陶罐', value: 10, tier: 2 },
+        { key: 'silver', name: '银鳞鱼', value: 12, tier: 2 },
+        { key: 'silver', name: '银鳞鱼', value: 12, tier: 2 },
+        { key: 'crab', name: '深海蟹', value: 30, tier: 3 },
+        { key: 'crab', name: '深海蟹', value: 30, tier: 3 },
+        { key: 'coral', name: '发光珊瑚', value: 35, tier: 3 }
+      ];
+      placeHero('near');
+      var sh2 = S.sharks[1];
+      sh2.layer = 3; sh2.state = 'patrol';
+      sh2.x = S.hero.x + 190; sh2.y = S.hero.y + 40;
+      S.hero.invuln = 0;
+    } else if (name === 'resist') {
+      // "犹豫感"截图：余量刚好够一件多一点，旁边就有一件深海蟹
+      S.depth = 3; S.items = S.itemsByLayer[3];
+      var est = 10.5;
+      S.bag = [
+        { key: 'crab', name: '深海蟹', value: 30, tier: 3 },
+        { key: 'crab', name: '深海蟹', value: 30, tier: 3 },
+        { key: 'coral', name: '发光珊瑚', value: 35, tier: 3 }
+      ];
+      S.oxygen = reserveOxygen(3, 3) + est * 1.05;
+      placeHero('near');
+      S.hero.invuln = 0;
+    } else if (name === 'transit') {
+      S.depth = 2; S.items = S.itemsByLayer[2];
+      S.oxygen = 22.0;
+      S.bag = [
+        { key: 'jar', name: '陶罐', value: 10, tier: 2 },
+        { key: 'silver', name: '银鳞鱼', value: 12, tier: 2 }
+      ];
+      S.phase = 'transit';
+      S.transit = { dir: -1, t: 0.85, dur: TUNE.ascendSecPerLayer * 1.1, from: 2, to: 1, forced: false };
+      placeHero('near');
+    } else if (name === 'settled' || name === 'blackout') {
+      var bag = [
+        { key: 'kelp', name: '海藻', value: 3, tier: 1 },
+        { key: 'kelp', name: '海藻', value: 3, tier: 1 },
+        { key: 'shell', name: '沙贝壳', value: 4, tier: 1 },
+        { key: 'jar', name: '陶罐', value: 10, tier: 2 },
+        { key: 'silver', name: '银鳞鱼', value: 12, tier: 2 },
+        { key: 'silver', name: '银鳞鱼', value: 12, tier: 2 },
+        { key: 'crab', name: '深海蟹', value: 30, tier: 3 },
+        { key: 'coral', name: '发光珊瑚', value: 35, tier: 3 }
+      ];
+      var tot = bag.reduce(function (a, b) { return a + b.value; }, 0);
+      S.depth = 0;
+      S.bag = bag;
+      S.stats.maxDepth = 3;
+      S.stats.grabsByLayer = { 1: 3, 2: 3, 3: 2 };
+      S.stats.valueByLayer = { 1: 10, 2: 34, 3: 65 };
+      S.stats.sharkHits = 1;
+      S.stats.hesitationSec = 4.6;
+      S.elapsed = 54.3;
+      S.settle = {
+        lost: name === 'blackout', bag: bag,
+        total: tot,
+        banked: name === 'blackout' ? 0 : tot,
+        elapsed: 54.3, stats: S.stats
+      };
+      S.phase = name === 'blackout' ? 'blackout' : 'settled';
+      showButtons(false);
+    }
+    // 截图把 S.depth 改到了目标层，按钮文案/可用态必须跟着重算，
+    // 否则截图上会出现"已经在深水区，但下潜键还亮着"这种自相矛盾的画面。
+    refreshButtons();
+  }
+
+  /* 把截图模式接进启动流程 */
+  function readShotParam() {
+    var m = /(?:^|[?&#])shot=([a-z0-9_-]+)/i.exec(window.location.search + '&' + window.location.hash);
+    return m ? m[1].toLowerCase() : null;
+  }
+
+  function hasParam(name) {
+    return new RegExp('(?:^|[?&#])' + name + '(?:=|&|#|$)').test(window.location.search + '&' + window.location.hash);
+  }
+
+  /* ?selftest=1 → 跑结构自检 + 批量模拟，把 JSON 打进 DOM，
+     供 node/Chrome headless 读取（不需要 puppeteer）。
+     这是"自动化验收"的入口，与游戏本体共用同一份代码，不会漂移。 */
+  function runSelfTestPage() {
+    var out = { url: location.href };
+    try {
+      out.selfTest = window.__selfTest();
+    } catch (e) {
+      out.selfTest = { ok: false, problems: ['__selfTest 抛异常: ' + e.message] };
+    }
+    try {
+      out.run = window.__autoplayRun();
+    } catch (e2) {
+      out.run = { error: e2.message };
+    }
+    try {
+      out.sweep = window.__sweep();
+    } catch (e3) {
+      out.sweep = [{ error: e3.message }];
+    }
+    try {
+      out.sweep2 = window.__sweep2({ runs: 20 });
+    } catch (e6) {
+      out.sweep2 = [{ error: e6.message }];
+    }
+    try {
+      out.calibrate = window.__calibrate({ runs: 20 });
+    } catch (e8) {
+      out.calibrate = [{ error: e8.message }];
+    }
+    try {
+      // 重点复测：负重惩罚到底有没有用？加大样本量压低噪声再判一次。
+      out.carryTest = window.__calibrate({
+        deep: [2.2], carry: [0, 0.02, 0.03, 0.05], back: [0.5, 1.0, 1.5, 2.2, 3.0], runs: 48
+      });
+    } catch (e9) {
+      out.carryTest = [{ error: e9.message }];
+    }
+
+    /* --dump-dom 的输出长度有上限（约 130KB），超了会被截断成无效 JSON。
+       所以自检结果要去掉样本明细，只留聚合值。 */
+    function stripSamples(x) {
+      if (Array.isArray(x)) return x.map(stripSamples);
+      if (x && typeof x === 'object') {
+        var o = {};
+        for (var k in x) {
+          if (k === 'samples') continue;
+          o[k] = stripSamples(x[k]);
+        }
+        return o;
+      }
+      return x;
+    }
+    out = stripSamples(out);
+    try {
+      out.inputBurden = window.__inputBurden({ runs: 16 });
+    } catch (e7) {
+      out.inputBurden = { error: e7.message };
+    }
+    try {
+      out.many = {
+        safe: window.__runMany({ runs: 24, policy: { targetLayer: 3, turnBackAt: 2.6, minSlack: 8.0, grabRadius: 1.0 }, seed: 4000 }),
+        balanced: window.__runMany({ runs: 24, policy: { targetLayer: 3, turnBackAt: 1.35, minSlack: 3.0, grabRadius: 1.0 }, seed: 4000 }),
+        greedy: window.__runMany({ runs: 24, policy: { targetLayer: 3, turnBackAt: 0.30, minSlack: 0.4, grabRadius: 1.0 }, seed: 4000 })
+      };
+    } catch (e4) {
+      out.many = { error: e4.message };
+    }
+    try {
+      // free3d 对照：输入负担与收益的对比（R7 量化证据）
+      window.__diveMode('topdown');
+      var td = window.__runMany({ runs: 16, policy: DEFAULT_POLICY, seed: 7000 });
+      window.__diveMode('free3d');
+      var f3 = window.__runMany({ runs: 16, policy: DEFAULT_POLICY, seed: 7000 });
+      window.__diveMode('topdown');
+      out.modeCompare = { topdown: td, free3d: f3 };
+    } catch (e5) {
+      out.modeCompare = { error: e5.message };
+    }
+
+    var pre = document.createElement('pre');
+    pre.id = 'selftest-out';
+    pre.textContent = JSON.stringify(out, null, 1);
+    pre.style.cssText = 'position:fixed;inset:0;overflow:auto;font:11px/1.4 monospace;color:#cfe;background:#02101a;margin:0;padding:10px;z-index:99';
+    document.body.appendChild(pre);
+    document.title = 'SELFTEST_' + (out.selfTest && out.selfTest.ok ? 'PASS' : 'FAIL');
+  }
+
+  /* ===========================================================================
+   * 十三、自动化验收接口
+   * ========================================================================== */
+
+  /* 验收接口 1：__diveState() */
+  window.__diveState = function () {
+    var h = S.hero;
+    var dangerShark = 0;
+    for (var i = 0; i < S.sharks.length; i++) {
+      var sh = S.sharks[i];
+      if (sh.layer !== S.depth) continue;
+      var d = Math.hypot(sh.x - h.x, sh.y - h.y);
+      var lvl = sh.state === 'charge' ? 1 : (sh.state === 'alert' ? 0.85 : clamp(1 - d / sh.alertR, 0, 1) * 0.5);
+      if (lvl > dangerShark) dangerShark = lvl;
+    }
+    var slack = S.oxygen - currentReserve();
+    var dangerOxy = clamp(1 - slack / 14, 0, 1);
+    var danger = Math.max(dangerShark, dangerOxy);
+
+    return {
+      // —— 验收要求的字段 ——
+      phase: S.phase,
+      oxygen: Math.round(S.oxygen * 100) / 100,
+      oxygenMax: TUNE.oxygenMax,
+      depth: S.depth,                       // 1浅/2中/3深，0=水面
+      collected: S.bag.map(function (b) { return { name: b.name, value: b.value }; }),
+      totalValue: S.bag.reduce(function (a, b) { return a + b.value; }, 0),
+      danger: Math.round(danger * 100) / 100,
+
+      // —— 额外诊断字段 ——
+      depthName: S.depth === 0 ? '水面' : LAYERS[S.depth].name,
+      depthMeters: S.depth === 0 ? 0 : (S.depth === 1 ? 8 : (S.depth === 2 ? 28 : 55)),
+      reserve: Math.round(currentReserve() * 100) / 100,   // 回到水面需要多少氧气
+      slack: Math.round(slack * 100) / 100,                // 还能贪多少
+      banked: (S.phase === 'settled') ? (S.settle ? S.settle.banked : 0)
+        : (S.phase === 'blackout' ? 0 : null),
+      lost: !!S.lost,
+      mode: S.mode,
+      itemsLeft: S.items.length,
+      elapsed: Math.round(S.elapsed * 10) / 10,
+      stats: S.stats
+    };
+  };
+
+  /* 验收接口 2：__autoplay()
+   * 设计成"近 10Hz 调用一次即可推进一局"，同时单次调用也是安全的（幂等）。
+   * 返回本步的动作，方便 log。 */
+  window.__autoplay = function () {
+    if (S.phase === 'title') { startRun(); return { action: 'start' }; }
+    if (S.phase === 'settled' || S.phase === 'blackout') {
+      var res = { action: 'restart' };
+      startRun();
+      return res;
+    }
+    if (S.phase !== 'diving') return { action: 'wait' };
+    return aiDrive(1 / 10, DEFAULT_POLICY);
+  };
+
+  /* 主动玩一整局（同步跑完，供自动化一次拿到结果） */
+  window.__autoplayRun = function (policy) {
+    return headlessRun(policy || DEFAULT_POLICY, 1 / 60, (S.rand === Math.random) ? 12345 : 0);
+  };
+
+  var DEFAULT_POLICY = {
+    targetLayer: 3,      // 目标深度层
+    turnBackAt: 1.35,    // 余量 < turnBackAt × 单件成本 就撤
+    minSlack: 3.0,
+    grabRadius: 1.0
+  };
+
+  /* 一个"人类可用的"策略：只用摇杆 + 采集钮 + 上浮/下潜钮，
+   * 与玩家手上的按钮完全一致 —— 这一点本身就是 R7 的证据：
+   * 如果这条路走不通，任何玩家也走不通。 */
+  function aiDrive(dt, policy) {
+    if (S.phase !== 'diving') return { action: 'idle' };
+    var h = S.hero;
+    var p = policy || DEFAULT_POLICY;
+    var target = p.targetLayer;
+
+    // 1) 该撤了吗？
+    var slack = S.oxygen - currentReserve();
+    var est = estimatedItemCost();
+    var needBack = Math.max(p.minSlack, est * p.turnBackAt);
+    if (S.depth > target) { aiStick = { x: 0, y: 0, mag: 0 }; beginTransit(-1); return { action: 'ascend' }; }
+    if (slack < needBack) { aiStick = { x: 0, y: 0, mag: 0 }; beginTransit(-1); return { action: 'ascend' }; }
+
+    // 2) 该往下走了吗？（先确认到了目标层还回得来）
+    if (S.depth < target) {
+      var resAtTarget = reserveOxygen(target, S.bag.length + 1) + est * 2.2;
+      if (S.oxygen > resAtTarget) {
+        aiStick = { x: 0, y: 0, mag: 0 };
+        beginTransit(1);
+        return { action: 'descend' };
+      }
+    }
+
+    // 3) 找最近的可采集物，游过去，进范围就抓
+    var best = null, bestD = 1e9;
+    for (var i = 0; i < S.items.length; i++) {
+      var it = S.items[i];
+      var d = Math.hypot(it.x - h.x, it.y - h.y);
+      if (d < bestD) { bestD = d; best = it; }
+    }
+    if (best) {
+      var dx = best.x - h.x, dy = best.y - h.y;
+      var len = Math.hypot(dx, dy) || 1;
+      aiStick = { x: dx / len, y: dy / len, mag: 1 };
+      if (bestD <= (TUNE.grabRange + best.r) * p.grabRadius) {
+        // free3d 对照：还要把"微深度"对上（第二个连续通道）
+        if (S.mode === 'free3d') {
+          var want = best.trim;
+          var cur = S.hero.trim || 0;
+          heldLayer.down = want > cur + 0.05;
+          heldLayer.up = want < cur - 0.05;
+        }
+        if (tryGrab()) return { action: 'grab', name: best.name };
+        return { action: 'align' };
+      }
+      return { action: 'move', target: best.name, dist: Math.round(bestD) };
+    }
+
+    // 4) 本层清空 → 上浮
+    aiStick = { x: 0, y: 0, mag: 0 };
+    beginTransit(-1);
+    return { action: 'ascend' };
+  }
+
+  /* headless 整局模拟：固定步长，返回可复现的统计 */
+  function headlessRun(policy, dt, seed) {
+    var savedRand = S.rand;
+    var savedMode = S.mode;
+    S.rand = makeRng(seed || 987654321);
+    startRun();
+    var guard = 0;
+    var maxSteps = 60 * 240;
+    aiStick = null;
+    while ((S.phase === 'diving' || S.phase === 'transit') && guard < maxSteps) {
+      aiDrive(dt, policy);
+      step(dt);
+      guard++;
+    }
+    var st = S.settle || {
+      lost: S.lost, bag: S.bag.slice(),
+      total: S.bag.reduce(function (a, b) { return a + b.value; }, 0),
+      elapsed: S.elapsed, stats: S.stats
+    };
+    var out = {
+      lost: !!st.lost,
+      total: st.total,
+      banked: st.lost ? 0 : st.total,
+      bagCount: st.bag.length,
+      elapsed: Math.round(st.elapsed * 10) / 10,
+      oxygenLeft: Math.round(S.oxygen * 10) / 10,
+      maxDepth: st.stats ? st.stats.maxDepth : 0,
+      sharkHits: st.stats ? st.stats.sharkHits : 0,
+      hesitationSec: st.stats ? Math.round(st.stats.hesitationSec * 10) / 10 : 0,
+      hesitationEpisodes: st.stats ? st.stats.hesitationEpisodes : 0,
+      episodesWithTarget: st.stats ? st.stats.episodesWithTarget : 0,
+      gambleGrab: st.stats ? st.stats.gambleGrab : 0,
+      grabInHesitationBand: st.stats ? st.stats.grabInHesitationBand : 0,
+      grabOxygenPct: st.stats ? st.stats.grabOxygenPct : [],
+      nearMissSec: st.stats ? Math.round(st.stats.nearMissSec * 10) / 10 : 0,
+      simFrames: st.stats ? {
+        total: st.stats._framesTotal || 0,
+        dual: st.stats.simultaneousInputFrames || 0
+      } : { total: 0, dual: 0 },
+      trimAlignFail: st.stats ? st.stats.trimAlignFail : 0,
+      deathCause: st.stats ? st.stats.deathCause : null,
+      grabs: st.stats ? st.stats.grabsByLayer : null,
+      phase: S.phase
+    };
+    aiStick = null;            // 关键：headless 跑完必须清掉，否则会污染之后的真人输入
+    heldLayer.up = false;
+    heldLayer.down = false;
+    S.mode = savedMode;
+    S.rand = savedRand;
+    return out;
+  }
+
+  /* 批量跑：用来算"贪婪玩家的死亡率"，这是判断氧气压力是否合适的客观指标 */
+  window.__runMany = function (opts) {
+    opts = opts || {};
+    var runs = opts.runs || 30;
+    var policy = opts.policy || DEFAULT_POLICY;
+    var baseSeed = opts.seed || 1000;
+    var list = [];
+    for (var i = 0; i < runs; i++) list.push(headlessRun(policy, 1 / 60, baseSeed + i * 7919));
+    var lost = 0, sum = 0, best = 0, hes = 0, gr = { 1: 0, 2: 0, 3: 0 };
+    var episodes = 0, episodesWithTarget = 0, gambles = 0, lowOxygenGrabs = 0, allGrabs = 0;
+    var causes = {}, grabInBand = 0;
+    for (var j = 0; j < list.length; j++) {
+      if (list[j].lost) lost++;
+      sum += list[j].banked;
+      if (list[j].banked > best) best = list[j].banked;
+      hes += list[j].hesitationSec;
+      episodes += list[j].hesitationEpisodes || 0;
+      episodesWithTarget += list[j].episodesWithTarget || 0;
+      gambles += list[j].gambleGrab || 0;
+      grabInBand += list[j].grabInHesitationBand || 0;
+      var dc = list[j].deathCause || {};
+      for (var ck in dc) causes[ck] = (causes[ck] || 0) + dc[ck];
+      // "低氧采集"= 氧气低于 40% 时仍在采集，是压力真实存在的证据
+      var pcts = list[j].grabOxygenPct || [];
+      allGrabs += pcts.length;
+      for (var q = 0; q < pcts.length; q++) if (pcts[q] < 40) lowOxygenGrabs++;
+      for (var d = 1; d <= 3; d++) gr[d] += list[j].grabs[d] || 0;
+    }
+    function r1(x) { return Math.round(x * 10) / 10; }
+    return {
+      runs: runs,
+      policy: policy,
+      deathRate: Math.round(lost / runs * 1000) / 10,          // %
+      avgBanked: r1(sum / runs),
+      bestBanked: best,
+      avgHesitationSec: r1(hes / runs),
+      avgEpisodes: r1(episodes / runs),                        // 每局"纠结段"数
+      avgEpisodesWithTarget: r1(episodesWithTarget / runs),    // 其中手边有东西可捡的
+      gamblesPerRun: r1(gambles / runs),
+      grabInBandPerRun: r1(grabInBand / runs),
+      deathCause: causes,                       // 每局赌博式采集次数
+      lowOxygenGrabShare: allGrabs ? Math.round(lowOxygenGrabs / allGrabs * 100) : 0, // %
+      avgGrabsByLayer: { 1: r1(gr[1] / runs), 2: r1(gr[2] / runs), 3: r1(gr[3] / runs) },
+      samples: list.slice(0, 4)
+    };
+  };
+
+  /* 参数扫描：给"调参过程"提供真实数据，不再靠我拍脑袋 */
+  window.__sweep = function () {
+    var out = [];
+    var origDeep = TUNE.layerOxygenMult[3];
+    var origCarry = TUNE.carryPenalty;
+    var deepOpts = [1.6, 1.9, 2.2, 2.5];
+    var carryOpts = [0, 0.05];
+    var policies = {
+      safe: { targetLayer: 3, turnBackAt: 2.6, minSlack: 8.0, grabRadius: 1.0 },
+      balanced: { targetLayer: 3, turnBackAt: 1.35, minSlack: 3.0, grabRadius: 1.0 },
+      greedy: { targetLayer: 3, turnBackAt: 0.30, minSlack: 0.4, grabRadius: 1.0 }
+    };
+    for (var a = 0; a < deepOpts.length; a++) {
+      for (var b = 0; b < carryOpts.length; b++) {
+        LAYERS[3].oxygenMult = deepOpts[a];
+        TUNE.layerOxygenMult[3] = deepOpts[a];
+        TUNE.carryPenalty = carryOpts[b];
+        var row = { deepMult: deepOpts[a], carryPenalty: carryOpts[b] };
+        for (var k in policies) {
+          var r = window.__runMany({ runs: 20, policy: policies[k], seed: 4000 });
+          row[k] = {
+            death: r.deathRate, value: r.avgBanked, hes: r.avgHesitationSec,
+            ep: r.avgEpisodesWithTarget, gamble: r.gamblesPerRun,
+            lowOxy: r.lowOxygenGrabShare, grabs: r.avgGrabsByLayer
+          };
+        }
+        out.push(row);
+      }
+    }
+    LAYERS[3].oxygenMult = origDeep;
+    TUNE.layerOxygenMult[3] = origDeep;
+    TUNE.carryPenalty = origCarry;
+    return out;
+  };
+
+  /* 参数扫描 2：找"风险—回报"曲线的形状。
+   * 一个手感成立的风险机制，其期望收益曲线必须是**单峰**的：
+   * 太保守 → 收益低；太贪婪 → 死亡率吃光收益；中间某个点最优。
+   * 如果曲线单调（越贪越好或越稳越好），说明风险没有回报、或者没有风险，
+   * 玩家就不会产生"犹豫"这种情绪——这正是要验的东西。 */
+  window.__sweep2 = function (opts) {
+    opts = opts || {};
+    var deepOpts = opts.deep || [1.6, 2.2];
+    var carryOpts = opts.carry || [0, 0.03, 0.05];
+    var backOpts = [0.30, 0.8, 1.35, 2.0, 2.8];
+    var out = [];
+    var origDeep = TUNE.layerOxygenMult[3], origCarry = TUNE.carryPenalty;
+    for (var a = 0; a < deepOpts.length; a++) {
+      for (var b = 0; b < carryOpts.length; b++) {
+        LAYERS[3].oxygenMult = deepOpts[a];
+        TUNE.layerOxygenMult[3] = deepOpts[a];
+        TUNE.carryPenalty = carryOpts[b];
+        var cells = [];
+        for (var c = 0; c < backOpts.length; c++) {
+          var r = window.__runMany({
+            runs: opts.runs || 24,
+            policy: { targetLayer: 3, turnBackAt: backOpts[c], minSlack: Math.max(0.4, backOpts[c] * 2.0), grabRadius: 1.0 },
+            seed: 4000
+          });
+          cells.push({
+            back: backOpts[c],
+            death: r.deathRate,
+            value: r.avgBanked,
+            ev: Math.round(r.avgBanked * (1 - r.deathRate / 100) * 10) / 10,
+            ep: r.avgEpisodesWithTarget,
+            lowOxy: r.lowOxygenGrabShare,
+            deep: r.avgGrabsByLayer[3]
+          });
+        }
+        // 找峰值：EV 最高的那一格，以及它是否在中间
+        var bestI = 0;
+        for (var q = 1; q < cells.length; q++) if (cells[q].ev > cells[bestI].ev) bestI = q;
+        out.push({
+          deepMult: deepOpts[a], carry: carryOpts[b],
+          cells: cells,
+          bestBack: cells[bestI].back,
+          bestIsInterior: bestI > 0 && bestI < cells.length - 1,   // ★ 单峰判据
+          bestEv: cells[bestI].ev
+        });
+      }
+    }
+    LAYERS[3].oxygenMult = origDeep;
+    TUNE.layerOxygenMult[3] = origDeep;
+    TUNE.carryPenalty = origCarry;
+    return out;
+  };
+
+  /* 输入负担对比：R7 最直接的一组量化证据。
+   * 同样的目标、同样的 AI 策略，只改变"是否必须维持第二个连续输入通道"。 */
+  window.__inputBurden = function (opts) {
+    opts = opts || {};
+    var runs = opts.runs || 20;
+    function measure(mode) {
+      window.__diveMode(mode);
+      var agg = { death: 0, value: 0, framesTotal: 0, framesDual: 0, alignFails: 0, episodes: 0 };
+      for (var i = 0; i < runs; i++) {
+        var r = headlessRun(DEFAULT_POLICY, 1 / 60, 9000 + i * 7919);
+        if (r.lost) agg.death++;
+        agg.value += r.banked;
+        agg.episodes += r.episodesWithTarget || 0;
+        agg.framesTotal += (r.simFrames && r.simFrames.total) || 0;
+        agg.framesDual += (r.simFrames && r.simFrames.dual) || 0;
+        agg.alignFails += r.trimAlignFail || 0;
+      }
+      window.__diveMode('topdown');
+      return {
+        mode: mode,
+        deathRate: Math.round(agg.death / runs * 1000) / 10,
+        avgBanked: Math.round(agg.value / runs * 10) / 10,
+        avgEpisodesWithTarget: Math.round(agg.episodes / runs * 10) / 10,
+        dualChannelShare: agg.framesTotal ? Math.round(agg.framesDual / agg.framesTotal * 100) : 0,
+        alignFailsPerRun: Math.round(agg.alignFails / runs * 10) / 10
+      };
+    }
+    var td = measure('topdown');
+    var f3 = measure('free3d');
+    return { topdown: td, free3d: f3 };
+  };
+  /* 最终校准：把"深水耗氧倍率 × 负重惩罚"和"撤退阈值"一起扫，
+   * 输出每个组合的 EV 曲线、单峰性、犹豫事件数、低氧采集占比。
+   * 这是"氧气调参过程"的原始数据来源。 */
+  window.__calibrate = function (opts) {
+    opts = opts || {};
+    var deepOpts = opts.deep || [1.6, 1.9, 2.2, 2.5];
+    var carryOpts = opts.carry || [0, 0.05];
+    var backOpts = opts.back || [0.5, 1.0, 1.5, 2.2, 3.0];
+    var runs = opts.runs || 24;
+    var out = [];
+    var origDeep = TUNE.layerOxygenMult[3], origCarry = TUNE.carryPenalty;
+    for (var a = 0; a < deepOpts.length; a++) {
+      for (var b = 0; b < carryOpts.length; b++) {
+        LAYERS[3].oxygenMult = deepOpts[a];
+        TUNE.layerOxygenMult[3] = deepOpts[a];
+        TUNE.carryPenalty = carryOpts[b];
+        var cells = [];
+        for (var c = 0; c < backOpts.length; c++) {
+          var rr = window.__runMany({
+            runs: runs,
+            policy: { targetLayer: 3, turnBackAt: backOpts[c], minSlack: Math.max(0.4, backOpts[c] * 2.0), grabRadius: 1.0 },
+            seed: 4000
+          });
+          cells.push({
+            back: backOpts[c],
+            death: rr.deathRate,
+            value: rr.avgBanked,
+            ev: Math.round(rr.avgBanked * (1 - rr.deathRate / 100) * 10) / 10,
+            ep: rr.avgEpisodesWithTarget,
+            inBand: rr.grabInBandPerRun,
+            lowOxy: rr.lowOxygenGrabShare,
+            deep: rr.avgGrabsByLayer[3],
+            causes: rr.deathCause
+          });
+        }
+        var bestI = 0;
+        for (var q = 1; q < cells.length; q++) if (cells[q].ev > cells[bestI].ev) bestI = q;
+        out.push({
+          deepMult: deepOpts[a], carry: carryOpts[b],
+          cells: cells,
+          bestBack: cells[bestI].back,
+          bestEv: cells[bestI].ev,
+          interiorPeak: bestI > 0 && bestI < cells.length - 1,
+          greedPenalty: Math.round((cells[0].death - cells[bestI].death) * 10) / 10,
+          deepUnreachable: 12 - Math.round(cells[bestI].deep)
+        });
+      }
+    }
+    LAYERS[3].oxygenMult = origDeep;
+    TUNE.layerOxygenMult[3] = origDeep;
+    TUNE.carryPenalty = origCarry;
+    return out;
+  };
+
+  window.__selfTest = function () {
+    var problems = [];
+    function ok(cond, msg) { if (!cond) problems.push(msg); }
+
+    ok(typeof window.__diveState === 'function', '缺少 __diveState');
+    ok(typeof window.__autoplay === 'function', '缺少 __autoplay');
+    ok(!!LAY, '布局未初始化');
+
+    // 按钮不越界（竖屏 + 横屏都能按到）
+    var rects = [LAY.collect, LAY.up, LAY.down];
+    for (var i = 0; i < rects.length; i++) {
+      var r = rects[i];
+      ok(r.x - r.r >= 0 && r.x + r.r <= VW, '按钮横向越界');
+      ok(r.y - r.r >= 0 && r.y + r.r <= VH, '按钮纵向越界');
+    }
+    // 按钮之间不重叠（手指不会误按）
+    var pairs = [[LAY.collect, LAY.up], [LAY.up, LAY.down], [LAY.collect, LAY.down]];
+    for (var j = 0; j < pairs.length; j++) {
+      var d = Math.hypot(pairs[j][0].x - pairs[j][1].x, pairs[j][0].y - pairs[j][1].y);
+      ok(d > pairs[j][0].r + pairs[j][1].r - 2, '按钮重叠（间距 ' + Math.round(d) + '）');
+    }
+    // 采样一次状态
+    var state = window.__diveState();
+    ['phase', 'oxygen', 'oxygenMax', 'depth', 'collected', 'totalValue', 'danger'].forEach(function (k) {
+      ok(Object.prototype.hasOwnProperty.call(state, k), '__diveState 缺少字段 ' + k);
+    });
+
+    // 完整跑一局
+    var run = window.__autoplayRun();
+    ok(run.elapsed > 5, '一局时长过短（' + run.elapsed + 's）');
+    ok(typeof run.total === 'number', '一局没有产出 total');
+
+    // 连续多点触控（模拟两根手指）：摇杆 + 按钮互不干扰
+    var fake = [];
+    for (var k = 0; k < 3; k++) {
+      var e = { pointerId: 100 + k, clientX: 40 + k * 6, clientY: VH - 120, preventDefault: function () {}, stopPropagation: function () {} };
+      fake.push(e);
+    }
+    // 直接验证 pointerId 记账逻辑
+    stick = { id: 501, ox: 40, oy: 300, x: 80, y: 300 };
+    btnPointer = { collect: 502 };
+    var v = stickVector();
+    ok(Math.abs(v.x) > 0.2, '摇杆未产生水平输入');
+    stick = null; btnPointer = {};
+
+    return { ok: problems.length === 0, problems: problems, sample: state, run: run,
+      layout: { VW: VW, VH: VH, portrait: LAY.portrait } };
+  };
+
+  /* 切换输入模式（topdown / free3d）
+   * ⚠ free3d 不是为了做 3D 画面，而是把"必须同时维持第二个连续输入通道"
+   *   这个成本建模进来，用来量化 R7 中 3D 方案的输入负担。 */
+  window.__diveMode = function (m) {
+    S.mode = (m === 'free3d') ? 'free3d' : 'topdown';
+    refreshButtons();
+    return S.mode;
+  };
+
+  /* 供外部调参 */
+  window.__tune = TUNE;
+  window.__dive = { state: S, layers: LAYERS };
+  /* 摇杆/键盘的当前输入向量，供触屏自检读取（不必等物理帧才生效） */
+  window.__diveStick = function () { return stickVector(); };
+
+  /* ===========================================================================
+   * 十四、启动
+   * ========================================================================== */
+  window.addEventListener('resize', function () {
+    resize();
+    render();
+  });
+  window.addEventListener('orientationchange', function () {
+    setTimeout(function () { resize(); render(); }, 120);
+  });
+
+  resize();
+  showButtons(false);
+  S.rand = makeRng(Date.now() % 100000);
+
+  /* 触屏交互验证：?touchtest=1
+   * 用真实的 PointerEvent 派发，验证「摇杆按 pointerId 跟踪 + 按钮不穿透」，
+   * 这是任务书里点名的验收条款，不能只靠读代码声称做到了。 */
+  function runTouchTest() {
+    var results = [];
+    function log(name, obj) { results.push({ test: name, result: obj }); }
+    function ev(kind, el, id, x, y) {
+      el.dispatchEvent(new PointerEvent(kind, {
+        pointerId: id, clientX: x, clientY: y,
+        bubbles: true, cancelable: true, pointerType: 'touch'
+      }));
+    }
+
+    var cvEl = document.querySelector('canvas');
+    var btnGrab = document.getElementById('btnGrab');
+
+    log('setup', {
+      hasCanvas: !!cvEl,
+      hasGrabButton: !!btnGrab,
+      pointerEventsSupported: (typeof PointerEvent === 'function'),
+      phase: window.__diveState().phase
+    });
+
+    // 开局（标题页点一下即开始）
+    ev('pointerdown', cvEl, 1, 100, 400);
+    ev('pointerup', cvEl, 1, 100, 400);
+    log('start-run', { phase: window.__diveState().phase });
+
+    // 测试 1：摇杆按 pointerId 跟踪，别的指头不能干扰
+    var H = window.__dive.state.hero;
+    ev('pointerdown', cvEl, 11, 100, 600);
+    ev('pointermove', cvEl, 11, 170, 600);
+    // 摇杆是在下一帧才转成速度的，所以直接查摇杆向量（同一 tick 内即可读到）
+    var stickNow = window.__diveStick ? window.__diveStick() : null;
+    var vxFinger1 = H.vx;
+    ev('pointermove', cvEl, 77, 300, 300);          // 另一根指头乱动
+    var vxOtherFinger = H.vx;
+    log('test1-pointerId-tracking', {
+      stickVector: stickNow,
+      vxInitially: Math.round(vxFinger1),
+      vxAfterOtherFinger: Math.round(vxOtherFinger),
+      otherFingerIgnored: Math.abs(vxOtherFinger - vxFinger1) < 12,
+      pass: stickNow !== null && Math.abs(stickNow.x) > 0.3
+    });
+
+    // 测试 2：第二根手指按采集按钮，摇杆不能断
+    var stickBeforeBtn = window.__diveStick ? window.__diveStick() : { x: 0, y: 0, mag: 0 };
+    ev('pointerdown', btnGrab, 22, 330, 780);
+    var stickAfterBtn = window.__diveStick ? window.__diveStick() : { x: 0, y: 0, mag: 0 };
+    log('test2-two-fingers', {
+      stickBeforeButton: stickBeforeBtn,
+      stickAfterButton: stickAfterBtn,
+      joystickSurvivedButtonPress: Math.abs(stickAfterBtn.x - stickBeforeBtn.x) < 0.05,
+      grabButtonPressed: btnGrab.classList.contains('down'),
+      pass: Math.abs(stickAfterBtn.x - stickBeforeBtn.x) < 0.05
+    });
+
+    // 测试 3：按钮事件不穿透到 canvas（stopPropagation 生效）
+    var canvasGot = false;
+    var spy = function () { canvasGot = true; };
+    cvEl.addEventListener('pointerdown', spy, true);
+    ev('pointerdown', btnGrab, 23, 330, 780);
+    cvEl.removeEventListener('pointerdown', spy, true);
+    log('test3-stopPropagation', {
+      canvasReceivedButtonPointerdown: canvasGot,
+      pass: canvasGot === false
+    });
+
+    // 测试 4：按钮抬起后视觉回弹
+    ev('pointerup', btnGrab, 23, 330, 780);
+    log('test4-button-release', {
+      downClassAfterUp: btnGrab.classList.contains('down'),
+      pass: btnGrab.classList.contains('down') === false
+    });
+
+    // 测试 5：键盘可用（桌面调试路径）
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    var kStick = window.__diveStick ? window.__diveStick() : null;
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight', bubbles: true }));
+    log('test5-keyboard', {
+      stickFromKeyboard: kStick,
+      pass: kStick !== null && kStick.x > 0.3
+    });
+
+    // 测试 6：按钮互不重叠 + 不越界（误触防护）—— 复用 __selfTest 的断言
+    var st = window.__selfTest();
+    log('test6-layout', { selfTestOk: st.ok, problems: st.problems, layout: st.layout });
+
+    // 测试 7：抬指后摇杆清空
+    ev('pointerup', cvEl, 11, 170, 600);
+    log('test7-release', { released: true });
+
+    var pre = document.createElement('pre');
+    pre.id = 'touch-out';
+    pre.textContent = JSON.stringify({ touchTests: results }, null, 1);
+    pre.style.cssText = 'position:fixed;inset:0;overflow:auto;font:11px/1.4 monospace;color:#cfe;background:#02101a;margin:0;padding:8px;z-index:99';
+    document.body.appendChild(pre);
+    var allPass = true;
+    for (var i = 0; i < results.length; i++) {
+      if (results[i].result && results[i].result.pass === false) allPass = false;
+    }
+    document.title = 'TOUCHTEST_' + (allPass ? 'PASS' : 'FAIL');
+  }
+
+  var shotName = readShotParam();
+  if (shotName) setupShot(shotName);
+  if (hasParam('selftest')) {
+    // 等一帧，确保布局与首帧渲染完成后再跑（避免 LAY 还没算）
+    setTimeout(runSelfTestPage, 60);
+  }
+  if (hasParam('touchtest')) {
+    /* 注意：不要用 setTimeout 延迟。--dump-dom 的虚拟时间下定时器不一定被触发，
+       实测会 dump 到一张还没跑测试的页面。这里同步跑完，只依赖已完成的 resize()。 */
+    try { runTouchTest(); } catch (e) {
+      var pre = document.createElement('pre');
+      pre.id = 'touch-out';
+      pre.textContent = JSON.stringify({ error: e.message, stack: String(e.stack || '') }, null, 1);
+      document.body.appendChild(pre);
+      document.title = 'TOUCHTEST_FAIL';
+    }
+  }
+
+  requestAnimationFrame(frame);
+
+  // 切回标签页时重置时间基线，避免 dt 爆炸
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) lastT = 0;
+  });
+
+})();
+</script>
+</body>
+</html>

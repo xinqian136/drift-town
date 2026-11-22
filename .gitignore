@@ -11,3 +11,11 @@ Thumbs.db
 
 # 依赖（本项目无 npm 依赖，保留以防将来添加）
 node_modules/
+
+# 潜水原型的验证截图（4.6MB，属于本地验证证据，不进仓库）
+# 报告中的结论见 prototype/dive/REPORT.md，截图可用 take-shots.ps1 重新生成
+prototype/dive/shots/
+
+# 原型的临时自检产物（可重新生成）
+prototype/dive/selftest.json
+prototype/dive/touchtest.json

@@ -1,0 +1,626 @@
+{
+  "schema": "drift-town.buildings",
+  "version": 1,
+  "updatedAt": "2026-11-22",
+  "title": "建筑与设施表",
+  "summary": "从阶段 0 的工作台到阶段 4 的寿司店，所有可建造物的造价、前置、产出与位置约束。前置链是本表的重点，后台会据此高亮依赖关系。",
+  "sourceOfTruth": {
+    "townBuildingsCost": "game.js · BUILDING_SPECS[].cost（6 座城镇建筑，造价不得改动）",
+    "townBuildingsPop": "game.js · BUILDING_SPECS[].pop",
+    "survivalSteps": "game.js · SURVIVAL_STEPS[] + DEFAULTS.rules.survival.*（workbench/shelter/rainCatcher/fishBasket/scoopNet/purifier 的 needs 与造价）",
+    "dependencies": "docs/UNLOCK_CHAIN.md · 二、硬依赖清单（不可并行）"
+  },
+  "notes": [
+    "cost 的单位与 game.js 的 {wood, plastic, metal} 完全同形，额外允许 food / salvage 两个键供寿司店等后期建筑使用；游戏侧遇到未知键会忽略，因此不会破坏当前实现。",
+    "buildTime 单位是秒。当前 game.js 中建筑是瞬间落成的（建造动画 1/1.6 秒内收敛），所以现存 6 座 + 6 个生存步骤的 buildTime 取 0 并令 instant=true，表示「与代码一致」；后期建筑给出设计值。",
+    "prereq 里的字符串全部是 other buildings 的 id；skill: / npc: 前缀表示技能或 NPC 类前置，后台按前缀分别高亮与校验。",
+    "positionRule 沿用文档给的三种枚举（water / land / shore）并扩展 anchor：生存装备是挂在木筏甲板上的小件，不占格，故用 anchor。",
+    "output 用「每项都是 {id, amount, text}」的形式，amount 为 null 时表示这是状态型增益（如耐久、声望），量值写在 effect 里。",
+    "effectKeys 枚举已补齐：早期版本漏了 survival 类建筑的速率键（waterRate/waterEvery/foodRate/foodEvery）与店铺/检查点类键，后台按枚举校验会误报。"
+  ],
+  "enums": {
+    "positionRule": {
+      "water": "必须建在水面（浮岛/筏体上）",
+      "land": "必须建在实地上（不适用于纯漂流阶段）",
+      "shore": "必须贴着岸边/礁石",
+      "anchor": "固定在现成筏体甲板上的小件，不占格"
+    },
+    "prereqPrefix": {
+      "building": "直接写建筑 id",
+      "skill": "skill:<branch> 技能分支",
+      "npc": "npc:<npcId> 需要该 NPC 已招募",
+      "progress": "progress:<key> 进度里程碑"
+    },
+    "effectKeys": [
+      "maxHearts",
+      "speed",
+      "water",
+      "shields",
+      "magnet",
+      "trade",
+      "pop",
+      "beds",
+      "storage",
+      "durability",
+      "priceBonus",
+      "traffic",
+      "unlock",
+      "checkpoint",
+      "waterRate",
+      "waterEvery",
+      "foodRate",
+      "foodEvery",
+      "tradeRatio",
+      "menuSlots",
+      "menuSlotsMax"
+    ]
+  },
+  "buildings": [
+    {
+      "id": "workbench",
+      "name": "工作台",
+      "icon": "WORKBENCH_BOXES",
+      "stage": 0,
+      "kind": "survival",
+      "cost": {
+        "wood": 4,
+        "plastic": 0,
+        "metal": 0
+      },
+      "buildTime": 0,
+      "instant": true,
+      "prereq": [],
+      "output": [],
+      "positionRule": "anchor",
+      "effect": {
+        "unlock": "buildMenu"
+      },
+      "desc": "解锁建造 · 木材加工",
+      "tip": "造出工作台，才能动手搭别的东西",
+      "implemented": true
+    },
+    {
+      "id": "shelter",
+      "name": "庇护所",
+      "icon": "SHELTER_BOXES",
+      "stage": 1,
+      "kind": "survival",
+      "cost": {
+        "wood": 8,
+        "plastic": 2,
+        "metal": 0
+      },
+      "buildTime": 0,
+      "instant": true,
+      "prereq": [
+        "workbench"
+      ],
+      "output": [
+        {
+          "id": "beds",
+          "amount": 2,
+          "text": "床位 +2"
+        }
+      ],
+      "positionRule": "anchor",
+      "effect": {
+        "beds": 2,
+        "unlock": "survivalGear",
+        "checkpoint": true
+      },
+      "desc": "床位+2 · 存档点 · 生存装备图纸",
+      "tip": "有了遮风挡雨的家，才顾得上喝水吃饭",
+      "implemented": true
+    },
+    {
+      "id": "rainCatcher",
+      "name": "集雨器",
+      "icon": "RAINCATCHER_BOXES",
+      "stage": 1,
+      "kind": "survival",
+      "cost": {
+        "wood": 3,
+        "plastic": 2,
+        "metal": 0
+      },
+      "buildTime": 0,
+      "instant": true,
+      "prereq": [
+        "shelter"
+      ],
+      "output": [
+        {
+          "id": "water",
+          "amount": 8,
+          "text": "每 8 秒 +8 水"
+        }
+      ],
+      "positionRule": "anchor",
+      "effect": {
+        "waterRate": 8,
+        "waterEvery": 8
+      },
+      "desc": "每 8 秒 +8 水",
+      "tip": "",
+      "implemented": true
+    },
+    {
+      "id": "fishBasket",
+      "name": "鱼篓",
+      "icon": "FISHBASKET_BOXES",
+      "stage": 1,
+      "kind": "survival",
+      "cost": {
+        "wood": 4,
+        "plastic": 0,
+        "metal": 0
+      },
+      "buildTime": 0,
+      "instant": true,
+      "prereq": [
+        "shelter"
+      ],
+      "output": [
+        {
+          "id": "food",
+          "amount": 6,
+          "text": "每 10 秒 +6 食"
+        }
+      ],
+      "positionRule": "anchor",
+      "effect": {
+        "foodRate": 6,
+        "foodEvery": 10
+      },
+      "desc": "每 10 秒 +6 食",
+      "tip": "",
+      "implemented": true
+    },
+    {
+      "id": "scoopNet",
+      "name": "捞网",
+      "icon": "SCOOPNET_BOXES",
+      "stage": 1,
+      "kind": "survival",
+      "cost": {
+        "wood": 3,
+        "plastic": 0,
+        "metal": 0
+      },
+      "buildTime": 0,
+      "instant": true,
+      "prereq": [
+        "shelter"
+      ],
+      "output": [
+        {
+          "id": "magnet",
+          "amount": 0.5,
+          "text": "打捞范围 +50%"
+        }
+      ],
+      "positionRule": "anchor",
+      "effect": {
+        "magnet": 0.5
+      },
+      "desc": "打捞范围 +50%",
+      "tip": "",
+      "implemented": true
+    },
+    {
+      "id": "purifier",
+      "name": "净水器",
+      "icon": "PURIFIER_BOXES",
+      "stage": 1,
+      "kind": "survival",
+      "cost": {
+        "wood": 4,
+        "plastic": 0,
+        "metal": 2
+      },
+      "buildTime": 0,
+      "instant": true,
+      "prereq": [
+        "rainCatcher",
+        "workbench"
+      ],
+      "output": [
+        {
+          "id": "water",
+          "amount": 12,
+          "text": "每 5 秒 +12 水"
+        }
+      ],
+      "positionRule": "anchor",
+      "effect": {
+        "waterRate": 12,
+        "waterEvery": 5
+      },
+      "desc": "每 5 秒 +12 水",
+      "tip": "",
+      "implemented": true
+    },
+    {
+      "id": "cabin",
+      "name": "小屋",
+      "icon": "CABIN_BOXES",
+      "stage": 2,
+      "kind": "town",
+      "cost": {
+        "wood": 4,
+        "plastic": 0,
+        "metal": 0
+      },
+      "buildTime": 0,
+      "instant": true,
+      "prereq": [
+        "townCenter"
+      ],
+      "output": [
+        {
+          "id": "pop",
+          "amount": 1,
+          "text": "居民 +1"
+        }
+      ],
+      "positionRule": "water",
+      "effect": {
+        "maxHearts": 1,
+        "pop": 1
+      },
+      "desc": "+1 心",
+      "tip": "第一间真正意义上的房子",
+      "implemented": true
+    },
+    {
+      "id": "waterTower",
+      "name": "水塔",
+      "icon": "TOWER_BOXES",
+      "stage": 2,
+      "kind": "town",
+      "cost": {
+        "wood": 3,
+        "plastic": 3,
+        "metal": 0
+      },
+      "buildTime": 0,
+      "instant": true,
+      "prereq": [
+        "townCenter"
+      ],
+      "output": [
+        {
+          "id": "pop",
+          "amount": 1,
+          "text": "居民 +1"
+        }
+      ],
+      "positionRule": "water",
+      "effect": {
+        "water": 25,
+        "pop": 1
+      },
+      "desc": "水壶 +25",
+      "tip": "",
+      "implemented": true
+    },
+    {
+      "id": "greenhouse",
+      "name": "温室",
+      "icon": "GREENHOUSE_BOXES",
+      "stage": 2,
+      "kind": "town",
+      "cost": {
+        "wood": 2,
+        "plastic": 4,
+        "metal": 0
+      },
+      "buildTime": 0,
+      "instant": true,
+      "prereq": [
+        "townCenter"
+      ],
+      "output": [
+        {
+          "id": "pop",
+          "amount": 1,
+          "text": "居民 +1"
+        }
+      ],
+      "positionRule": "water",
+      "effect": {
+        "magnet": 0.9,
+        "pop": 1
+      },
+      "desc": "吸附范围+",
+      "tip": "",
+      "implemented": true
+    },
+    {
+      "id": "lighthouse",
+      "name": "灯塔",
+      "icon": "LIGHTHOUSE_BOXES",
+      "stage": 2,
+      "kind": "town",
+      "cost": {
+        "wood": 3,
+        "plastic": 2,
+        "metal": 3
+      },
+      "buildTime": 0,
+      "instant": true,
+      "prereq": [
+        "townCenter"
+      ],
+      "output": [],
+      "positionRule": "water",
+      "effect": {
+        "shields": 2
+      },
+      "desc": "护盾更久",
+      "tip": "",
+      "implemented": true
+    },
+    {
+      "id": "marketStall",
+      "name": "市集",
+      "icon": "STALL_BOXES",
+      "stage": 2,
+      "kind": "town",
+      "cost": {
+        "wood": 4,
+        "plastic": 3,
+        "metal": 3
+      },
+      "buildTime": 0,
+      "instant": true,
+      "prereq": [
+        "townCenter"
+      ],
+      "output": [
+        {
+          "id": "pop",
+          "amount": 2,
+          "text": "居民 +2"
+        }
+      ],
+      "positionRule": "water",
+      "effect": {
+        "trade": 1,
+        "pop": 2
+      },
+      "desc": "收益 +1",
+      "tip": "",
+      "implemented": true
+    },
+    {
+      "id": "windmill",
+      "name": "风车",
+      "icon": "WINDMILL_BOXES",
+      "stage": 2,
+      "kind": "town",
+      "cost": {
+        "wood": 5,
+        "plastic": 3,
+        "metal": 4
+      },
+      "buildTime": 0,
+      "instant": true,
+      "prereq": [
+        "townCenter"
+      ],
+      "output": [
+        {
+          "id": "pop",
+          "amount": 1,
+          "text": "居民 +1"
+        }
+      ],
+      "positionRule": "water",
+      "effect": {
+        "speed": 0.5,
+        "pop": 1
+      },
+      "desc": "船速 +",
+      "tip": "",
+      "implemented": true
+    },
+    {
+      "id": "townCenter",
+      "name": "城镇中心",
+      "icon": "PROC:townHall",
+      "stage": 2,
+      "kind": "town",
+      "cost": {
+        "wood": 15,
+        "plastic": 8,
+        "metal": 5
+      },
+      "buildTime": 45,
+      "instant": false,
+      "prereq": [
+        "shelter",
+        "progress:selfSustain"
+      ],
+      "output": [
+        {
+          "id": "storage",
+          "amount": 200,
+          "text": "仓储上限 200"
+        }
+      ],
+      "positionRule": "water",
+      "effect": {
+        "beds": 4,
+        "unlock": "islandExpansion,reputation,residentCap"
+      },
+      "desc": "解锁浮岛扩建 / 居民上限 / 声望系统",
+      "tip": "关键里程碑：从营地变成社会",
+      "implemented": false
+    },
+    {
+      "id": "house",
+      "name": "民居",
+      "icon": "PROC:house",
+      "stage": 2,
+      "kind": "town",
+      "cost": {
+        "wood": 6,
+        "plastic": 0,
+        "metal": 0
+      },
+      "buildTime": 25,
+      "instant": false,
+      "prereq": [
+        "townCenter"
+      ],
+      "output": [
+        {
+          "id": "beds",
+          "amount": 2,
+          "text": "床位 +2 / 居民 +2"
+        }
+      ],
+      "positionRule": "water",
+      "effect": {
+        "beds": 2,
+        "pop": 2
+      },
+      "desc": "居民 +2",
+      "tip": "城镇判定要求 ≥2 座民居",
+      "implemented": false
+    },
+    {
+      "id": "dock",
+      "name": "码头",
+      "icon": "PROC:dock",
+      "stage": 2,
+      "kind": "town",
+      "cost": {
+        "wood": 10,
+        "plastic": 0,
+        "metal": 3
+      },
+      "buildTime": 40,
+      "instant": false,
+      "prereq": [
+        "townCenter"
+      ],
+      "output": [
+        {
+          "id": "fleet",
+          "amount": 1,
+          "text": "解锁更大船只"
+        }
+      ],
+      "positionRule": "shore",
+      "effect": {
+        "unlock": "farSea"
+      },
+      "desc": "解锁更大船只 · 可去更远海域",
+      "tip": "",
+      "implemented": false
+    },
+    {
+      "id": "market",
+      "name": "市场",
+      "icon": "PROC:market",
+      "stage": 2,
+      "kind": "town",
+      "cost": {
+        "wood": 12,
+        "plastic": 0,
+        "metal": 4
+      },
+      "buildTime": 40,
+      "instant": false,
+      "prereq": [
+        "townCenter"
+      ],
+      "output": [
+        {
+          "id": "trade",
+          "amount": 1,
+          "text": "解锁资源交易"
+        }
+      ],
+      "positionRule": "water",
+      "effect": {
+        "unlock": "trade",
+        "tradeRatio": 0.6
+      },
+      "desc": "解锁交易，可买卖资源",
+      "tip": "小满的招募条件需要它",
+      "implemented": false
+    },
+    {
+      "id": "inn",
+      "name": "旅店",
+      "icon": "PROC:inn",
+      "stage": 3,
+      "kind": "town",
+      "cost": {
+        "wood": 14,
+        "plastic": 6,
+        "metal": 0
+      },
+      "buildTime": 60,
+      "instant": false,
+      "prereq": [
+        "townCenter",
+        "house"
+      ],
+      "output": [
+        {
+          "id": "beds",
+          "amount": 3,
+          "text": "床位 +3 / 招募设施"
+        }
+      ],
+      "positionRule": "water",
+      "effect": {
+        "beds": 3,
+        "unlock": "npcRecruit"
+      },
+      "desc": "流浪 NPC 的招募设施前置",
+      "tip": "没有旅店，漂流者无处可来",
+      "implemented": false
+    },
+    {
+      "id": "sushiRestaurant",
+      "name": "寿司店",
+      "icon": "PROC:sushi",
+      "stage": 4,
+      "kind": "shop",
+      "cost": {
+        "wood": 18,
+        "plastic": 10,
+        "metal": 12,
+        "salvage": 4
+      },
+      "buildTime": 90,
+      "instant": false,
+      "prereq": [
+        "inn",
+        "npc:xiaoman",
+        "market"
+      ],
+      "output": [
+        {
+          "id": "menu",
+          "amount": 3,
+          "text": "菜单位 3 格（可扩到 6）"
+        }
+      ],
+      "positionRule": "water",
+      "effect": {
+        "unlock": "dive,foodEconomy,shopManagement",
+        "menuSlots": 3,
+        "menuSlotsMax": 6
+      },
+      "desc": "解锁潜水采集 / 食材经营 / 店铺管理",
+      "tip": "核心链路终点：这条链任一环延期都会阻塞后续所有内容",
+      "implemented": false
+    }
+  ]
+}

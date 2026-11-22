@@ -1,0 +1,762 @@
+{
+  "schema": "drift-town.npcs",
+  "version": 1,
+  "updatedAt": "2026-11-22",
+  "title": "NPC 与事件表",
+  "summary": "六位流浪者的小传、特长、招募条件、出现时机与好感度事件链，外加一张可复用的通用事件表结构。人和事件是两张表，用 npcId 关联。",
+  "sourceOfTruth": {
+    "roster": "docs/GAME_DESIGN.md · 阶段 3 · 3.1 NPC 类型（首批 6 位）表格",
+    "recruitGating": "docs/UNLOCK_CHAIN.md · 一、解锁链全图 阶段 3",
+    "eventShape": "docs/GAME_DESIGN.md · 6.3 模块四（触发条件 / 类型 / 选项与结果 / 冷却）"
+  },
+  "notes": [
+    "recruitCondition 拆成两类键：hard 是必须全部满足的硬门槛（对应文档的「招募条件」列），personality 是「人格化任务」，用来规避风险 R4「NPC 招募变成纯数值门槛」。两者分开存，后台可以分别校验。",
+    "appearTiming 用 { type, value } 而不是纯字符串，因为「第 N 天」和「建成某建筑后」需要程序判定，而不是人读。",
+    "unlocks 只写「这个人带来什么玩法解锁」，具体数值效果落在 specialties.effects 里，避免同一件事两处记录。",
+    "affinityEvents 是这位 NPC 专属的好感度事件链，通用事件规则见文件末尾 events 表；两者用 eventType 对齐，冷却单位统一为游戏日。",
+    "portrait 用 PROC: 前缀表示程序化绘制（当前项目全部角色都是体素/Canvas 绘制，没有 PNG 立绘），这是与 assets 目录解耦的约定。",
+    "legacy 记录 NPC 来之前的事。它是叙事资产，也是莉莉这类 NPC 收费逻辑的动机来源，不是空字段。"
+  ],
+  "enums": {
+    "specialty": {
+      "salvage": "打捞",
+      "build": "建造",
+      "cook": "烹饪",
+      "dive": "潜水",
+      "run": "经营",
+      "story": "剧情"
+    },
+    "eventType": {
+      "help": "求助：NPC 要东西 / 要条件",
+      "trade": "交易：一口价交换",
+      "conflict": "冲突：两个居民起矛盾，需要裁决",
+      "story": "剧情：推进世界观与沉城线索"
+    },
+    "recruitConditionType": {
+      "resource": "交付指定数量的资源",
+      "building": "已建成某座建筑",
+      "tool": "已拥有某件装备",
+      "reputation": "声望达到某级",
+      "townLevel": "城镇等级达到某级"
+    },
+    "appearTimingType": {
+      "gameDay": "第 N 个游戏日起可出现",
+      "afterBuilding": "某建筑建成后可出现",
+      "afterRecruit": "某 NPC 已招募后可出现"
+    }
+  },
+  "npcs": [
+    {
+      "id": "laochen",
+      "name": "老陈",
+      "portrait": "PROC:laochen",
+      "title": "捞了四十年的老手",
+      "specialty": "salvage",
+      "bio": "大潮前是渔船上的水手，大潮后是海上最会看垃圾往哪漂的人。话少，手快，说「这玩意儿有用」的时候基本都对。",
+      "legacy": "他原来的船叫「陈记二号」，沉在离这里两天航程的地方。他从不提船，只提船上那口锅。",
+      "recruitCondition": {
+        "hard": [
+          {
+            "type": "resource",
+            "key": "wood",
+            "amount": 20,
+            "text": "交付木×20"
+          }
+        ],
+        "personality": {
+          "id": "laochen-net",
+          "text": "他要你陪他把一张破网补完——不是交东西，是花时间。补网时他会顺手教你分辨哪种漂浮物值得捞。",
+          "check": "完成补网小游戏（3 次正确补洞）"
+        }
+      },
+      "appearTiming": {
+        "type": "gameDay",
+        "value": 2,
+        "text": "第 2 个游戏日起，每 1–2 日可出现 1 位"
+      },
+      "unlocks": [
+        "自动打捞（离线收益）"
+      ],
+      "specialties": {
+        "desc": "自动打捞",
+        "effects": {
+          "offlineSalvagePerHour": 40,
+          "salvageRangeBonus": 0.15
+        }
+      },
+      "affinityEvents": [
+        {
+          "id": "laochen-1",
+          "eventType": "help",
+          "title": "补网",
+          "desc": "他又弄破了一张网，说这次是故意的，想看看你学没学会。",
+          "choices": [
+            {
+              "text": "帮他补",
+              "result": {
+                "affinity": 10,
+                "message": "他没说话，但第二天甲板上多了一桶淡水。"
+              }
+            },
+            {
+              "text": "让他自己补",
+              "result": {
+                "affinity": 2,
+                "message": "「也对，我还没老到不能动。」"
+              }
+            }
+          ]
+        },
+        {
+          "id": "laochen-2",
+          "eventType": "story",
+          "title": "陈记二号",
+          "desc": "喝了点酒后，他第一次说起了自己的船。",
+          "choices": [
+            {
+              "text": "问船沉在哪里",
+              "result": {
+                "affinity": 15,
+                "message": "他画了一张潦草的图，标注了两天航程外的一片水域。"
+              }
+            },
+            {
+              "text": "什么都不问",
+              "result": {
+                "affinity": 5,
+                "message": "他点点头，把酒壶收了回去。"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ahai",
+      "name": "阿海",
+      "portrait": "PROC:ahai",
+      "title": "第一个戴上面镜的人",
+      "specialty": "dive",
+      "bio": "在别的聚落做过潜水员，是唯一一个见过海面之下的人。说话时眼睛总往水下看，像在数还有多少没捞上来。",
+      "legacy": "他上一任搭档没上来。这件事他没跟任何人讲，但每次下水他都会多带一根绳子。",
+      "recruitCondition": {
+        "hard": [
+          {
+            "type": "tool",
+            "key": "snorkelMask",
+            "amount": 1,
+            "text": "已有浮潜镜"
+          }
+        ],
+        "personality": {
+          "id": "ahai-breath",
+          "text": "他先要看你敢不敢下水——不是考胆子，是考你知不知道自己能憋多久。",
+          "check": "在浅水区完成一次 30 秒不换气的停留"
+        }
+      },
+      "appearTiming": {
+        "type": "afterBuilding",
+        "value": "sushiRestaurant",
+        "text": "寿司店建成、潜水开放后"
+      },
+      "unlocks": [
+        "潜水氧气 +20s"
+      ],
+      "specialties": {
+        "desc": "潜水",
+        "effects": {
+          "oxygenMax": 20,
+          "diveHint": true
+        }
+      },
+      "affinityEvents": [
+        {
+          "id": "ahai-1",
+          "eventType": "help",
+          "title": "多带的绳子",
+          "desc": "他把绳子递给你，说他每次下水都多带一根。",
+          "choices": [
+            {
+              "text": "问他为什么",
+              "result": {
+                "affinity": 12,
+                "message": "「万一有人需要。」他这么说的时候没看你。"
+              }
+            },
+            {
+              "text": "收下就好",
+              "result": {
+                "affinity": 6,
+                "message": "他松了口气。"
+              }
+            }
+          ]
+        },
+        {
+          "id": "ahai-2",
+          "eventType": "story",
+          "title": "中层的光",
+          "desc": "他说中层水域有一片会发光的东西，他从来没敢靠近。",
+          "choices": [
+            {
+              "text": "提议一起去",
+              "result": {
+                "affinity": 18,
+                "unlock": "diveLightSeen",
+                "message": "你们一起下去了。那是一片会随着水流呼吸的藻。"
+              }
+            },
+            {
+              "text": "记在地图上",
+              "result": {
+                "affinity": 8,
+                "message": "他把位置画在航海图边缘，很轻。"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xiaoman",
+      "name": "小满",
+      "portrait": "PROC:xiaoman",
+      "title": "把海的馈赠做成一餐的人",
+      "specialty": "cook",
+      "bio": "大潮前在陆地上的一家小店里切鱼，大潮后一直在找一个能重新开火的地方。她是解锁寿司店的关键 NPC。",
+      "legacy": "她的刀是父亲留下的，刀柄缠过三次布。她说刀还在，店就还没关。",
+      "recruitCondition": {
+        "hard": [
+          {
+            "type": "building",
+            "key": "market",
+            "amount": 1,
+            "text": "有市场"
+          }
+        ],
+        "personality": {
+          "id": "xiaoman-knife",
+          "text": "她不问你有什么，问你有没有一处「干净的台面」。她要看的是你愿不愿意为一件正经事腾地方。",
+          "check": "清空一块 2×2 的甲板作为料理台位置"
+        }
+      },
+      "appearTiming": {
+        "type": "afterBuilding",
+        "value": "inn",
+        "text": "旅店建成、城镇判定通过后"
+      },
+      "unlocks": [
+        "寿司店图纸",
+        "食材经营",
+        "店铺管理"
+      ],
+      "specialties": {
+        "desc": "烹饪",
+        "effects": {
+          "cookSpeed": 0.1,
+          "menuUnlock": true
+        }
+      },
+      "affinityEvents": [
+        {
+          "id": "xiaoman-1",
+          "eventType": "help",
+          "title": "磨刀",
+          "desc": "她的刀钝了，磨刀石却丢在了水里。",
+          "choices": [
+            {
+              "text": "潜下去找",
+              "result": {
+                "affinity": 15,
+                "message": "你捞上来一块石头。她接过去，掂了掂，说「这个比原来的好」。"
+              }
+            },
+            {
+              "text": "找块新的给她",
+              "result": {
+                "affinity": 8,
+                "message": "她收下了，但看得出不是她想要的那种。"
+              }
+            }
+          ]
+        },
+        {
+          "id": "xiaoman-2",
+          "eventType": "conflict",
+          "title": "第一道菜",
+          "desc": "她要你决定寿司店的第一道菜是什么。选错了她会照做，但不会高兴。",
+          "choices": [
+            {
+              "text": "海藻卷（稳）",
+              "result": {
+                "affinity": 10,
+                "message": "「稳妥。」她开始洗海藻，动作很快。"
+              }
+            },
+            {
+              "text": "深海蟹肉军舰（赌）",
+              "result": {
+                "affinity": 20,
+                "message": "她愣了两秒，然后笑了：「有胆。」"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tiejiangBo",
+      "name": "铁匠波",
+      "portrait": "PROC:tiejiangbo",
+      "title": "只会往硬里做的匠人",
+      "specialty": "build",
+      "bio": "手上有旧伤，握锤的姿势不对但打得比谁都稳，大潮时失去了一条腿（一条木腿是他自己做的）。说话直接，讨厌废话。",
+      "legacy": "他的工坊本来在沉城的第三层，现在那里是 Tier 3 海域。他说过想再回去看一眼。",
+      "recruitCondition": {
+        "hard": [
+          {
+            "type": "resource",
+            "key": "metal",
+            "amount": 15,
+            "text": "有铁×15"
+          }
+        ],
+        "personality": {
+          "id": "tiejiangbo-hammer",
+          "text": "他要一块「没被海水泡过的木头」——这在海上几乎是不可能的要求，他要看你有没有认真找。",
+          "check": "提交 1 个未拆封的干燥木材（宝箱掉落）"
+        }
+      },
+      "appearTiming": {
+        "type": "afterBuilding",
+        "value": "townCenter",
+        "text": "城镇中心建成后"
+      },
+      "unlocks": [
+        "建筑耐久+",
+        "配方折扣"
+      ],
+      "specialties": {
+        "desc": "建造",
+        "effects": {
+          "durabilityBonus": 0.25,
+          "craftCostDiscount": 0.1
+        }
+      },
+      "affinityEvents": [
+        {
+          "id": "tiejiangbo-1",
+          "eventType": "trade",
+          "title": "木腿",
+          "desc": "他的木腿裂了，想换一条。「但我不会求人。」",
+          "choices": [
+            {
+              "text": "给他材料",
+              "result": {
+                "affinity": 12,
+                "message": "他收了，第二天给你打了一副更结实的工具。"
+              }
+            },
+            {
+              "text": "帮他一起做",
+              "result": {
+                "affinity": 20,
+                "message": "你们花了一整晚。他最后说：「这条腿比上一条好。」"
+              }
+            }
+          ]
+        },
+        {
+          "id": "tiejiangbo-2",
+          "eventType": "story",
+          "title": "第三层",
+          "desc": "他提起沉城的工坊，声音低了下去。",
+          "choices": [
+            {
+              "text": "承诺带他回去",
+              "result": {
+                "affinity": 15,
+                "message": "「不用。你下去的时候帮我看看，那炉火是不是还亮着。」"
+              }
+            },
+            {
+              "text": "转移话题",
+              "result": {
+                "affinity": 3,
+                "message": "他点点头，继续敲他的铁。"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lili",
+      "name": "莉莉",
+      "portrait": "PROC:lili",
+      "title": "会在定价上跟你较劲的人",
+      "specialty": "run",
+      "bio": "大潮前在岸上做买卖，算账比谁都快。来了就重新规划摊位位置，说「东西好吗不重要，要让人以为它好」。",
+      "legacy": "她有一本记满了价格的旧账本，最后一页没写完。她说那天她正在算最后一笔。",
+      "recruitCondition": {
+        "hard": [
+          {
+            "type": "reputation",
+            "key": "reputation",
+            "amount": 3,
+            "text": "声望 3 级"
+          }
+        ],
+        "personality": {
+          "id": "lili-bargain",
+          "text": "她要先跟你做一笔生意——她会用高于市价的价格买你说「不值钱」的东西，看你敢不敢拒绝。",
+          "check": "在一次交易中主动拒绝溢价报价（不贪）"
+        }
+      },
+      "appearTiming": {
+        "type": "afterBuilding",
+        "value": "market",
+        "text": "市场建成、声望 3 级后"
+      },
+      "unlocks": [
+        "售价 +10%"
+      ],
+      "specialties": {
+        "desc": "经营",
+        "effects": {
+          "priceBonus": 0.1,
+          "trafficBonus": 0.05
+        }
+      },
+      "affinityEvents": [
+        {
+          "id": "lili-1",
+          "eventType": "trade",
+          "title": "旧账本",
+          "desc": "她让你帮她算完账本上最后一页。",
+          "choices": [
+            {
+              "text": "认真算",
+              "result": {
+                "affinity": 15,
+                "message": "数字对不上的地方，她一直知道，只是需要有人一起看见。"
+              }
+            },
+            {
+              "text": "随手填个数字",
+              "result": {
+                "affinity": -3,
+                "message": "她合上账本，什么都没说。"
+              }
+            }
+          ]
+        },
+        {
+          "id": "lili-2",
+          "eventType": "conflict",
+          "title": "涨价",
+          "desc": "她想把海藻卷涨到两倍价。小满不同意。",
+          "choices": [
+            {
+              "text": "支持莉莉",
+              "result": {
+                "affinity": 12,
+                "message": "客流掉了两天，然后回来了。她赢了这一局。"
+              }
+            },
+            {
+              "text": "支持小满",
+              "result": {
+                "affinity": 5,
+                "message": "「行吧，你们管味道。」她把账本翻到新的一页。"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "namelessOld",
+      "name": "无名老人",
+      "portrait": "PROC:namelessold",
+      "title": "知道沉城在哪的人",
+      "specialty": "story",
+      "bio": "没有人知道他的名字。他从不索取，只在合适的时机说一句话，然后转身看海。他说的每个字都指向沉城。",
+      "legacy": "他可能是唯一记得大陆是什么样子的人。他的沉默比任何档案都完整。",
+      "recruitCondition": {
+        "hard": [
+          {
+            "type": "townLevel",
+            "key": "townLevel",
+            "amount": 5,
+            "text": "城镇等级 5"
+          }
+        ],
+        "personality": {
+          "id": "namelessold-listen",
+          "text": "他不提要求。他只是等你先开口——三层好感事件中只要有一次选择听他说完，他就留下。",
+          "check": "听完一次完整的沉城讲述（不打断）"
+        }
+      },
+      "appearTiming": {
+        "type": "afterBuilding",
+        "value": "inn",
+        "text": "旅店建成、城镇等级 5 后"
+      },
+      "unlocks": [
+        "沉城线索",
+        "Tier 3 海域"
+      ],
+      "specialties": {
+        "desc": "剧情",
+        "effects": {
+          "tier3Unlock": true,
+          "codexReveal": "sunken-city"
+        }
+      },
+      "affinityEvents": [
+        {
+          "id": "namelessold-1",
+          "eventType": "story",
+          "title": "第一句话",
+          "desc": "他在码头站了一整个下午，然后说：「那里从前有一条街。」",
+          "choices": [
+            {
+              "text": "问是哪条街",
+              "result": {
+                "affinity": 10,
+                "unlock": "sunkenCityClue1",
+                "message": "他报了一个名字。你记了下来。"
+              }
+            },
+            {
+              "text": "沉默陪他站着",
+              "result": {
+                "affinity": 15,
+                "message": "过了很久，他说：「你比大多数人耐心。」"
+              }
+            }
+          ]
+        },
+        {
+          "id": "namelessold-2",
+          "eventType": "story",
+          "title": "第三层",
+          "desc": "他给了你一片陶瓷残片，说这上面的蓝色只有第三层的水能洗出来。",
+          "choices": [
+            {
+              "text": "立即组织下潜",
+              "result": {
+                "affinity": 12,
+                "unlock": "tier3Route",
+                "message": "他点头，把位置说了。句子很短，坐标很准。"
+              }
+            },
+            {
+              "text": "问他为什么现在才说",
+              "result": {
+                "affinity": 20,
+                "message": "「因为现在有人能下去，也有人会上来。」"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "events": {
+    "schema": "drift-town.events",
+    "version": 1,
+    "summary": "通用事件表结构。npc.eventsAffinity 里的条目是这一结构的实例；这里给出字段定义、枚举与全局冷却规则，供后台直接渲染与校验。",
+    "fields": {
+      "id": "唯一键",
+      "npcId": "关联 npcs[].id，可为 null 表示与具体 NPC 无关的环境事件",
+      "eventType": "help | trade | conflict | story",
+      "title": "事件标题（玩家可见）",
+      "trigger": "触发条件对象，见 triggerTypes",
+      "weight": "随机触发时的相对权重；条件不满足则不参与抽取",
+      "choices": "选项数组，每项含 text 与 result",
+      "cooldown": "同一事件再次触发的冷却，单位游戏日；0 表示一次性事件",
+      "once": "是否一次性事件"
+    },
+    "triggerTypes": {
+      "time": "指定游戏日 / 时段（slot: day | dusk | night）",
+      "progress": "进度里程碑（townLevel / reputation / 已建成建筑数）",
+      "affinity": "某 NPC 好感度达到阈值",
+      "random": "在满足其它条件时按 weight 随机",
+      "building": "指定建筑建成时"
+    },
+    "resultShape": "result 可能含：affinity（好感度增减）、resource（资源增减）、unlock（解锁标记）、message（一句反馈文本）。数值口径与 game.js 的资源键一致。",
+    "eventsList": [
+      {
+        "id": "evt-driftwood-gift",
+        "npcId": null,
+        "eventType": "story",
+        "title": "漂来的木箱",
+        "trigger": {
+          "type": "progress",
+          "key": "townLevel",
+          "value": 2,
+          "slot": "day"
+        },
+        "weight": 10,
+        "choices": [
+          {
+            "text": "打开看看",
+            "result": {
+              "resource": {
+                "wood": 6
+              },
+              "message": "箱子里是干的木头——海上最奢侈的东西。"
+            }
+          },
+          {
+            "text": "留着当浮力",
+            "result": {
+              "resource": {
+                "plastic": 2
+              },
+              "message": "你把它绑在筏子边缘。"
+            }
+          }
+        ],
+        "cooldown": 4,
+        "once": false
+      },
+      {
+        "id": "evt-water-dispute",
+        "npcId": null,
+        "eventType": "conflict",
+        "title": "接水排队",
+        "trigger": {
+          "type": "progress",
+          "key": "residentCount",
+          "value": 4,
+          "slot": "day"
+        },
+        "weight": 8,
+        "choices": [
+          {
+            "text": "加装集雨器",
+            "result": {
+              "affinity": 5,
+              "resource": {
+                "plastic": -2
+              },
+              "message": "排队短了，但材料没了。"
+            }
+          },
+          {
+            "text": "规定接水时段",
+            "result": {
+              "affinity": 3,
+              "message": "没人吵了，但气氛也淡了。"
+            }
+          }
+        ],
+        "cooldown": 6,
+        "once": false
+      },
+      {
+        "id": "evt-night-market",
+        "npcId": "lili",
+        "eventType": "trade",
+        "title": "夜市的提议",
+        "trigger": {
+          "type": "affinity",
+          "key": "lili",
+          "value": 40,
+          "slot": "night"
+        },
+        "weight": 12,
+        "choices": [
+          {
+            "text": "开夜市",
+            "result": {
+              "resource": {
+                "wood": -5
+              },
+              "unlock": "nightMarket",
+              "message": "灯挂上了。有人愿意在晚上花钱。"
+            }
+          },
+          {
+            "text": "不了，白天够了",
+            "result": {
+              "affinity": -2,
+              "message": "她把账本合上了。"
+            }
+          }
+        ],
+        "cooldown": 0,
+        "once": true
+      },
+      {
+        "id": "evt-shark-alert",
+        "npcId": null,
+        "eventType": "help",
+        "title": "鲨鱼靠近",
+        "trigger": {
+          "type": "time",
+          "slot": "night",
+          "value": 0
+        },
+        "weight": 6,
+        "choices": [
+          {
+            "text": "加固筏边",
+            "result": {
+              "resource": {
+                "metal": -2
+              },
+              "affinity": 3,
+              "message": "多了一圈铁皮，夜里踏实些。"
+            }
+          },
+          {
+            "text": "先不管",
+            "result": {
+              "affinity": -3,
+              "message": "有人的渔网被咬破了。"
+            }
+          }
+        ],
+        "cooldown": 3,
+        "once": false
+      },
+      {
+        "id": "evt-sunken-city-hint",
+        "npcId": "namelessOld",
+        "eventType": "story",
+        "title": "一片蓝色的残片",
+        "trigger": {
+          "type": "progress",
+          "key": "townLevel",
+          "value": 5,
+          "slot": "dusk"
+        },
+        "weight": 15,
+        "choices": [
+          {
+            "text": "追问沉城坐标",
+            "result": {
+              "unlock": "tier3Route",
+              "affinity": 10,
+              "message": "他说了一串数字，然后去看海。"
+            }
+          },
+          {
+            "text": "把残片收进图鉴",
+            "result": {
+              "unlock": "sunkenCityClue1",
+              "affinity": 5,
+              "message": "图鉴多了一页，标签是手写的。"
+            }
+          }
+        ],
+        "cooldown": 0,
+        "once": true
+      }
+    ]
+  }
+}

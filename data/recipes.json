@@ -1,0 +1,160 @@
+{
+  "schema": "drift-town.recipes",
+  "version": 1,
+  "updatedAt": "2026-11-22",
+  "title": "寿司店菜谱表",
+  "summary": "潜水收获在寿司店里变成钱。每道菜给出食材、制作时长、基础售价与建议定价区间，后台据此计算毛利率。",
+  "sourceOfTruth": {
+    "designSamples": "docs/GAME_DESIGN.md · 4.3 菜单配置示例（海藻卷 / 银鳞握寿司 / 深海蟹肉军舰 的成本与建议售价）",
+    "ingredients": "data/resources.json · items[].id（食材键必须能在资源表里找到）",
+    "selling": "docs/GAME_DESIGN.md · 4.4 店铺管理（菜单格 / 口碑 / 日结算）"
+  },
+  "notes": [
+    "ingredients 的键必须是 resources.json 里 category=food 的 id，后台会做交叉校验。",
+    "basePrice 与 suggestedPriceRange 沿用设计文档的口径：basePrice 视为「食材成本价」，区间下限接近成本、上限是高价策略的封顶。毛利率由后台用 basePrice 与区间中值算，不写在数据里，避免两处口径打架。",
+    "cookTime 是单份制作时长（秒）。菜单格数量有限，所以 cookTime 与利润一起决定哪几道菜值得上架——这是设计文档「菜单博弈」的数据基础。",
+    "reputationBonus 是卖出一道加多少口碑；负值代表它拉低口碑（便宜菜走量，损口碑），这是有意设计的取舍。",
+    "tierGate 不是必填字段的替代，而是额外声明：数值越大表示食材越稀有，后台用它做分支着色；解锁条件仍以 unlockCondition 为准。"
+  ],
+  "enums": {
+    "category": {
+      "roll": "卷物，海藻为主，走量",
+      "nigiri": "握寿司，鱼为主，中高价",
+      "gunkan": "军舰卷，海藻包边 + 稀有料，高价",
+      "soup": "汤物，低成本高口碑",
+      "platter": "拼盘，多食材，最高价"
+    }
+  },
+  "recipes": [
+    {
+      "id": "seaweedRoll",
+      "name": "海藻卷",
+      "category": "roll",
+      "tier": 1,
+      "ingredients": { "seaweed": 2, "rice": 1 },
+      "cookTime": 12,
+      "basePrice": 8,
+      "suggestedPriceRange": [15, 22],
+      "unlockCondition": { "type": "building", "value": "sushiRestaurant", "text": "寿司店建成后默认拥有" },
+      "reputationBonus": 1,
+      "desc": "最便宜的一道，也是最稳的一道。客人点它的时候通常还没想清楚要吃什么。"
+    },
+    {
+      "id": "clamSashimi",
+      "name": "贝壳刺身",
+      "category": "nigiri",
+      "tier": 1,
+      "ingredients": { "clam": 2, "rice": 1 },
+      "cookTime": 14,
+      "basePrice": 10,
+      "suggestedPriceRange": [16, 24],
+      "unlockCondition": { "type": "building", "value": "sushiRestaurant", "text": "寿司店建成后默认拥有" },
+      "reputationBonus": 1,
+      "desc": "什么都没有加，只靠新鲜。阿海说这道菜考的是采集，不是刀工。"
+    },
+    {
+      "id": "kelpSoup",
+      "name": "海藻汤",
+      "category": "soup",
+      "tier": 1,
+      "ingredients": { "seaweed": 1, "deepKelp": 1 },
+      "cookTime": 20,
+      "basePrice": 12,
+      "suggestedPriceRange": [18, 26],
+      "unlockCondition": { "type": "npc", "value": "xiaoman", "text": "招募小满后解锁" },
+      "reputationBonus": 2,
+      "desc": "熬得越久越甜。成本低，口碑高，是撑客流的底菜。"
+    },
+    {
+      "id": "grilledSkewer",
+      "name": "炙烤串",
+      "category": "nigiri",
+      "tier": 2,
+      "ingredients": { "squid": 1, "silverScaleFish": 1 },
+      "cookTime": 18,
+      "basePrice": 16,
+      "suggestedPriceRange": [26, 38],
+      "unlockCondition": { "type": "npc", "value": "xiaoman", "text": "招募小满后解锁" },
+      "reputationBonus": 2,
+      "desc": "两种鱼放在一起烤，边缘焦一点更好吃。深水客人喝醉了爱点。"
+    },
+    {
+      "id": "squidGunkan",
+      "name": "墨鱼军舰",
+      "category": "gunkan",
+      "tier": 2,
+      "ingredients": { "squid": 1, "seaweed": 1, "rice": 1 },
+      "cookTime": 22,
+      "basePrice": 20,
+      "suggestedPriceRange": [32, 46],
+      "unlockCondition": { "type": "npc", "value": "xiaoman", "text": "招募小满后解锁" },
+      "reputationBonus": 3,
+      "desc": "墨汁染黑了海藻，卖相怪，但吃过的人都回来点第二次。"
+    },
+    {
+      "id": "silverScaleNigiri",
+      "name": "银鳞握寿司",
+      "category": "nigiri",
+      "tier": 3,
+      "ingredients": { "silverScaleFish": 1, "rice": 1 },
+      "cookTime": 16,
+      "basePrice": 12,
+      "suggestedPriceRange": [28, 40],
+      "unlockCondition": { "type": "resource", "value": "silverScaleFish", "text": "首次获得银鳞鱼后解锁" },
+      "reputationBonus": 3,
+      "desc": "设计文档的基准菜：成本 12，建议 28。刀要快，慢一秒鳞光就没了。"
+    },
+    {
+      "id": "seaUrchinBowl",
+      "name": "海胆盖饭",
+      "category": "gunkan",
+      "tier": 3,
+      "ingredients": { "seaUrchin": 1, "rice": 2 },
+      "cookTime": 24,
+      "basePrice": 22,
+      "suggestedPriceRange": [42, 58],
+      "unlockCondition": { "type": "resource", "value": "seaUrchin", "text": "首次获得海胆后解锁" },
+      "reputationBonus": 4,
+      "desc": "橙色铺满整碗。定价的时候手会抖，但卖得掉。"
+    },
+    {
+      "id": "roeGunkan",
+      "name": "鱼子军舰",
+      "category": "gunkan",
+      "tier": 3,
+      "ingredients": { "fishRoe": 1, "seaweed": 1, "rice": 1 },
+      "cookTime": 26,
+      "basePrice": 26,
+      "suggestedPriceRange": [46, 64],
+      "unlockCondition": { "type": "resource", "value": "fishRoe", "text": "首次获得鱼子后解锁" },
+      "reputationBonus": 4,
+      "desc": "一颗一颗铺平，不能压破。这道菜是给小满练手感的。"
+    },
+    {
+      "id": "deepCrabGunkan",
+      "name": "深海蟹肉军舰",
+      "category": "gunkan",
+      "tier": 4,
+      "ingredients": { "deepCrab": 1, "seaweed": 1, "deepKelp": 1 },
+      "cookTime": 32,
+      "basePrice": 30,
+      "suggestedPriceRange": [75, 98],
+      "unlockCondition": { "type": "resource", "value": "deepCrab", "text": "首次获得深海蟹后解锁" },
+      "reputationBonus": 6,
+      "desc": "设计文档的旗舰菜：成本 30，建议 75。拆蟹要 32 秒，但客人愿意等。"
+    },
+    {
+      "id": "abyssPlatter",
+      "name": "深渊拼盘",
+      "category": "platter",
+      "tier": 4,
+      "ingredients": { "abyssLobster": 1, "deepCrab": 1, "abyssLanternfish": 1, "rice": 2 },
+      "cookTime": 45,
+      "basePrice": 58,
+      "suggestedPriceRange": [120, 160],
+      "unlockCondition": { "type": "building", "value": "sushiRestaurant", "text": "需寿司店 + 已解锁 Tier 4 潜水" },
+      "reputationBonus": 10,
+      "desc": "三样深海货摆在一起，卖的不是味道，是「你下得去」。镇史里会被记住的一盘。"
+    }
+  ]
+}
