@@ -5917,16 +5917,59 @@ var THREE = __wxRoot.THREE || window.THREE;
   }
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFShadowMap;
+  // PCFSoft gives a much softer contact shadow than PCF at the same map size.
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  // PBR under a bright sky washes out easily. Keep the sun punchy for shadows
+  // but pull the exposure back so white hull plating keeps its shading.
+  renderer.toneMappingExposure = 0.95;
   renderer.setClearColor(0x000000, 0);
   renderer.autoClear = false; // the frame() loop clears, then draws the world and the HUD quad
+  // Physical materials want sRGB output; without this three.js 0.15x+ renders flat.
+  if ('outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
   canvas.style.background = 'linear-gradient(to bottom,' + R.palette.skyTop + ' 0%,' + R.palette.skyTop + ' 18%,' + R.palette.skyBottom + ' 100%)';
 
   var scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(R.palette.fog, 30, 90);
-  var camera = new THREE.PerspectiveCamera(38, 1, 0.1, 500);
+  scene.fog = new THREE.Fog(R.palette.fog, 40, 130);
+  var camera = new THREE.PerspectiveCamera(38, 1, 0.1, 600);
+
+  /* --- Environment map ---
+   * MeshStandardMaterial needs something to reflect or it looks as flat as
+   * Lambert. Rather than ship an HDR file (which WeChat's 4 MB package cannot
+   * afford), the sky itself is painted into a small cube and run through
+   * PMREM: a gradient dome plus a sun blob and a horizon band. Every PBR
+   * material then picks up sky-blue from above and water-green from below. */
+  var envRT = null;
+  function buildEnvironment() {
+    try {
+      var pmrem = new THREE.PMREMGenerator(renderer);
+      pmrem.compileCubemapShader();
+      var envScene = new THREE.Scene();
+      // A big inward-facing sphere with a vertical gradient, drawn as vertex colours.
+      var skyGeo = new THREE.SphereGeometry(60, 24, 16);
+      var pos = skyGeo.attributes.position, cols = [];
+      var top = color(R.palette.skyTop), bottom = color(R.palette.skyBottom);
+      var sea = color(R.palette.water), tmp = new THREE.Color();
+      for (var i = 0; i < pos.count; i++) {
+        var y = pos.getY(i) / 60;                  // -1 .. 1
+        if (y >= 0) tmp.copy(bottom).lerp(top, Math.pow(y, 0.6));
+        else tmp.copy(bottom).lerp(sea, Math.min(1, -y * 2.2));
+        cols.push(tmp.r, tmp.g, tmp.b);
+      }
+      skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+      envScene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+      // A bright sun disc, so glossy surfaces get a specular hit.
+      var sunMat = new THREE.MeshBasicMaterial({ color: '#fff4d8' });
+      var sunDisc = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 8), sunMat);
+      sunDisc.position.set(24, 30, 18);
+      envScene.add(sunDisc);
+      envRT = pmrem.fromScene(envScene, 0.04);
+      if (envRT && envRT.texture) scene.environment = envRT.texture;
+      skyGeo.dispose(); sunDisc.geometry.dispose(); sunMat.dispose();
+      pmrem.dispose();
+    } catch (e) { /* env map is a nicety; the game runs without it */ }
+  }
+  buildEnvironment();
 
   /* 3. HELPERS */
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -6073,10 +6116,19 @@ var THREE = __wxRoot.THREE || window.THREE;
       merged.setIndex(indices);
       merged.computeBoundingSphere();
       var material = p === 0
-        ? new THREE.MeshLambertMaterial(useTex ? { vertexColors: true, map: GRAIN_ATLAS } : { vertexColors: true })
-        : new THREE.MeshBasicMaterial({ vertexColors: true });
+        ? new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            map: useTex ? GRAIN_ATLAS : null,
+            // Wood, stone and painted hull plating are all matte; a little
+            // roughness variation is what stops PBR looking like plastic.
+            roughness: 0.82,
+            metalness: 0.06,
+            envMapIntensity: 0.55
+          })
+        : new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
       var mesh = new THREE.Mesh(merged, material);
       mesh.castShadow = p === 0;
+      mesh.receiveShadow = p === 0;
       group.add(mesh);
     }
     return group;
@@ -6195,7 +6247,18 @@ var THREE = __wxRoot.THREE || window.THREE;
   var waterGeo = new THREE.PlaneGeometry(WATER_SPAN, WATER_SPAN, 56, 56);
   waterGeo.rotateX(-Math.PI / 2);
   var waterBase = waterGeo.attributes.position.array.slice();
-  var water = new THREE.Mesh(waterGeo, new THREE.MeshLambertMaterial({ color: R.palette.water, transparent: true, opacity: 0.88, depthWrite: false }));
+  /* Water: a large wave plane that follows the raft. Physical material with low
+   * roughness so it catches the sun and the sky env map — that specular sheen is
+   * what makes the sea read as water instead of a flat teal sheet. */
+  var water = new THREE.Mesh(waterGeo, new THREE.MeshStandardMaterial({
+    color: R.palette.water,
+    transparent: true,
+    opacity: 0.9,
+    roughness: 0.16,
+    metalness: 0.32,
+    envMapIntensity: 1.15,
+    depthWrite: false
+  }));
   water.position.y = WATER_Y;
   water.receiveShadow = true;
   scene.add(water);
@@ -6220,17 +6283,28 @@ var THREE = __wxRoot.THREE || window.THREE;
   floor.position.y = -0.6;
   scene.add(floor);
 
-  // Lights: a cool sky, a warm low sun, and a hint of fill.
-  scene.add(new THREE.HemisphereLight('#cfe8ff', '#3a7f92', 1.05));
-  var sun = new THREE.DirectionalLight('#ffe9c0', 2.2);
+  /* Lights tuned for MeshStandardMaterial (PBR). A physically based surface
+   * takes most of its fill from the environment map, so the hemisphere light is
+   * dialled back; the sun is pushed a little harder to keep crisp contact
+   * shadows. Three separate colours keep white hull plating from going grey:
+   * a cool sky bounce, a warm key, and a faint teal bounce off the sea. */
+  var hemi = new THREE.HemisphereLight('#dcefff', '#4f9aa8', 0.38);
+  scene.add(hemi);
+  var sun = new THREE.DirectionalLight('#fff1d6', 3.0);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
-  sun.shadow.camera.left = sun.shadow.camera.bottom = -34;
-  sun.shadow.camera.right = sun.shadow.camera.top = 34;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = sun.shadow.camera.bottom = -40;
+  sun.shadow.camera.right = sun.shadow.camera.top = 40;
   sun.shadow.camera.near = 1;
-  sun.shadow.camera.far = 80;
-  sun.shadow.bias = -0.0008;
+  sun.shadow.camera.far = 110;
+  sun.shadow.bias = -0.0006;
+  sun.shadow.normalBias = 0.02;
+  sun.shadow.radius = 2.5;
   scene.add(sun, sun.target);
+  // A dim bounce from the water, opposite the sun, so the shadow side is not dead.
+  var bounce = new THREE.DirectionalLight('#7fd0d8', 0.45);
+  bounce.position.set(-20, -10, -15);
+  scene.add(bounce);
 
   // Sky dressing: a warm high sun, far away. (Stars stay hidden in daylight.)
   var starGeo = new THREE.BufferGeometry();
@@ -6280,7 +6354,8 @@ var THREE = __wxRoot.THREE || window.THREE;
     [0, 0, 0, 0.3, 0.18, 0.62, '#3f8fa0'], [0, 0.02, -0.36, 0.22, 0.14, 0.22, '#357f90'],
     [0, 0.02, 0.36, 0.14, 0.1, 0.22, '#3f8fa0'], [0.14, 0.04, 0.08, 0.09, 0.09, 0.09, '#0f2a33']
   ];
-  var fish = [], fishModel = voxelModel(FISH_BOXES);  var fishMat = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.5 });
+  var fish = [], fishModel = voxelModel(FISH_BOXES);
+  var fishMat = new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, opacity: 0.55, roughness: 0.35, metalness: 0.15 });
   fishModel.traverse(function (n) { if (n.isMesh) n.material = fishMat; });
   for (var fs = 0; fs < 5; fs++) {
     var fnode = fishModel.clone();
@@ -6371,10 +6446,12 @@ var THREE = __wxRoot.THREE || window.THREE;
     var C = {
       keel: '#3a414a', belly: '#48505a', hull: '#4e5761',
       red: '#a8443c', navy: '#2f4a63',
-      topside: '#eef1f4', strake: '#e0e6eb', trim: '#d2d9e0', rail: '#dfe5ea',
+      // Whites are deliberately off-white: pure #fff clips to a featureless
+      // blob once PBR + ACES tone mapping hit it under a bright sky.
+      topside: '#d6dde4', strake: '#c9d2da', trim: '#bcc6cf', rail: '#ccd5dd',
       deck: '#c6a06a', deckAlt: '#b89159',
-      deckGrey: '#b8c0c8', deckGrey2: '#a7b0b9',
-      white: '#f4f7f9', glass: '#3f5c73', lit: '#ffd98a',
+      deckGrey: '#a9b3bd', deckGrey2: '#98a3ae',
+      white: '#e4ebf0', glass: '#3f5c73', lit: '#ffd98a',
       funnel: '#4a525c', funnelBand: '#9aa3ac', grey: '#79828c', dark: '#2f3640'
     };
     /** Half-beam at z: a parallel body amidships, a long elliptical taper to
