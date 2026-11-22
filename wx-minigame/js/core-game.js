@@ -4461,6 +4461,11 @@ var THREE = __wxRoot.THREE || window.THREE;
    * It is optional: when prototype/dive/dive-canvas.js is not loaded the game
    * simply never offers a dive. */
   var dive = null, diveBtnRect = null;
+  var diveExitRect = null, diveExitBanner = 0;   // the "back to the raft" button
+  /* Docking: anchoring the raft turns it into a town you can stand on. */
+  var docked = false, dockX = 0, dockZ = 0, deckBobT = 0;
+  var fishTimer = 0, fishReady = false;
+  var dockBtnRect = null, fishBtnRect = null;
   function makeDive() {
     if (dive || !window.DiveGame || !window.DiveGame.create) return;
     try {
@@ -4496,13 +4501,98 @@ var THREE = __wxRoot.THREE || window.THREE;
     addFT('带回 ' + n + ' 件 · 食物 +' + gainedFood, hero.x, hero.z, '#9fe0ff', 2);
     fanfare([659, 880, 1047], 0.09, 'triangle', 0.06);
   }
+  /** The "back to the raft" button, drawn over the dive module's own HUD.
+   *  It sits top-left (the dive module puts the oxygen bar across the top and
+   *  its own buttons bottom-right, so top-left is the only free corner). */
+  function drawDiveExit(c, w, h) {
+    var fs = Math.max(13, Math.min(20, Math.min(w, h) * 0.026));
+    var bw = fs * 6.2, bh = fs * 1.9;
+    var bx = Math.max(8, w * 0.02), by = Math.max(8, h * 0.02);
+    // Keep clear of the dive module's oxygen bar (it is ~ fs*2.6 tall at the top).
+    by = Math.max(by, h * 0.085);
+    diveExitRect = { x: bx, y: by, w: bw, h: bh };
+    c.globalAlpha = 0.92;
+    c.fillStyle = 'rgba(20,34,52,0.92)';
+    roundRect(bx, by, bw, bh, bh / 2); c.fill();
+    c.strokeStyle = 'rgba(255,214,140,0.85)'; c.lineWidth = 2;
+    roundRect(bx, by, bw, bh, bh / 2); c.stroke();
+    c.globalAlpha = 1;
+    c.fillStyle = '#ffe2a8';
+    c.font = '800 ' + (fs * 0.92) + 'px ' + FONT;
+    c.textAlign = 'center';
+    c.fillText('返回船上', bx + bw / 2, by + bh * 0.66);
+    c.textAlign = 'left';
+    // A short confirmation banner right after coming back up.
+    if (diveExitBanner > 0) {
+      c.globalAlpha = Math.min(1, diveExitBanner);
+      c.font = '800 ' + (fs * 1.05) + 'px ' + FONT;
+      c.fillStyle = '#9ff0b8';
+      c.textAlign = 'center';
+      c.fillText('回到船上了', w / 2, h * 0.5);
+      c.textAlign = 'left';
+      c.globalAlpha = 1;
+    }
+  }
+  /** Anchor the raft. The town stops moving, so the player can walk the deck,
+   *  fish off the side, and dive from the boat. */
+  function setDocked(on) {
+    if (on === docked) return;
+    docked = on;
+    if (on) {
+      dockX = hero.x; dockZ = hero.z;
+      hero.vx = hero.vz = 0;
+      fishTimer = 0; fishReady = false;
+      addFT('已下锚 · 船变成了小镇', hero.x, hero.z, '#9ff0b8', 2.6);
+      fanfare([440, 554], 0.12, 'sine', 0.05);
+    } else {
+      addFT('起锚出航', hero.x, hero.z, '#ffe2a8', 1.8);
+      blip(520, 0.18, 'triangle', 0.05, 760);
+    }
+  }
+  /** Fishing off the deck: a short cast, then a bite the player has to tap. */
+  function castLine() {
+    if (!docked || fishTimer > 0) return;
+    fishTimer = 2.2 + Math.random() * 1.6;
+    fishReady = false;
+    addFT('甩竿…', hero.x, hero.z, '#9fe0ff', 1.4);
+    blip(300, 0.12, 'sine', 0.045, 460);
+  }
+  function updateFishing(dt) {
+    if (!docked) return;
+    if (fishTimer > 0) {
+      fishTimer -= dt;
+      if (fishTimer <= 0) {
+        fishReady = true;
+        addFT('有鱼咬钩！点「收竿」', hero.x, hero.z, '#9ff0b8', 2.4);
+        fanfare([740, 988], 0.1, 'sine', 0.055);
+      }
+    }
+  }
+  function reelIn() {
+    if (!fishReady) return false;
+    fishReady = false;
+    var gain = Math.round(SURV.foodDropAmount * (1 + foodPerk) * 0.8);
+    food = Math.min(maxFood, food + gain);
+    score += 1;
+    addFT('钓到鱼 · 食物 +' + gain, hero.x, hero.z, '#9ff0b8', 2);
+    fanfare([659, 880, 1047], 0.09, 'triangle', 0.065);
+    burst(hero.x, hero.y + 1, hero.z);
+    return true;
+  }
+  /** Leave the dive and hand control back to the raft. The dive module exposes
+   *  exit(); without calling it the game stays stuck on the dive screen forever
+   *  (that was a real bug reported by the player: "潜水之后没办法回到船上"). */
+  function exitDive() {
+    if (dive && dive.exit) { try { dive.exit(); } catch (e) { /* ignore */ } }
+    diveExitBanner = 2.4;
+    blip(520, 0.2, 'sine', 0.05, 780);
+  }
   function startDive() {
     makeDive();
     if (!dive || !dive.start) return;
+    if (dive.enter) { try { dive.enter(); } catch (e) { /* ignore */ } }
     if (dive.reset) dive.reset(20261122 + Math.floor(Math.random() * 1000));
     dive.start();
-    // 阿海's perk (extra oxygen) needs an API the dive module does not expose yet,
-    // so it is reported here rather than silently doing nothing.
     if (oxygenPerk > 0 && window.console) console.info('[dive] 阿海在船上，氧气加成待潜水模块开放接口');
   }
   function showCard(title, body, hint) { cardData = { title: title, body: body, hint: hint }; }
@@ -4760,6 +4850,43 @@ var THREE = __wxRoot.THREE || window.THREE;
     var slotY = [h - m - 30 - 10];                 // dash sits lowest
     for (var sN = 1; sN < 5; sN++) slotY.push(slotY[sN - 1] - bpitch);
 
+    /* --- Dock / cast-off, and the on-deck fishing action ---
+     * Placed along the bottom-centre so they read as "things you do with the
+     * boat", separate from the right-hand column of screens. */
+    if (phase === 'playing' && !buildOffer && !manageOpen) {
+      var dkW = Math.min(w * 0.22, 132), dkH = font * 1.9;
+      var dkX = w / 2 - dkW / 2, dkY = h - m - dkH;
+      dockBtnRect = { x: dkX, y: dkY, w: dkW, h: dkH };
+      hudCtx.fillStyle = docked ? 'rgba(30,90,60,0.9)' : 'rgba(14,18,40,0.72)';
+      roundRect(dkX, dkY, dkW, dkH, dkH / 2); hudCtx.fill();
+      hudCtx.strokeStyle = docked ? 'rgba(160,255,190,0.9)' : 'rgba(255,255,255,0.4)';
+      hudCtx.lineWidth = 2;
+      roundRect(dkX, dkY, dkW, dkH, dkH / 2); hudCtx.stroke();
+      hudCtx.fillStyle = docked ? '#eaffef' : '#ffffff';
+      hudCtx.font = '800 ' + (font * 0.86) + 'px ' + FONT;
+      hudCtx.textAlign = 'center';
+      hudCtx.fillText(docked ? '起锚出航' : '下锚停船', dkX + dkW / 2, dkY + dkH * 0.66);
+      hudCtx.textAlign = 'left';
+      // Fishing, only while anchored.
+      if (docked) {
+        var fW = Math.min(w * 0.26, 150), fH = font * 1.9;
+        var fX = w / 2 - fW / 2, fY = dkY - fH - 10;
+        fishBtnRect = { x: fX, y: fY, w: fW, h: fH };
+        var ready = fishReady;
+        hudCtx.globalAlpha = ready ? 0.85 + Math.sin(performance.now() / 180) * 0.15 : 1;
+        hudCtx.fillStyle = ready ? 'rgba(40,110,70,0.95)' : (fishTimer > 0 ? 'rgba(40,50,70,0.8)' : 'rgba(20,44,64,0.85)');
+        roundRect(fX, fY, fW, fH, fH / 2); hudCtx.fill();
+        hudCtx.strokeStyle = ready ? 'rgba(170,255,200,1)' : 'rgba(150,220,255,0.6)';
+        hudCtx.lineWidth = ready ? 3 : 2;
+        roundRect(fX, fY, fW, fH, fH / 2); hudCtx.stroke();
+        hudCtx.globalAlpha = 1;
+        hudCtx.fillStyle = ready ? '#eaffef' : '#dff2ff';
+        hudCtx.font = '800 ' + (font * 0.84) + 'px ' + FONT;
+        hudCtx.textAlign = 'center';
+        hudCtx.fillText(ready ? '收竿！' : (fishTimer > 0 ? '等鱼上钩…' : '钓鱼'), fX + fW / 2, fY + fH * 0.66);
+        hudCtx.textAlign = 'left';
+      } else fishBtnRect = null;
+    } else { dockBtnRect = null; fishBtnRect = null; }
     /* Recruit prompt: when a drifter is within reach, a bright button appears
      * near the bottom centre. Tapping it recruits them. */
     var recruitNow = inRecruitRange();
@@ -5568,6 +5695,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     starveT = 0; foodDropT = 0; selfSustainT = 0; townReady = false; townReadyBanner = 0;
     buildOffer = null; buildSel = 0; buildOfferT = 0; offerCooldown = 5;
     manageOpen = false; manageRects = null; manageSel = 0;
+    docked = false; dockX = 0; dockZ = 0; fishTimer = 0; fishReady = false;
     castaways.forEach(function (c) { scene.remove(c.node); scene.remove(c.ring); });
     castaways = []; recruited = [];
     castawayTimer = 26; buildDiscount = 0; foodPerk = 0; scorePerk = 0; oxygenPerk = 0;
@@ -5618,6 +5746,8 @@ var THREE = __wxRoot.THREE || window.THREE;
     }
     if (event.code === 'KeyB' && phase === 'playing' && !paused) { openBuildMenu(); event.preventDefault(); return; }
     if (event.code === 'KeyV' && phase === 'playing' && !paused && !manageOpen) { openManage(); event.preventDefault(); return; }
+    // Escape also backs out of a dive.
+    if (event.code === 'Escape' && dive && dive.active()) { exitDive(); event.preventDefault(); return; }
     if (event.code === 'Escape' && manageOpen) { closeManage(); event.preventDefault(); return; }
     // While a blueprint is on offer the run pauses and ← / → / Enter pick one.
     if (buildOffer) {
@@ -5638,9 +5768,20 @@ var THREE = __wxRoot.THREE || window.THREE;
   var drag = null;
   canvas.addEventListener('pointerdown', function (event) {
     try { canvas.focus(); } catch (e) { /* focus is a desktop nicety */ }
-    // While diving, every touch belongs to the dive module.
+    // While diving, every touch belongs to the dive module — except the
+    // "return to the raft" button, which is ours and always wins.
     if (dive && dive.active()) {
+      if (diveExitRect
+          && event.clientX >= diveExitRect.x && event.clientX <= diveExitRect.x + diveExitRect.w
+          && event.clientY >= diveExitRect.y && event.clientY <= diveExitRect.y + diveExitRect.h) {
+        exitDive();
+        return;
+      }
       dive.pointerDown(event.pointerId, event.clientX, event.clientY);
+      // A finished dive (settled / blackout) exits on the next tap, so the
+      // player is never stranded on the results screen.
+      var ds = dive.state ? dive.state() : null;
+      if (ds && (ds.phase === 'settled' || ds.phase === 'blackout')) exitDive();
       return;
     }
     if (phase !== 'playing') { if (canRestart()) start(); return; }
@@ -5657,6 +5798,18 @@ var THREE = __wxRoot.THREE || window.THREE;
         }
       }
       closeManage();
+      return;
+    }
+    // Dock / cast off, and the on-deck fishing action.
+    if (dockBtnRect
+        && event.clientX >= dockBtnRect.x && event.clientX <= dockBtnRect.x + dockBtnRect.w
+        && event.clientY >= dockBtnRect.y && event.clientY <= dockBtnRect.y + dockBtnRect.h) {
+      setDocked(!docked); return;
+    }
+    if (fishBtnRect
+        && event.clientX >= fishBtnRect.x && event.clientX <= fishBtnRect.x + fishBtnRect.w
+        && event.clientY >= fishBtnRect.y && event.clientY <= fishBtnRect.y + fishBtnRect.h) {
+      if (fishReady) reelIn(); else castLine();
       return;
     }
     // Ship management button.
@@ -5851,8 +6004,15 @@ var THREE = __wxRoot.THREE || window.THREE;
       if (keys.boost) triggerDash();
       hero.dashT = Math.max(0, hero.dashT - dt);
       hero.dashCd = Math.max(0, hero.dashCd - dt);
-      // Snappier helm: the raft answers the stick quickly, so dodging works.
-      if (hero.dashT > 0) {
+      /* --- Docked: the raft is anchored, so the town on it becomes a place.
+       * The helm stops answering, sharks lose interest, and two on-deck actions
+       * open up: fishing (food) and diving (the underwater run). This is the
+       * "a moving town you can walk around" the design asks for. --- */
+      if (docked) {
+        hero.vx = lerp(hero.vx, 0, Math.min(1, dt * 12));
+        hero.vz = lerp(hero.vz, 0, Math.min(1, dt * 12));
+        deckBobT += dt;
+      } else if (hero.dashT > 0) {
         hero.vx = lerp(hero.vx, hero.dashX * R.dash.speed, Math.min(1, dt * 22));
         hero.vz = lerp(hero.vz, hero.dashZ * R.dash.speed, Math.min(1, dt * 22));
       } else {
@@ -5860,6 +6020,8 @@ var THREE = __wxRoot.THREE || window.THREE;
         hero.vz = lerp(hero.vz, dir.z * R.heroSpeed, Math.min(1, dt * 20));
       }
       moveOnIsland(hero, hero.vx * dt, hero.vz * dt, 0.3);
+      // While docked the raft stays where it is, so the "town" does not drift off.
+      if (docked) { hero.x = lerp(hero.x, dockX, Math.min(1, dt * 8)); hero.z = lerp(hero.z, dockZ, Math.min(1, dt * 8)); }
       if (Math.abs(hero.vx) + Math.abs(hero.vz) > 0.4) hero.facing = Math.atan2(hero.vx, hero.vz);
       // Foam wake trailing a moving raft.
       var heroSpd = Math.hypot(hero.vx, hero.vz);
@@ -5926,8 +6088,10 @@ var THREE = __wxRoot.THREE || window.THREE;
         }
         var al = Math.hypot(ax, az) || 1;
         if (shield > 0 && dist < 3) { ax = -tx / dist; az = -tz / dist; al = 1; }
+        // A docked town is a safe harbour: sharks circle but do not bite.
+        if (docked) { mv = mv * 0.45; if (dist < 5) { ax = -tx / dist; az = -tz / dist; al = 1; } }
         if (mv > 0) moveOnIsland(e, ax / al * mv * dt, az / al * mv * dt, 0.3);
-        if (dist < (R.heroSize + R.enemySize) * 0.30) {
+        if (!docked && dist < (R.heroSize + R.enemySize) * 0.30) {
           if (shield > 0) { moveOnIsland(e, -tx / dist * 1.2, -tz / dist * 1.2, 0.3); }
           else if (invulnerable <= 0) {
             hearts -= 1;
@@ -6113,6 +6277,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     // Endless sea: mesh the chunks around the raft, drop the ones behind, and
     // keep the wave plane and sea floor centred on the camera so there is no edge.
     updateCastaways(dt, t);
+    updateFishing(dt);
     chunkTimer -= dt;
     if (chunkTimer <= 0) { chunkTimer = 0.25; updateChunks(hero.x, hero.z); }
     water.position.x = hero.x;
@@ -6201,11 +6366,14 @@ var THREE = __wxRoot.THREE || window.THREE;
     var dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
     last = now;
     if (dt > 0) fps = lerp(fps, 1 / dt, 0.05);
+    if (diveExitBanner > 0) diveExitBanner = Math.max(0, diveExitBanner - dt);
     try {
       if (dive && dive.active()) {
-        // Diving takes over the screen: the 2D dive module draws every pixel.
+        // Diving takes over the screen: the 2D dive module draws every pixel,
+        // then we paint the "back to the raft" button on top of it.
         dive.update(dt);
         dive.draw();
+        drawDiveExit(hudCtx, window.innerWidth || 1, window.innerHeight || 1);
         hudTexture.needsUpdate = true;
         renderer.clear();
         renderer.render(hudScene, hudCam);
@@ -6293,6 +6461,9 @@ var THREE = __wxRoot.THREE || window.THREE;
       castaways: castaways.map(function (c) { return { name: c.def.name, perk: c.def.perk }; }),
       recruited: recruited.map(function (r) { return r.name; }),
       recruitAvailable: !!inRecruitRange(),
+      docked: docked, fishReady: fishReady, fishTimer: Math.round(fishTimer * 10) / 10,
+      dockBtnVisible: !!dockBtnRect, fishBtnVisible: !!fishBtnRect,
+      diveExitVisible: !!diveExitRect, diveExitBanner: Math.round(diveExitBanner * 10) / 10,
       canOpenBuild: typeof openBuildMenu === 'function',
       selfSustain: Math.round(selfSustainT * 10) / 10, townReady: townReady, buildOpen: buildOpen,
       diving: !!(dive && dive.active()), divePhase: dive && dive.phase ? dive.phase() : null,
@@ -6365,5 +6536,9 @@ var THREE = __wxRoot.THREE || window.THREE;
   window.__debugParts = function () { return shipParts().map(function (p) { return p.name; }); };
   window.__debugSpawnCastaway = function () { spawnCastaway(); return castaways.length; };
   window.__debugRecruit = function () { return tryRecruit() ? true : false; };
+  window.__debugDock = function (on) { setDocked(!!on); return docked; };
+  window.__debugCast = function () { castLine(); return fishTimer; };
+  window.__debugReel = function () { return reelIn(); };
+  window.__debugExitDive = function () { exitDive(); return !(dive && dive.active()); };
 })();
 
