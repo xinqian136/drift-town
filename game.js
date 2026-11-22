@@ -3485,51 +3485,28 @@
   }
 
   /* 4. SEA — open water with a few low sandbars, stacked blocks like the island had. */
-  var N = clamp(Math.round(R.worldSize), 16, 64);
-  var HALF = N / 2;
+  /* === Infinite sea ===
+   * The world is no longer a fixed N×N disk. A "chunk" is a block of CHUNK×CHUNK
+   * cells; sandbars are generated per chunk from the same value noise, so the sea
+   * extends forever in every direction and the raft never hits an invisible wall.
+   * Only chunks near the raft are meshed; far ones are dropped. */
+  var CHUNK = 22;                    // cells per chunk side
   var WATER_Y = 0.55;
-  var height = new Int8Array(N * N);   // 0 = water, otherwise blocks stacked from y = 0
-  var sandy = new Uint8Array(N * N);
-  var solid = new Uint8Array(N * N);   // trees and rocks block movement
-  for (var gx = 0; gx < N; gx++) {
-    for (var gz = 0; gz < N; gz++) {
-      var wx = gx - HALF + 0.5, wz = gz - HALF + 0.5;
-      var d = Math.sqrt(wx * wx + wz * wz) / HALF;
-      var n = fbm(gx * 0.11, gz * 0.11);
-      var land = 0.10 - d * 0.5 + (n - 0.5) * 0.6;
-      var i0 = gx * N + gz;
-      if (land < 0.19) continue;
-      var h = 1 + Math.floor(clamp(land, 0, 1) * 1.6 + n * 0.5);
-      height[i0] = clamp(h, 1, 2);
-      sandy[i0] = 1;
-    }
-  }
-  function cell(x, z) {
-    var cx = Math.floor(x + HALF), cz = Math.floor(z + HALF);
-    return cx < 0 || cz < 0 || cx >= N || cz >= N ? -1 : cx * N + cz;
-  }
-  function groundAt(x, z) { var c = cell(x, z); return c < 0 ? 0 : height[c]; }
-  function walkable(x, z) { return Math.hypot(x, z) < HALF - 0.6; } // the whole open sea belongs to the raft
-  function floatY(x, z) { return Math.max(groundAt(x, z), WATER_Y); } // everything rides the water surface
-  function cellCenter(index) { return { x: Math.floor(index / N) - HALF + 0.5, z: (index % N) - HALF + 0.5 }; }
-  function isShore(index) {
-    var cx = Math.floor(index / N), cz = index % N;
-    if (!height[index]) return false;
-    for (var dx = -1; dx <= 1; dx++) for (var dz = -1; dz <= 1; dz++) {
-      var x = cx + dx, z = cz + dz;
-      if (x < 0 || z < 0 || x >= N || z >= N || !height[x * N + z]) return true;
-    }
-    return false;
-  }
+  var chunks = {};                   // key "cx,cz" -> { cx, cz, tops, sides, trees }
+  var VIEW_CHUNKS = 2;               // radius (in chunks) kept meshed around the raft
+  var chunkTimer = 0;                // throttles the chunk (re)mesh pass
 
-  // Decoration: a palm here and there on the sandbars, never where the hero starts.
-  var trees = [], rocks = [];
-  for (var t = 0; t < N * N; t++) {
-    if (!height[t]) continue;
-    var at = cellCenter(t);
-    if (Math.abs(at.x) < 3 && Math.abs(at.z) < 3) continue;
-    if (rand() < 0.4) { trees.push(t); solid[t] = 1; }
+  /** A sandbar cell: 0 = open water, 1-2 = sand block height. Islands are rare
+   *  on purpose — this is open ocean, not an archipelago. */
+  function landAt(cx, cz) {
+    var n = fbm(cx * 0.055 + 100, cz * 0.055 + 100);
+    var v = n - 0.76;              // high threshold: only occasional islets
+    if (v <= 0) return 0;
+    return v > 0.06 ? 2 : 1;
   }
+  function groundAt(x, z) { return landAt(Math.floor(x), Math.floor(z)); }
+  function walkable(x, z) { return true; }   // the whole sea is open to the raft
+  function floatY(x, z) { return Math.max(groundAt(x, z), WATER_Y); }
 
   var BOX = new THREE.BoxGeometry(1, 1, 1);
   var dummy = new THREE.Object3D();
@@ -3551,56 +3528,76 @@
     mesh.count++;
   }
 
-  var columns = 0, stacked = 0;
-  for (var q = 0; q < N * N; q++) if (height[q]) { columns++; stacked += height[q]; }
   var groundTexture = null;
   if (customArt('background')) {
     groundTexture = new THREE.TextureLoader().load(ASSETS.background);
     groundTexture.colorSpace = THREE.SRGBColorSpace;
   }
-  var tops = blockMesh(columns, new THREE.MeshLambertMaterial(groundTexture ? { map: groundTexture } : {}));
-  var sides = blockMesh(stacked, new THREE.MeshLambertMaterial());
   var tint = new THREE.Color();
-  for (var s = 0; s < N * N; s++) {
-    if (!height[s]) continue;
-    var c0 = cellCenter(s), top = height[s];
-    var jitter = 0.9 + hash2(s, 99) * 0.14;
-    if (groundTexture) tint.setRGB(jitter, jitter, jitter);
-    else tint.set(sandy[s] ? R.palette.sand : R.palette.grass).multiplyScalar(jitter);
-    addBlock(tops, c0.x, top - 0.5, c0.z, 1, 1, 1, tint);
-    for (var y = 0; y < top - 1; y++) {
-      tint.set(sandy[s] ? R.palette.sand : R.palette.dirt).multiplyScalar((0.75 + y * 0.06) * (0.92 + hash2(s, y) * 0.1));
-      addBlock(sides, c0.x, y + 0.5, c0.z, 1, 1, 1, tint);
+  var LEAF_TONES = ['#3f7d4a', '#4b8f50', '#356b45', '#5a9a52'];
+
+  /* A chunk is one CHUNK×CHUNK block of sea. It is meshed the first time the
+   * raft comes near and dropped when it drifts away, so the sea can be endless
+   * while only a handful of chunks are ever on screen. */
+  function chunkKey(cx, cz) { return cx + ',' + cz; }
+  function buildChunk(cx, cz) {
+    var tops = 0, stacked = 0, i, j, h, x, z;
+    var cells = [];
+    for (i = 0; i < CHUNK; i++) for (j = 0; j < CHUNK; j++) {
+      x = cx * CHUNK + i; z = cz * CHUNK + j;
+      h = landAt(x, z);
+      if (!h) continue;
+      cells.push({ x: x, z: z, h: h });
+      tops++; stacked += h;
+    }
+    var group = new THREE.Group();
+    if (!tops) { scene.add(group); return { cx: cx, cz: cz, group: group, tops: null, count: 0 }; }
+    var tMesh = new THREE.InstancedMesh(BOX, new THREE.MeshLambertMaterial(groundTexture ? { map: groundTexture } : {}), tops);
+    var sMesh = new THREE.InstancedMesh(BOX, new THREE.MeshLambertMaterial(), Math.max(1, stacked - tops));
+    tMesh.count = 0; sMesh.count = 0;
+    tMesh.receiveShadow = sMesh.receiveShadow = true;
+    for (i = 0; i < cells.length; i++) {
+      var c = cells[i];
+      var jitter = 0.92 + hash2(c.x * 31 + c.z, 99) * 0.14;
+      if (groundTexture) tint.setRGB(jitter, jitter, jitter);
+      else tint.set(R.palette.sand).multiplyScalar(jitter);
+      addBlock(tMesh, c.x + 0.5, c.h - 0.5, c.z + 0.5, 1, 1, 1, tint);
+      for (var y = 0; y < c.h - 1; y++) {
+        tint.set(R.palette.sand).multiplyScalar((0.75 + y * 0.06) * (0.92 + hash2(c.x + c.z, y) * 0.1));
+        addBlock(sMesh, c.x + 0.5, y + 0.5, c.z + 0.5, 1, 1, 1, tint);
+      }
+    }
+    tMesh.instanceMatrix.needsUpdate = sMesh.instanceMatrix.needsUpdate = true;
+    group.add(tMesh, sMesh);
+    scene.add(group);
+    return { cx: cx, cz: cz, group: group, tops: tMesh, count: tops };
+  }
+  /** Keep the chunks around the raft meshed; drop the ones far behind. */
+  function updateChunks(px, pz) {
+    var ccx = Math.floor(px / CHUNK), ccz = Math.floor(pz / CHUNK);
+    for (var dx = -VIEW_CHUNKS; dx <= VIEW_CHUNKS; dx++) {
+      for (var dz = -VIEW_CHUNKS; dz <= VIEW_CHUNKS; dz++) {
+        var k = chunkKey(ccx + dx, ccz + dz);
+        if (!chunks[k]) chunks[k] = buildChunk(ccx + dx, ccz + dz);
+      }
+    }
+    for (var key in chunks) {
+      var ch = chunks[key];
+      if (Math.abs(ch.cx - ccx) > VIEW_CHUNKS + 1 || Math.abs(ch.cz - ccz) > VIEW_CHUNKS + 1) {
+        scene.remove(ch.group);
+        ch.group.traverse(function (n) { if (n.isInstancedMesh) n.dispose(); });
+        delete chunks[key];
+      }
     }
   }
-  tops.instanceMatrix.needsUpdate = sides.instanceMatrix.needsUpdate = true;
+  updateChunks(0, 0);
 
-  var trunks = blockMesh(trees.length * 2, new THREE.MeshLambertMaterial());
-  var leaves = blockMesh(trees.length * 13, new THREE.MeshLambertMaterial());
-  var stones = blockMesh(rocks.length * 2, new THREE.MeshLambertMaterial());
-  var LEAF_TONES = ['#3f7d4a', '#4b8f50', '#356b45', '#5a9a52'];
-  trees.forEach(function (index, k) {
-    var p = cellCenter(index), base = height[index];
-    addBlock(trunks, p.x, base + 0.6, p.z, 0.42, 1.2, 0.42, tint.set('#6b4a32'));
-    var tall = 1.3 + (k % 2) * 0.5;
-    for (var lx = -1; lx <= 1; lx++) for (var lz = -1; lz <= 1; lz++) {
-      if (lx && lz && hash2(index, lx * 3 + lz) < 0.5) continue;
-      addBlock(leaves, p.x + lx * 0.62, base + tall + 0.45, p.z + lz * 0.62, 0.66, 0.66, 0.66, tint.set(LEAF_TONES[(k + lx + lz + 4) % 4]));
-    }
-    addBlock(leaves, p.x, base + tall + 1.05, p.z, 0.7, 0.62, 0.7, tint.set(LEAF_TONES[k % 4]));
-  });
-  rocks.forEach(function (index, k) {
-    var p = cellCenter(index), base = height[index];
-    addBlock(stones, p.x, base + 0.3, p.z, 0.8, 0.6, 0.7, tint.set('#8a8f98'));
-    if (k % 2) addBlock(stones, p.x + 0.15, base + 0.75, p.z - 0.1, 0.45, 0.35, 0.45, tint.set('#a3a8b0'));
-  });
-  [trunks, leaves, stones].forEach(function (mesh) { mesh.instanceMatrix.needsUpdate = true; });
-
-  // Water: an animated plane of rolling waves, over a darker sea floor.
-  var waterGeo = new THREE.PlaneGeometry(N * 4.4, N * 4.4, 42, 42);
+  // Water: a large wave plane that follows the raft, so the sea reads as endless.
+  var WATER_SPAN = 260;
+  var waterGeo = new THREE.PlaneGeometry(WATER_SPAN, WATER_SPAN, 56, 56);
   waterGeo.rotateX(-Math.PI / 2);
   var waterBase = waterGeo.attributes.position.array.slice();
-  var water = new THREE.Mesh(waterGeo, new THREE.MeshLambertMaterial({ color: R.palette.water, transparent: true, opacity: 0.78, depthWrite: false }));
+  var water = new THREE.Mesh(waterGeo, new THREE.MeshLambertMaterial({ color: R.palette.water, transparent: true, opacity: 0.88, depthWrite: false }));
   water.position.y = WATER_Y;
   water.receiveShadow = true;
   scene.add(water);
@@ -3620,7 +3617,7 @@
   zoneDisc.rotation.x = -Math.PI / 2;
   zoneDisc.position.y = WATER_Y + 0.1;
   scene.add(zoneDisc);
-  var floor = new THREE.Mesh(new THREE.CircleGeometry(N * 2.2, 32), new THREE.MeshBasicMaterial({ color: color(R.palette.water).multiplyScalar(0.35) }));
+  var floor = new THREE.Mesh(new THREE.CircleGeometry(120, 32), new THREE.MeshBasicMaterial({ color: color(R.palette.water).multiplyScalar(0.35) }));
   floor.rotation.x = -Math.PI / 2;
   floor.position.y = -0.6;
   scene.add(floor);
@@ -3647,9 +3644,9 @@
   moon.scale.set(34, 34, 1);
   scene.add(moon);
 
-  // Sun glints sparkling on the waves.
+  // Sun glints sparkling on the waves (kept near the raft; the sea is endless).
   var FLY_COUNT = 48, flyGeo = new THREE.BufferGeometry(), flyBase = [];
-  for (var f = 0; f < FLY_COUNT; f++) flyBase.push((rand() - 0.5) * N * 0.9, 0.8 + rand() * 0.7, (rand() - 0.5) * N * 0.9, rand() * 10);
+  for (var f = 0; f < FLY_COUNT; f++) flyBase.push((rand() - 0.5) * 54, 0.8 + rand() * 0.7, (rand() - 0.5) * 54, rand() * 10);
   flyGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(FLY_COUNT * 3), 3));
   var flies = new THREE.Points(flyGeo, new THREE.PointsMaterial({ map: GLOW, color: '#f2ffff', size: 0.4, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
   scene.add(flies);
@@ -3948,15 +3945,50 @@
   var SPECIAL_MODELS = { ring: RING_BOXES, chest: CHEST_BOXES };
 
   /* --- Six buildings that grow on the raft, one every few pieces of garbage. --- */
-  var CABIN_BOXES = [
-    [0, 0.62, 0, 1.6, 1.24, 1.3, '#e0b183'], [0, 1.34, 0, 1.72, 0.16, 1.42, '#b8875a'],
-    [0, 1.62, 0, 1.5, 0.42, 1.22, '#d0705c'], [0, 1.94, 0, 0.9, 0.3, 0.78, '#c2624f'],
-    [0, 2.16, 0, 0.42, 0.16, 0.4, '#a94f3f'],
-    [0, 0.5, 0.68, 0.42, 0.9, 0.1, '#7a4a28'], [0, 0.86, 0.68, 0.46, 0.08, 0.12, '#5c3620'],
-    [-0.5, 0.78, 0.68, 0.34, 0.34, 0.07, '#bfeef2'], [0.5, 0.78, 0.68, 0.34, 0.34, 0.07, '#bfeef2'],
-    [0.62, 1.9, -0.4, 0.22, 0.9, 0.22, '#b8875a'], [0.62, 2.4, -0.4, 0.3, 0.14, 0.3, '#6b5136'],
-    [-0.78, 0.62, 0, 0.1, 1.2, 0.1, '#b8875a'], [0.78, 0.62, 0, 0.1, 1.2, 0.1, '#b8875a']
-  ];
+  /* --- Town buildings ---
+   * Each one is built from many small boxes rather than a handful of slabs, so
+   * the silhouette reads at a glance: tiles on the roof, a framed door, window
+   * sills, corner posts, a weather vane. `boxList()` makes the verbose lists
+   * cheap to write; `mirror()` duplicates the left/right details. */
+  var CABIN_BOXES = (function () {
+    var B = boxList(), i;
+    // Stone footing, then plank walls with visible courses.
+    B.add(0, 0.1, 0, 1.72, 0.2, 1.42, '#8a7a6a');
+    for (i = 0; i < 4; i++) {
+      B.add(0, 0.28 + i * 0.24, 0, 1.6, 0.22, 1.3, i % 2 ? '#e0b183' : '#d8a87a');
+    }
+    B.add(0, 1.3, 0, 1.7, 0.14, 1.4, '#b8875a');
+    // Corner posts, front and back.
+    [[-0.78, 0.72], [0.78, 0.72], [-0.78, -0.72], [0.78, -0.72]].forEach(function (p) {
+      B.add(p[0], 0.68, p[1], 0.14, 1.28, 0.14, '#a9784e');
+    });
+    // Tiled roof: two slopes of overlapping tiles.
+    for (i = 0; i < 4; i++) {
+      var y = 1.44 + i * 0.17, w = 1.62 - i * 0.3, d = 1.36 - i * 0.22;
+      B.add(0, y, 0, w, 0.15, d, i % 2 ? '#d0705c' : '#c2624f');
+    }
+    B.add(0, 2.14, 0, 0.5, 0.18, 0.46, '#a94f3f');
+    B.add(0, 2.3, 0, 0.16, 0.2, 0.16, '#7a3f34');
+    // Door with a frame and a step.
+    B.add(0, 0.62, 0.68, 0.5, 0.98, 0.1, '#7a4a28');
+    B.add(0, 0.62, 0.68, 0.42, 0.86, 0.06, '#8f5a30');
+    B.add(0, 1.16, 0.68, 0.62, 0.1, 0.12, '#5c3620');
+    B.add(0, 0.24, 0.78, 0.66, 0.1, 0.24, '#a9784e');
+    B.add(0.14, 0.62, 0.74, 0.07, 0.07, 0.05, '#e8c87a');   // handle
+    // Windows with sills and cross bars.
+    [[-0.52], [0.52]].forEach(function (p) {
+      B.add(p[0], 0.86, 0.68, 0.4, 0.4, 0.07, '#bfeef2');
+      B.add(p[0], 0.86, 0.68, 0.44, 0.06, 0.09, '#8a6a44');
+      B.add(p[0], 0.72, 0.72, 0.48, 0.06, 0.1, '#a9784e');
+      B.add(p[0], 1.02, 0.69, 0.06, 0.06, 0.08, '#8a6a44');
+    });
+    // Chimney and a flower box under the right window.
+    B.add(0.6, 1.92, -0.42, 0.24, 0.86, 0.24, '#b8875a');
+    B.add(0.6, 2.38, -0.42, 0.32, 0.14, 0.32, '#6b5136');
+    B.add(0.52, 0.56, 0.76, 0.44, 0.16, 0.16, '#8a6a44');
+    B.add(0.52, 0.68, 0.78, 0.4, 0.12, 0.12, '#6fbf6a');
+    return B;
+  })();
   var TOWER_BOXES = (function () {
     var B = boxList(), i;
     [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]].forEach(function (p) {
@@ -4380,6 +4412,9 @@
     if (!dive || !dive.start) return;
     if (dive.reset) dive.reset(20261122 + Math.floor(Math.random() * 1000));
     dive.start();
+    // 阿海's perk (extra oxygen) needs an API the dive module does not expose yet,
+    // so it is reported here rather than silently doing nothing.
+    if (oxygenPerk > 0 && window.console) console.info('[dive] 阿海在船上，氧气加成待潜水模块开放接口');
   }
   function showCard(title, body, hint) { cardData = { title: title, body: body, hint: hint }; }
   function clearCard() { cardData = null; }
@@ -4624,44 +4659,167 @@
     hudCtx.textAlign = 'center';
     hudCtx.fillText('⚡', bx, by + br * 0.34);
     hudCtx.globalAlpha = 1;
-    // Dive entry: appears once the raft is self-sustaining (the survival goal).
-    // Sits above the dash button so the two never overlap.
-    if (window.DiveGame && townReady && phase === 'playing') {      var dbr = 30, dbx = w - m - dbr - 10, dby = by - dbr * 2 - 14;
-      diveBtnRect = { x: dbx, y: dby, r: dbr + 8 };
-      hudCtx.fillStyle = 'rgba(10,60,90,0.62)';
-      hudCtx.beginPath(); hudCtx.arc(dbx, dby, dbr, 0, Math.PI * 2); hudCtx.fill();
-      hudCtx.strokeStyle = 'rgba(150,235,255,0.65)'; hudCtx.lineWidth = 2; hudCtx.stroke();
-      hudCtx.fillStyle = '#dffaff';
-      hudCtx.font = '700 ' + (dbr * 0.62) + 'px ' + FONT;
+    hudCtx.textAlign = 'left';
+    /* --- The round-button column, bottom-right ---
+     * One shared layout so the buttons can never overlap: they are stacked
+     * upward from the dash button with a fixed pitch, and each one only takes a
+     * slot if it is currently active. Order from the bottom: 冲刺, 建, 船, 潜.
+     */
+    var BR = 26;                                   // button radius
+    var bpitch = BR * 2 + 20;                      // vertical spacing
+    var bx0 = w - m - BR - 10;
+    var slotY = [h - m - 30 - 10];                 // dash sits lowest
+    for (var sN = 1; sN < 5; sN++) slotY.push(slotY[sN - 1] - bpitch);
+
+    /* Recruit prompt: when a drifter is within reach, a bright button appears
+     * near the bottom centre. Tapping it recruits them. */
+    var recruitNow = inRecruitRange();
+    if (recruitNow && phase === 'playing') {
+      var rw = Math.min(w * 0.42, 260), rh = font * 2.1;
+      var rx = (w - rw) / 2, ry = h - m - rh - font * 1.6;
+      recruitRect = { x: rx, y: ry, w: rw, h: rh };
+      hudCtx.globalAlpha = 0.82 + Math.sin(performance.now() / 220) * 0.16;
+      hudCtx.fillStyle = 'rgba(30,90,60,0.92)';
+      roundRect(rx, ry, rw, rh, rh / 2); hudCtx.fill();
+      hudCtx.strokeStyle = 'rgba(160,255,190,0.9)'; hudCtx.lineWidth = 2;
+      roundRect(rx, ry, rw, rh, rh / 2); hudCtx.stroke();
+      hudCtx.globalAlpha = 1;
       hudCtx.textAlign = 'center';
-      hudCtx.fillText('潜', dbx, dby + dbr * 0.24);
+      hudCtx.fillStyle = '#eaffef';
+      hudCtx.font = '800 ' + (font * 0.9) + 'px ' + FONT;
+      hudCtx.fillText('招募 ' + recruitNow.def.name, w / 2, ry + rh * 0.46);
+      hudCtx.font = '600 ' + (font * 0.66) + 'px ' + FONT;
+      hudCtx.fillStyle = 'rgba(220,255,235,0.85)';
+      hudCtx.fillText(recruitNow.def.perk, w / 2, ry + rh * 0.8);
       hudCtx.textAlign = 'left';
-    } else diveBtnRect = null;
-    /* The 建 button: the build list, available from the start so the player can
-     * always open it. It glows and pulses the moment something is affordable,
-     * which is the game's main "what do I do next" signal. */
+    } else recruitRect = null;
+
+    /* 建 — the build list. Slot 1. */
     if (!buildOffer && phase === 'playing') {
       var canBuild = false, pool0 = offerableSteps();
       for (var pb = 0; pb < pool0.length; pb++) if (canAffordCost(stepCost(pool0[pb]))) canBuild = true;
-      var wbr = 26, wbx = w - m - wbr - 10, wby = by - br - wbr - 12;
-      buildBtnRect = { x: wbx, y: wby, r: wbr + 10 };
+      var wbx = bx0, wby = slotY[1];
+      buildBtnRect = { x: wbx, y: wby, r: BR + 8 };
       hudCtx.globalAlpha = buildOpen ? 0.55 : 1;
-      hudCtx.fillStyle = canBuild ? 'rgba(60,120,70,0.72)' : 'rgba(14,18,40,0.5)';
-      hudCtx.beginPath(); hudCtx.arc(wbx, wby, wbr, 0, Math.PI * 2); hudCtx.fill();
-      hudCtx.strokeStyle = canBuild ? 'rgba(200,255,208,0.75)' : 'rgba(255,255,255,0.4)';
+      hudCtx.fillStyle = canBuild ? 'rgba(60,120,70,0.8)' : 'rgba(14,18,40,0.55)';
+      hudCtx.beginPath(); hudCtx.arc(wbx, wby, BR, 0, Math.PI * 2); hudCtx.fill();
+      hudCtx.strokeStyle = canBuild ? 'rgba(200,255,208,0.85)' : 'rgba(255,255,255,0.4)';
       hudCtx.lineWidth = canBuild ? 3 : 2; hudCtx.stroke();
-      if (canBuild) { // a slow pulse so the eye finds it
+      if (canBuild) {
         hudCtx.globalAlpha = 0.25 + Math.sin(performance.now() / 260) * 0.18;
-        hudCtx.beginPath(); hudCtx.arc(wbx, wby, wbr + 4, 0, Math.PI * 2); hudCtx.stroke();
+        hudCtx.beginPath(); hudCtx.arc(wbx, wby, BR + 5, 0, Math.PI * 2); hudCtx.stroke();
         hudCtx.globalAlpha = buildOpen ? 0.55 : 1;
       }
       hudCtx.fillStyle = '#fff';
-      hudCtx.font = '800 ' + (wbr * 0.86) + 'px ' + FONT;
-      hudCtx.fillText('建', wbx, wby + wbr * 0.32);
+      hudCtx.font = '800 ' + (BR * 0.86) + 'px ' + FONT;
+      hudCtx.textAlign = 'center';
+      hudCtx.fillText('建', wbx, wby + BR * 0.32);
       hudCtx.globalAlpha = 1;
+      hudCtx.textAlign = 'left';
     } else buildBtnRect = null;
+
+    /* 船 — ship management. Slot 2. */
+    if (phase === 'playing' && !buildOffer) {
+      var mbx = bx0, mby = slotY[2];
+      manageBtnRect = { x: mbx, y: mby, r: BR + 8 };
+      var partCount = shipParts().length;
+      hudCtx.fillStyle = manageOpen ? 'rgba(90,70,20,0.85)' : 'rgba(14,18,40,0.6)';
+      hudCtx.beginPath(); hudCtx.arc(mbx, mby, BR, 0, Math.PI * 2); hudCtx.fill();
+      hudCtx.strokeStyle = partCount ? 'rgba(255,214,140,0.85)' : 'rgba(255,255,255,0.35)';
+      hudCtx.lineWidth = 2; hudCtx.stroke();
+      hudCtx.fillStyle = '#ffe2a8';
+      hudCtx.font = '800 ' + (BR * 0.84) + 'px ' + FONT;
+      hudCtx.textAlign = 'center';
+      hudCtx.fillText('船', mbx, mby + BR * 0.3);
+      if (partCount) {
+        hudCtx.font = '800 ' + (font * 0.62) + 'px ' + FONT;
+        hudCtx.fillStyle = '#ffe2a8';
+        hudCtx.fillText(String(partCount), mbx, mby - BR - font * 0.3);
+      }
+      hudCtx.textAlign = 'left';
+    } else manageBtnRect = null;
+
+    /* 潜 — dive entry. Slot 3. Available from the start. */
+    if (window.DiveGame && phase === 'playing' && !(dive && dive.active())) {
+      var dbx = bx0, dby = slotY[3];
+      diveBtnRect = { x: dbx, y: dby, r: BR + 8 };
+      hudCtx.globalAlpha = 0.3 + Math.sin(performance.now() / 300) * 0.16;
+      hudCtx.strokeStyle = 'rgba(150,235,255,0.95)'; hudCtx.lineWidth = 3;
+      hudCtx.beginPath(); hudCtx.arc(dbx, dby, BR + 5, 0, Math.PI * 2); hudCtx.stroke();
+      hudCtx.globalAlpha = 1;
+      hudCtx.fillStyle = 'rgba(10,60,90,0.78)';
+      hudCtx.beginPath(); hudCtx.arc(dbx, dby, BR, 0, Math.PI * 2); hudCtx.fill();
+      hudCtx.strokeStyle = 'rgba(150,235,255,0.8)'; hudCtx.lineWidth = 2; hudCtx.stroke();
+      hudCtx.fillStyle = '#dffaff';
+      hudCtx.font = '700 ' + (BR * 0.62) + 'px ' + FONT;
+      hudCtx.textAlign = 'center';
+      hudCtx.fillText('潜', dbx, dby + BR * 0.24);
+      hudCtx.font = '700 ' + (font * 0.6) + 'px ' + FONT;
+      hudCtx.fillStyle = 'rgba(223,250,255,0.9)';
+      hudCtx.fillText('下潜', dbx, dby - BR - font * 0.3);
+      hudCtx.textAlign = 'left';
+    } else diveBtnRect = null;
     /* The workbench build list: one card per step whose prerequisites stand.
      * Same card language as the town blueprint choice, drawn in Canvas 2D. */
+    /* --- Ship management panel: every structure on the raft, with a demolish
+     * button per row. Purely Canvas 2D, like the rest of the UI. --- */
+    if (manageOpen && phase === 'playing') {
+      var parts2 = shipParts();
+      hudCtx.fillStyle = 'rgba(8,14,26,0.5)'; hudCtx.fillRect(0, 0, w, h);
+      var pW = Math.min(w * 0.78, 560);
+      var rowH = font * 2.1;
+      var pH = Math.min(h * 0.76, 92 + rowH * Math.max(1, Math.min(parts2.length, 6)));
+      var pX = (w - pW) / 2, pY = (h - pH) / 2;
+      hudCtx.fillStyle = 'rgba(18,26,44,0.96)';
+      roundRect(pX, pY, pW, pH, 16); hudCtx.fill();
+      hudCtx.strokeStyle = 'rgba(255,214,140,0.45)'; hudCtx.lineWidth = 2;
+      roundRect(pX, pY, pW, pH, 16); hudCtx.stroke();
+      hudCtx.textAlign = 'center';
+      hudCtx.fillStyle = '#ffe2a8';
+      hudCtx.font = '800 ' + (font * 1.25) + 'px ' + FONT;
+      hudCtx.fillText('船只管理', w / 2, pY + font * 1.7);
+      hudCtx.font = '700 ' + (font * 0.72) + 'px ' + FONT;
+      hudCtx.fillStyle = 'rgba(223,242,255,0.75)';
+      hudCtx.fillText('木 ' + res.wood + '   塑 ' + res.plastic + '   铁 ' + res.metal
+        + '   ·   建筑 ' + parts2.length + ' 件', w / 2, pY + font * 2.7);
+      manageRects = [];
+      var listY = pY + font * 3.5;
+      var maxRows = Math.floor((pH - font * 5.2) / rowH);
+      for (var pi = 0; pi < parts2.length && pi < Math.max(1, maxRows); pi++) {
+        var p2 = parts2[pi], ry = listY + pi * rowH;
+        hudCtx.fillStyle = pi % 2 ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.07)';
+        roundRect(pX + 16, ry, pW - 32, rowH - 6, 8); hudCtx.fill();
+        hudCtx.textAlign = 'left';
+        hudCtx.fillStyle = '#ffffff';
+        hudCtx.font = '700 ' + (font * 0.86) + 'px ' + FONT;
+        hudCtx.fillText(p2.name, pX + 30, ry + rowH * 0.44);
+        hudCtx.fillStyle = 'rgba(200,230,255,0.7)';
+        hudCtx.font = '600 ' + (font * 0.66) + 'px ' + FONT;
+        hudCtx.fillText(p2.kind === 'survival' ? '生存装备' : '城镇建筑', pX + 30, ry + rowH * 0.78);
+        // Demolish button on the right of the row.
+        var dlW = font * 3.4, dlH = font * 1.35;
+        var dlX = pX + pW - 30 - dlW, dlY = ry + (rowH - 6 - dlH) / 2;
+        hudCtx.fillStyle = 'rgba(170,60,60,0.75)';
+        roundRect(dlX, dlY, dlW, dlH, 7); hudCtx.fill();
+        hudCtx.fillStyle = '#ffe0e0';
+        hudCtx.font = '700 ' + (font * 0.72) + 'px ' + FONT;
+        hudCtx.textAlign = 'center';
+        hudCtx.fillText('拆除', dlX + dlW / 2, dlY + dlH * 0.72);
+        manageRects.push({ x: dlX, y: dlY, w: dlW, h: dlH, part: p2 });
+      }
+      if (!parts2.length) {
+        hudCtx.textAlign = 'center';
+        hudCtx.fillStyle = 'rgba(223,242,255,0.6)';
+        hudCtx.font = '600 ' + font + 'px ' + FONT;
+        hudCtx.fillText('船上还没有任何建筑', w / 2, listY + font * 2);
+        hudCtx.fillText('按「建」开始造船上的第一件', w / 2, listY + font * 3.4);
+      }
+      hudCtx.textAlign = 'center';
+      hudCtx.fillStyle = 'rgba(255,226,168,0.85)';
+      hudCtx.font = '700 ' + (font * 0.72) + 'px ' + FONT;
+      hudCtx.fillText('拆除返还一半材料 · 点击面板外或按 V 关闭', w / 2, pY + pH - font * 0.9);
+      hudCtx.textAlign = 'left';
+    } else manageRects = null;
     if (buildOpen && phase === 'playing') {
       var sPool = offerableSteps();
       var sCardW = Math.min(w * 0.27, 168), sCardH = sCardW * 0.72;
@@ -4778,6 +4936,156 @@
   var townReady = false;      // self-sustained once → the town is unlocked
   var townReadyBanner = 0;
   var survivalModels = [], shelterCut = 0;
+  /* --- Ship management panel ---
+   * Lists everything standing on the raft, lets the player demolish a piece for
+   * a partial refund, and shows what the raft is carrying. Opened from the 船
+   * button (or the M key), drawn entirely in Canvas 2D. */
+  var manageOpen = false, manageRects = null, manageSel = 0, manageBtnRect = null;
+  var recruitRect = null;      // hit area of the recruit button
+  /* --- Castaways: survivors drifting on flotsam. Sail up to one, tap it, and
+   * they join the raft with a specialty that changes how the run plays. This is
+   * the "recruit NPCs" pillar from the design doc, in the simplest form that
+   * still has a real effect on the game. --- */
+  var castaways = [];          // { x, z, node, def, ring, t }
+  var recruited = [];          // defs of everyone aboard
+  var CASTAWAY_DEFS = [
+    { id: 'laochen', name: '老陈', title: '捞了四十年的老手', perk: '打捞范围 +40%',
+      effect: 'range', color: '#8fb8d8' },
+    { id: 'ahai', name: '阿海', title: '第一个戴上面罩的人', perk: '潜水氧气 +20 秒',
+      effect: 'oxygen', color: '#7fd8e8' },
+    { id: 'xiaoman', name: '小满', title: '把海的馈赠做成一餐的人', perk: '食物产出 +50%',
+      effect: 'food', color: '#e8b87f' },
+    { id: 'bo', name: '铁匠波', title: '只会往硬里做的匠人', perk: '建造材料 -20%',
+      effect: 'cheap', color: '#b8a090' },
+    { id: 'lili', name: '莉莉', title: '会在定价上跟你较劲的人', perk: '垃圾分值 +1',
+      effect: 'score', color: '#d8a0c8' }
+  ];
+  var CASTAWAY_BOXES = (function () {
+    var B = boxList();
+    // A little raft of planks, and a person waving on top.
+    for (var i = -2; i <= 2; i++) B.add(i * 0.42, 0.1, 0, 0.38, 0.16, 1.5, i % 2 ? '#9c6d3e' : '#8f6135');
+    B.add(0, 0.32, 0, 0.42, 0.42, 0.42, '#3a5a8c');
+    B.add(0, 0.82, 0, 0.5, 0.5, 0.5, '#e0c9a8');
+    B.add(-0.14, 0.88, 0.26, 0.1, 0.1, 0.06, '#2b2b2b');
+    B.add(0.14, 0.88, 0.26, 0.1, 0.1, 0.06, '#2b2b2b');
+    B.add(0, 1.12, 0, 0.54, 0.14, 0.54, '#c9a24a');
+    B.add(0.34, 0.86, 0, 0.16, 0.5, 0.16, '#e0c9a8');   // waving arm
+    return B;
+  })();
+  var castawayTimer = 26;       // seconds until the next drifter
+  var buildDiscount = 0, foodPerk = 0, scorePerk = 0, oxygenPerk = 0; // from recruits
+  function spawnCastaway() {
+    if (castaways.length >= 2) return;
+    var used = {};
+    for (var r = 0; r < recruited.length; r++) used[recruited[r].id] = 1;
+    for (var c = 0; c < castaways.length; c++) used[castaways[c].def.id] = 1;
+    var pool = CASTAWAY_DEFS.filter(function (d) { return !used[d.id]; });
+    if (!pool.length) return;
+    var def = pool[Math.floor(Math.random() * pool.length)];
+    var a = Math.random() * Math.PI * 2, d = 7 + Math.random() * 6;
+    var x = hero.x + Math.cos(a) * d, z = hero.z + Math.sin(a) * d;
+    var node = makeCharacter('pickup', R.pickupSize * 1.5, CASTAWAY_BOXES);
+    var ring = new THREE.Mesh(new THREE.RingGeometry(1.1, 1.35, 32),
+      new THREE.MeshBasicMaterial({ color: '#9fe8ff', transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(x, WATER_Y + 0.12, z);
+    scene.add(ring);
+    castaways.push({ x: x, z: z, node: node, def: def, ring: ring, t: 0 });
+    addFT('有人漂过来了', x, z, '#9fe8ff', 2.4);
+    fanfare([660, 880], 0.12, 'sine', 0.05);
+  }
+  /** Recruit the drifter nearest the raft, if the player is close enough. */
+  function tryRecruit() {
+    for (var i = castaways.length - 1; i >= 0; i--) {
+      var c = castaways[i];
+      if (Math.hypot(c.x - hero.x, c.z - hero.z) > 4.2) continue;
+      recruited.push(c.def);
+      applyPerk(c.def);
+      addFT(c.def.name + ' 上船了！' + c.def.perk, hero.x, hero.z, '#9ff0b8', 2.6);
+      fanfare([523, 659, 784, 1047], 0.09, 'triangle', 0.07);
+      scene.remove(c.node); scene.remove(c.ring);
+      castaways.splice(i, 1);
+      return c.def;
+    }
+    return null;
+  }
+  /** Each recruit bends the run: that is what makes them worth chasing. */
+  function applyPerk(def) {
+    if (def.effect === 'range') magnet += 0.9;
+    if (def.effect === 'cheap') buildDiscount = Math.min(0.4, buildDiscount + 0.2);
+    if (def.effect === 'food') foodPerk = Math.min(2, foodPerk + 0.5);
+    if (def.effect === 'score') scorePerk += 1;
+    if (def.effect === 'oxygen') oxygenPerk += 20;
+  }
+  function updateCastaways(dt, t) {
+    castawayTimer -= dt;
+    if (castawayTimer <= 0) { castawayTimer = 40 + Math.random() * 20; spawnCastaway(); }
+    for (var i = 0; i < castaways.length; i++) {
+      var c = castaways[i];
+      c.t += dt;
+      c.node.position.set(c.x, WATER_Y + Math.sin(c.t * 1.8) * 0.06, c.z);
+      c.ring.scale.setScalar(1 + Math.sin(c.t * 2.4) * 0.1);
+      c.ring.material.opacity = 0.4 + Math.sin(c.t * 2.4) * 0.2;
+      // The drifter slowly makes for the raft, so they are approachable.
+      var dx = hero.x - c.x, dz = hero.z - c.z, d = Math.hypot(dx, dz);
+      if (d > 5) { c.x += dx / d * dt * 0.5; c.z += dz / d * dt * 0.5; }
+      c.ring.position.set(c.x, WATER_Y + 0.12, c.z);
+    }
+  }
+  function inRecruitRange() {
+    for (var i = 0; i < castaways.length; i++) {
+      if (Math.hypot(castaways[i].x - hero.x, castaways[i].z - hero.z) <= 4.2) return castaways[i];
+    }
+    return null;
+  }
+  function shipParts() {
+    // One entry per standing structure: survival gear first, then town buildings.
+    var out = [];
+    for (var i = 0; i < survival.length; i++) {
+      var st = stepById(survival[i]);
+      if (!st) continue;
+      out.push({ kind: 'survival', id: st.id, name: st.name, desc: st.desc,
+                 cost: stepCost(st), model: survivalModels[i] || null });
+    }
+    for (var b = 0; b < buildings.length; b++) {
+      var sp = BUILDING_SPECS[buildings.length - buildings.length + b] || null;
+      out.push({ kind: 'town', id: 'town' + b, name: (sp && sp.name) || ('建筑' + (b + 1)),
+                 desc: (sp && sp.desc) || '', cost: (sp && sp.cost) || { wood: 0, plastic: 0, metal: 0 },
+                 model: buildings[b] });
+    }
+    return out;
+  }
+  /** Refund half the cost (rounded down) and remove the structure. */
+  function demolishPart(part) {
+    if (!part) return false;
+    var refund = {
+      wood: Math.floor((part.cost.wood || 0) * 0.5),
+      plastic: Math.floor((part.cost.plastic || 0) * 0.5),
+      metal: Math.floor((part.cost.metal || 0) * 0.5)
+    };
+    res.wood += refund.wood; res.plastic += refund.plastic; res.metal += refund.metal;
+    if (part.model) {
+      if (part.model.parent) part.model.parent.remove(part.model);
+      part.model.visible = false;
+    }
+    if (part.kind === 'survival') {
+      var idx = survival.indexOf(part.id);
+      if (idx >= 0) { survival.splice(idx, 1); survivalModels.splice(idx, 1); }
+      // Anything that depended on it becomes buildable again, which is correct.
+    } else {
+      var bi = buildings.indexOf(part.model);
+      if (bi >= 0) buildings.splice(bi, 1);
+    }
+    var back = [];
+    if (refund.wood) back.push('木' + refund.wood);
+    if (refund.plastic) back.push('塑' + refund.plastic);
+    if (refund.metal) back.push('铁' + refund.metal);
+    addFT('拆除 ' + part.name + ' · 返还 ' + (back.join(' ') || '无'), hero.x, hero.z, '#ffd166', 1.8);
+    blip(320, 0.25, 'triangle', 0.05, 180);
+    return true;
+  }
+  function openManage() { if (!manageOpen) { manageOpen = true; manageSel = 0; blip(560, 0.1, 'sine', 0.04, 720); } }
+  function closeManage() { manageOpen = false; manageRects = null; }
   var magnet = 0, tradeBonus = 0, shieldBonus = 0;
   /* The build choice: two blueprints on offer, the player picks one. */
   var buildOffer = null, buildOfferT = 0, offerCooldown = 6, buildSel = 0, buildCardRects = null;
@@ -4801,39 +5109,47 @@
   }
   try { best = Number(window.localStorage.getItem('dsh-game-studio:drift-town:best')) || 0; } catch (e) { best = 0; }
 
-  function randomSea(minFromHero) {
-    for (var tries = 0; tries < 400; tries++) {
-      var a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * (HALF - 3);
-      var p = { x: Math.cos(a) * r, z: Math.sin(a) * r };
+  /** Spawn a point in the open sea within `radius` of the raft. The world is
+   *  endless, so "near the raft" is the only meaningful frame of reference. */
+  function seaPointNear(cx, cz, minFromHero, maxR) {
+    for (var tries = 0; tries < 300; tries++) {
+      var a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * maxR;
+      var p = { x: cx + Math.cos(a) * r, z: cz + Math.sin(a) * r };
       if (Math.hypot(p.x - hero.x, p.z - hero.z) < minFromHero) continue;
-      if (groundAt(p.x, p.z) > 0) continue; // garbage floats and sharks swim, both in open water
+      if (groundAt(p.x, p.z) > 0) continue;
       return p;
     }
     return null;
   }
+  function randomSea(minFromHero) { return seaPointNear(hero.x, hero.z, minFromHero, 24); }
   /** Ordinary sea, kept out of the patrolled zone so safe loot always exists. */
   function randomSeaSafe(minFromHero) {
-    for (var tries = 0; tries < 500; tries++) {
-      var a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * (HALF - 3);
-      var p = { x: Math.cos(a) * r, z: Math.sin(a) * r };
-      if (Math.hypot(p.x - hero.x, p.z - hero.z) < minFromHero) continue;
-      if (groundAt(p.x, p.z) > 0) continue;
+    for (var tries = 0; tries < 300; tries++) {
+      var p = seaPointNear(hero.x, hero.z, minFromHero, 22);
+      if (!p) continue;
       if (inZone(p.x, p.z)) continue;       // not in the dangerous patch
       return p;
     }
     return randomSea(minFromHero);
   }
   /** The deep-water zone: a moving patch of sea where the best loot drifts,
-   *  patrolled by a shark. Risk for reward. */
-  var zone = { x: 0, z: 0, r: 5.5, vx: 0.3, vz: 0.2, a: 0 };
+   *  patrolled by a shark. Risk for reward. It wanders near the raft so it is
+   *  always findable, and drifts forever (no world edge to bounce off). */
+  var zone = { x: 12, z: 8, r: 5.5, vx: 0.3, vz: 0.2, a: 0 };
   function inZone(x, z) { return Math.hypot(x - zone.x, z - zone.z) < zone.r; }
   function moveZone(dt) {
     zone.a += dt;
     zone.x += zone.vx * dt;
     zone.z += zone.vz * dt;
-    var lim = HALF - zone.r - 2;
-    if (zone.x > lim || zone.x < -lim) { zone.vx *= -1; zone.x = clamp(zone.x, -lim, lim); }
-    if (zone.z > lim || zone.z < -lim) { zone.vz *= -1; zone.z = clamp(zone.z, -lim, lim); }
+    // Keep the patch drifting around the raft instead of wandering away.
+    var dx = zone.x - hero.x, dz = zone.z - hero.z, d = Math.hypot(dx, dz);
+    if (d > 34) { zone.vx = -dx / d * 0.35; zone.vz = -dz / d * 0.35; }
+    else if (d > 22 && Math.random() < dt * 0.6) {
+      zone.vx = (Math.random() - 0.5) * 0.6;
+      zone.vz = (Math.random() - 0.5) * 0.6;
+    }
+    if (Math.abs(zone.vx) < 0.12 && Math.random() < dt) zone.vx = (Math.random() < 0.5 ? -1 : 1) * 0.3;
+    if (Math.abs(zone.vz) < 0.12 && Math.random() < dt) zone.vz = (Math.random() < 0.5 ? -1 : 1) * 0.3;
   }
   /** Keep the surface marker on the zone and give it a slow breathing pulse. */
   function moveZoneTracking(t) {
@@ -4851,7 +5167,7 @@
     for (var tries = 0; tries < 40; tries++) {
       var a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * zone.r * 0.85;
       var x = zone.x + Math.cos(a) * r, z = zone.z + Math.sin(a) * r;
-      if (Math.hypot(x, z) < HALF - 2 && groundAt(x, z) <= 0) return { x: x, z: z };
+      if (groundAt(x, z) <= 0) return { x: x, z: z };
     }
     return null;
   }
@@ -4923,8 +5239,11 @@
   }
   function stepCost(step) {
     var c = SURV[step.id];
-    return c && typeof c === 'object' ? { wood: c.wood || 0, plastic: c.plastic || 0, metal: c.metal || 0 }
-      : { wood: 0, plastic: 0, metal: 0 };
+    if (!c || typeof c !== 'object') return { wood: 0, plastic: 0, metal: 0 };
+    // 铁匠波 aboard: everything costs 20% less (rounded down, min 1 if it was >0).
+    var k = 1 - buildDiscount;
+    function cut(v) { var n = Math.floor((v || 0) * k); return (v || 0) > 0 ? Math.max(1, n) : 0; }
+    return { wood: cut(c.wood), plastic: cut(c.plastic), metal: cut(c.metal) };
   }
   function canAffordCost(cost) { return res.wood >= cost.wood && res.plastic >= cost.plastic && res.metal >= cost.metal; }
   function costWords(cost) {
@@ -5009,7 +5328,6 @@
       var a = Math.random() * Math.PI * 2;
       var r = 3.2 + Math.random() * 6;
       var x = hero.x + Math.cos(a) * r, z = hero.z + Math.sin(a) * r;
-      if (Math.hypot(x, z) > HALF - 3) continue;
       if (groundAt(x, z) > 0) continue;
       return { x: x, z: z };
     }
@@ -5160,9 +5478,13 @@
     food = 100; maxFood = 100; rainClock = 0; purifyClock = 0; hungerClock = 0;
     starveT = 0; foodDropT = 0; selfSustainT = 0; townReady = false; townReadyBanner = 0;
     buildOffer = null; buildSel = 0; buildOfferT = 0; offerCooldown = 5;
+    manageOpen = false; manageRects = null; manageSel = 0;
+    castaways.forEach(function (c) { scene.remove(c.node); scene.remove(c.ring); });
+    castaways = []; recruited = [];
+    castawayTimer = 26; buildDiscount = 0; foodPerk = 0; scorePerk = 0; oxygenPerk = 0;
     surgeT = 0; surgeShowT = 0; waterDry = 0; waterDropT = 0; guardT = 0;
-    // Keep the patrolled zone away from where the raft starts.
-    var zAng = Math.random() * Math.PI * 2, zDist = HALF * 0.5;
+    // Keep the patrolled zone a short sail away from where the raft starts.
+    var zAng = Math.random() * Math.PI * 2, zDist = 14 + Math.random() * 6;
     zone.x = Math.cos(zAng) * zDist; zone.z = Math.sin(zAng) * zDist;
     hero.x = 0; hero.z = 0; hero.vx = hero.vz = 0; hero.dashT = 0; hero.dashCd = 0;
     ensureMusic();
@@ -5206,6 +5528,8 @@
       return;
     }
     if (event.code === 'KeyB' && phase === 'playing' && !paused) { openBuildMenu(); event.preventDefault(); return; }
+    if (event.code === 'KeyV' && phase === 'playing' && !paused && !manageOpen) { openManage(); event.preventDefault(); return; }
+    if (event.code === 'Escape' && manageOpen) { closeManage(); event.preventDefault(); return; }
     // While a blueprint is on offer the run pauses and ← / → / Enter pick one.
     if (buildOffer) {
       if (event.code === 'ArrowLeft' || event.code === 'KeyA') { buildSel = Math.max(0, buildSel - 1); event.preventDefault(); return; }
@@ -5231,7 +5555,34 @@
       return;
     }
     if (phase !== 'playing') { if (canRestart()) start(); return; }
-    // Dive entry button (only once the raft is self-sustaining).
+    // Ship management panel: demolish buttons, or tap outside to close.
+    if (manageOpen) {
+      if (manageRects) {
+        for (var mr = 0; mr < manageRects.length; mr++) {
+          var mrc = manageRects[mr];
+          if (event.clientX >= mrc.x && event.clientX <= mrc.x + mrc.w
+              && event.clientY >= mrc.y && event.clientY <= mrc.y + mrc.h) {
+            demolishPart(mrc.part);
+            return;
+          }
+        }
+      }
+      closeManage();
+      return;
+    }
+    // Ship management button.
+    if (manageBtnRect) {
+      var smx = event.clientX - manageBtnRect.x, smy = event.clientY - manageBtnRect.y;
+      if (smx * smx + smy * smy <= manageBtnRect.r * manageBtnRect.r) { openManage(); return; }
+    }
+    // Recruit the drifter in reach.
+    if (recruitRect
+        && event.clientX >= recruitRect.x && event.clientX <= recruitRect.x + recruitRect.w
+        && event.clientY >= recruitRect.y && event.clientY <= recruitRect.y + recruitRect.h) {
+      tryRecruit();
+      return;
+    }
+    // Dive entry button.
     if (diveBtnRect) {
       var dbx2 = event.clientX - diveBtnRect.x, dby2 = event.clientY - diveBtnRect.y;
       if (dbx2 * dbx2 + dby2 * dby2 <= diveBtnRect.r * diveBtnRect.r) { startDive(); return; }
@@ -5371,8 +5722,9 @@
         hungerClock += dt;
         if (hungerClock >= SURV.fishEvery) {
           hungerClock = 0;
-          food = Math.min(maxFood, food + SURV.fishAmount);
-          addFT('鱼篓 +' + SURV.fishAmount, hero.x, hero.z + 1, '#c8f0b0', 1);
+          var fishGain = Math.round(SURV.fishAmount * (1 + foodPerk));
+          food = Math.min(maxFood, food + fishGain);
+          addFT('鱼篓 +' + fishGain, hero.x, hero.z + 1, '#c8f0b0', 1);
         }
         foodDropT += dt;
         if (foodDropT > SURV.foodDropEvery && food < maxFood * 0.7) { foodDropT = 0; addFoodDrop(); }
@@ -5549,7 +5901,7 @@
             addFT(p.name + ' ' + (resTag.join(' ') || ''), p.x, p.z, p.glowColor, 1.1);
           }
           lastPick = elapsed;
-          score += gained + (p.special ? 0 : tradeBonus);
+          score += gained + (p.special ? 0 : tradeBonus) + (p.special ? 0 : scorePerk);
           if (gained === 1) addFT('+1', p.x, p.z, '#bff0ff', 0.8);
           burst(p.x, floatY(p.x, p.z) + R.pickupSize * 0.6, p.z);
           post({ type: 'state', phase: phase, score: score });
@@ -5669,6 +6021,15 @@
       fh.node.rotation.z = Math.sin(t * 6 + fh.a) * 0.22; // tail flick
     }
     moveZoneTracking(t);
+    // Endless sea: mesh the chunks around the raft, drop the ones behind, and
+    // keep the wave plane and sea floor centred on the camera so there is no edge.
+    updateCastaways(dt, t);
+    chunkTimer -= dt;
+    if (chunkTimer <= 0) { chunkTimer = 0.25; updateChunks(hero.x, hero.z); }
+    water.position.x = hero.x;
+    water.position.z = hero.z;
+    floor.position.x = hero.x;
+    floor.position.z = hero.z;
     // Rolling waves: displace the water plane's vertices every frame.
     var wp = waterGeo.attributes.position;
     for (var v = 0; v < wp.count; v++) {
@@ -5838,6 +6199,11 @@
       survival: survival.slice(), next: (nextSurvivalStep() || {}).id || null,
       offerable: offerableSteps().map(function (s) { return s.id; }),
       buildBtnVisible: !!buildBtnRect, buildOpen: buildOpen,
+      diveBtnVisible: !!diveBtnRect, manageBtnVisible: !!manageBtnRect, manageOpen: manageOpen,
+      shipParts: shipParts().map(function (p) { return p.name; }),
+      castaways: castaways.map(function (c) { return { name: c.def.name, perk: c.def.perk }; }),
+      recruited: recruited.map(function (r) { return r.name; }),
+      recruitAvailable: !!inRecruitRange(),
       canOpenBuild: typeof openBuildMenu === 'function',
       selfSustain: Math.round(selfSustainT * 10) / 10, townReady: townReady, buildOpen: buildOpen,
       diving: !!(dive && dive.active()), divePhase: dive && dive.phase ? dive.phase() : null,
@@ -5851,7 +6217,8 @@
       hero: { x: Math.round(hero.x * 100) / 100, y: Math.round(hero.z * 100) / 100 },
       pickups: pickups.map(function (p) { return { x: p.x, y: p.z, kind: p.name }; }),
       enemies: enemies.map(function (e) { return { x: Math.round(e.x * 100) / 100, y: Math.round(e.z * 100) / 100 }; }),
-      fps: Math.round(fps), renderer: 'webgl', heroMode: heroMode, world: { size: N }, heroOnScreen: heroOnScreen()
+      fps: Math.round(fps), renderer: 'webgl', heroMode: heroMode,
+      world: { size: 'infinite', chunk: CHUNK, chunksLoaded: Object.keys(chunks).length }, heroOnScreen: heroOnScreen()
     };
   };
 
@@ -5905,4 +6272,8 @@
   };
   window.__debugOpenBuild = function () { openBuildMenu(); return buildOpen; };
   window.__debugBuild = function (id) { return pickSurvival(id); };
+  window.__debugManage = function () { openManage(); return manageOpen; };
+  window.__debugParts = function () { return shipParts().map(function (p) { return p.name; }); };
+  window.__debugSpawnCastaway = function () { spawnCastaway(); return castaways.length; };
+  window.__debugRecruit = function () { return tryRecruit() ? true : false; };
 })();
