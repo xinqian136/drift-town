@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#04121e">
+<title>潜水模块 · Canvas 测试页（微信兼容验证）</title>
+<!--
+  =============================================================================
+  这是**测试页**，不是模块本体。
+  =============================================================================
+  模块本体 `dive-canvas.js` 零 DOM；本页的职责只是扮演"主游戏"这个宿主：
+    - 提供一个 canvas
+    - 把 pointerdown / pointermove / pointerup / keydown / keyup 转发给模块
+    - 每帧调用 update(dt) + draw()
+  换句话说：本页里出现的 DOM 代码，就是**主游戏接入时需要写的那几行**。
+  双击本文件即可在浏览器打开；手机竖屏/横屏都会自动重排。
+
+  地址参数：
+    ?selftest=1   页头显示 selfTest() 结果（标题变 SELFTEST_PASS / FAIL）
+    ?autoplay=1   让内置 AI 自己玩（不用手按，便于长时间观察稳定性）
+    ?bench=1      跑 24 局 x 3 策略的对局统计并打印（验证数值没被改坏）
+  =============================================================================
+-->
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden;
+    background: #04121e; color: #dff2ff;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none; overscroll-behavior: none;
+  }
+  #cv { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+  /* 测试页自己的小抄（真实宿主里不需要这个）。
+     注意：这个 badge 是测试页的 DOM 覆盖层，会挡住模块的氧气条右上角读数，
+     所以默认放在**底部**；只有 selfTest/bench 时才挪到顶部小字。 */
+  #hint {
+    position: fixed; left: 10px; bottom: 10px; right: 10px;
+    font-size: 11px; line-height: 1.5; color: rgba(190, 230, 255, .55);
+    pointer-events: none; text-align: center;
+  }
+  #badge {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 40px; z-index: 9;
+    font-size: 11px; font-weight: 700; letter-spacing: .04em;
+    padding: 4px 8px; border-radius: 6px;
+    background: rgba(12, 44, 66, .78); border: 1px solid rgba(190, 230, 255, .35);
+    color: #bfe6ff; pointer-events: none; white-space: pre; max-width: 92vw;
+    text-align: center;
+  }
+  #badge.pass { background: rgba(20, 80, 60, .85); border-color: rgba(140, 255, 190, .6); color: #c8ffd8; }
+  #badge.fail { background: rgba(90, 20, 20, .88); border-color: rgba(255, 150, 130, .7); color: #ffc8c0; }
+  /* selfTest / bench 模式下不玩，只展示结果，那时 badge 放顶部也不碍事 */
+  body.mode-report #badge { top: 8px; bottom: auto; }
+  #out {
+    position: fixed; inset: 0; z-index: 20; display: none;
+    margin: 0; padding: 12px; overflow: auto;
+    font: 11px/1.45 ui-monospace, Consolas, monospace;
+    color: #cfe; background: #02101a;
+  }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="badge">模块加载中…</div>
+<div id="hint">左手按住屏幕游动 · 右下三个圆钮：采集 / 上浮 / 下潜 · 键盘：方向键 + 空格采集 + Q 上浮 + E 下潜</div>
+<pre id="out"></pre>
+
+<script src="dive-canvas.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var cv = document.getElementById('cv');
+  var ctx = cv.getContext('2d');
+  var badge = document.getElementById('badge');
+  var out = document.getElementById('out');
+  var hint = document.getElementById('hint');
+
+  var params = new URLSearchParams(location.search);
+  var wantSelfTest = params.has('selftest');
+  var wantAutoplay = params.has('autoplay');
+  var wantBench = params.has('bench');
+
+  var dpr = Math.min(2, window.devicePixelRatio || 1);
+  var W = window.innerWidth || 390;
+  var H = window.innerHeight || 844;
+
+  function fitCanvas() {
+    W = window.innerWidth || 390;
+    H = window.innerHeight || 844;
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.round(W * dpr);
+    cv.height = Math.round(H * dpr);
+    // 模块内部自己 setTransform(DPR)，所以 CSS 尺寸要按 CSS 像素给
+    cv.style.width = W + 'px';
+    cv.style.height = H + 'px';
+  }
+  fitCanvas();
+
+  /* ===========================================================================
+   * ① 创建实例：把 canvas 的 2D context 交给模块
+   *    主游戏里可以直接传它已有的 hudCtx（模块每次 draw 会自己重设 transform）
+   * ======================================================================== */
+  var dive = DiveGame.create({
+    canvas: cv,
+    ctx: ctx,
+    width: W,
+    height: H,
+    dpr: dpr,
+    seed: 20261122,
+    autoStart: true,
+    title: '潜水 · Canvas 模块',
+    subtitle: '微信小游戏兼容验证 · 零 DOM · 纯 Canvas 2D',
+    onEvent: function (name, payload) {
+      if (name === 'settled' || name === 'blackout') {
+        var loot = dive.harvest();       // ② 结算后取收获交给主游戏
+        if (loot) {
+          badge.textContent = (loot.lost ? '失败 · 带回 0' : '成功 · 价值 ' + loot.value)
+            + ' · 共 ' + loot.items.length + ' 件';
+          badge.className = loot.lost ? 'fail' : 'pass';
+        }
+      }
+    }
+  });
+
+  /* ===========================================================================
+   * ③ 事件转发（这几行就是主游戏要抄的部分）
+   * ======================================================================== */
+  cv.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    try { cv.setPointerCapture(e.pointerId); } catch (err) { /* 老浏览器忽略 */ }
+    var consumed = dive.pointerDown(e.pointerId, e.clientX, e.clientY);
+    // consumed = true 表示这次触摸被按钮/开始一局消费了，宿主不要再拿它做别的事
+    if (!consumed) { /* 这里主游戏可以接管（例如把它当成"水面拖动"） */ }
+  }, { passive: false });
+
+  cv.addEventListener('pointermove', function (e) {
+    if (dive.pointerMove(e.pointerId, e.clientX, e.clientY)) e.preventDefault();
+  }, { passive: false });
+
+  cv.addEventListener('pointerup', function (e) { dive.pointerUp(e.pointerId); });
+  cv.addEventListener('pointercancel', function (e) { dive.pointerUp(e.pointerId); });
+
+  /* 键盘：两种转发方式都支持，这里演示 keyDown / keyUp（最省事） */
+  var held = {};
+  window.addEventListener('keydown', function (e) {
+    var k = e.key;
+    if (!k) return;
+    if (k === ' ') e.preventDefault();
+    if (!held[k]) { held[k] = true; dive.keyDown(k); }
+    // 也可以整体转发：dive.setKeys(held)
+  });
+  window.addEventListener('keyup', function (e) {
+    var k = e.key;
+    if (!k) return;
+    held[k] = false;
+    dive.keyUp(k);
+  });
+  window.addEventListener('blur', function () {
+    held = {};
+    dive.clearInput();
+  });
+
+  window.addEventListener('resize', function () {
+    fitCanvas();
+    dive.resize(W, H, dpr);
+  });
+
+  /* ===========================================================================
+   * ④ 主循环
+   * ======================================================================== */
+  var last = 0;
+  var autoT = 0;
+  function frame(t) {
+    var dt = last ? (t - last) / 1000 : 1 / 60;
+    last = t;
+    if (dt > 0.05) dt = 0.05;          // 切标签页回来不要一帧掉光氧气
+
+    if (wantAutoplay) {
+      autoT += dt;
+      if (autoT > 0.1) { autoT = 0; dive.autoplay(); }   // AI 约 10Hz 决策
+    }
+
+    dive.update(dt);
+    dive.draw();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  /* ===========================================================================
+   * ⑤ selfTest（模块自带，不依赖本页）
+   * ======================================================================== */
+  var st = DiveGame.selfTest();
+  var stText = 'selfTest: ' + (st.passed ? 'PASS' : 'FAIL')
+    + ' · ' + (st.checkCount - st.failedCount) + '/' + st.checkCount + ' 项通过';
+  if (!badge.textContent || badge.textContent === '模块加载中…') {
+    badge.textContent = stText;
+    badge.className = st.passed ? 'pass' : 'fail';
+  }
+  if (wantSelfTest || wantBench) document.body.className = 'mode-report';
+  document.title = '潜水模块测试 · ' + (st.passed ? 'SELFTEST_PASS' : 'SELFTEST_FAIL');
+  console.log(stText, st);
+
+  if (wantSelfTest) {
+    out.style.display = 'block';
+    out.textContent = 'selfTest()\n'
+      + '  passed      : ' + st.passed + '\n'
+      + '  checkCount  : ' + st.checkCount + '\n'
+      + '  failedCount : ' + st.failedCount + '\n'
+      + '  sourceLength: ' + st.sourceLength + ' 字符（用于无 DOM 自证）\n'
+      + '  problems    : ' + (st.problems.length ? JSON.stringify(st.problems, null, 2) : '[]') + '\n\n'
+      + '无 DOM 自证（模块内扫描自身源码，以下词一个都不应出现）：\n'
+      + '  document. / createElement / .style / querySelector / getElementById / addEventListener / innerWidth\n\n'
+      + '常量快照：\n' + JSON.stringify(DiveGame.constants(), null, 2);
+  }
+
+  /* ===========================================================================
+   * ⑥ bench：跑批量对局（验证数值没被改坏）
+   * ======================================================================== */
+  if (wantBench) {
+    var policies = {
+      safe:     { targetLayer: 3, turnBackAt: 2.6,  minSlack: 8.0, grabRadius: 1.0 },
+      balanced: { targetLayer: 3, turnBackAt: 1.35, minSlack: 3.0, grabRadius: 1.0 },
+      greedy:   { targetLayer: 3, turnBackAt: 0.30, minSlack: 0.4, grabRadius: 1.0 }
+    };
+    var lines = ['=== 24 局/策略（seed = 4000 + i*7919，与原型 batch 口径一致）===', ''];
+    Object.keys(policies).forEach(function (name) {
+      var lost = 0, sum = 0, bags = 0, el = 0, epT = 0, causes = {};
+      for (var i = 0; i < 24; i++) {
+        var r = dive.headlessRun(policies[name], 1 / 60, 4000 + i * 7919);
+        if (r.lost) lost++;
+        sum += r.banked; bags += r.bagCount; el += r.elapsed; epT += r.episodesWithTarget || 0;
+        var dc = r.deathCause || {};
+        Object.keys(dc).forEach(function (k) { causes[k] = (causes[k] || 0) + dc[k]; });
+      }
+      lines.push(name);
+      lines.push('  死亡率 ' + (lost / 24 * 100).toFixed(1) + '%'
+        + ' · 平均带回 ' + (sum / 24).toFixed(1)
+        + ' · 平均件数 ' + (bags / 24).toFixed(1)
+        + ' · 平均时长 ' + (el / 24).toFixed(1) + 's'
+        + ' · 每局纠结段 ' + (epT / 24).toFixed(1));
+      lines.push('  死因 ' + JSON.stringify(causes));
+      lines.push('');
+    });
+    lines.push('期望形状：保守 < 平衡 > 贪婪（风险—回报曲线单峰 = 存在最优的贪）');
+    out.style.display = 'block';
+    out.textContent = lines.join('\n') + '\n\n' + (out.textContent || '');
+    console.log(lines.join('\n'));
+  }
+
+  if (hint && (wantSelfTest || wantBench)) hint.style.opacity = '0';
+})();
+</script>
+</body>
+</html>

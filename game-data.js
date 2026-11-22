@@ -1,0 +1,681 @@
+/* 漂流小镇 · 数据表接入层 game-data.js
+ * ---------------------------------------------------------------------------
+ * 一个文件、零依赖，浏览器与微信小游戏通用：把 data/ 下的四张表
+ * (resources / buildings / recipes / npcs) 变成游戏能读的接口，并负责
+ * 「数据表 -> game.js 常量」的转换。
+ *
+ * 微信小游戏既不能联网请求本地文件，也没有文件系统，所以整张表在编译期就
+ * 内联在本文件的 EMBEDDED 常量里（由 build-inline.js 生成，勿手改）。
+ * 接后台热更新时，Web 端把拉到的 JSON 交给 init()/reload() 覆盖即可。
+ *
+ * 加载即可用（EMBEDDED 自带数据，不调用 init 也能查询）：
+ *   var GD = window.GameData;
+ *   GD.init();                              // 可选：显式初始化并拿到校验结果
+ *   var kinds = GD.pickupKindsForGame();    // 对齐 game.js 的 PICKUP_KINDS
+ *   var specs = GD.buildingSpecsForGame();  // 对齐 game.js 的 BUILDING_SPECS
+ *
+ * 硬约束：本文件不加载 Node 模块、不读写文件、不发网络请求、不操作 DOM
+ * ——微信小游戏里这四样都不存在。
+ * ---------------------------------------------------------------------------
+ */
+(function (root, factory) {
+  'use strict';
+  var api = factory();
+  if (root) root.GameData = api;
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+})(typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : this), function () {
+  'use strict';
+
+  var MODULE_VERSION = '1.0.0';
+
+  /* === EMBEDDED:BEGIN (由 build-inline.js 生成，勿手改) === */
+  var EMBEDDED = {
+    resources: {"schema":"drift-town.resources","version":1,"updatedAt":"2026-11-22","title":"资源与海洋图鉴表","summary":"游戏与运营后台共用的唯一资源真相来源。海面可打捞物、潜水食材、沉城残骸与人类装备都在这一张表里。","sourceOfTruth":{"surfacePickups":"game.js · PICKUP_KINDS（7 种垃圾的 name / res / value / glow）","surfaceSpawnWeights":"game.js · addPickup() 里 var roll = Math.random() * 12 的概率区间宽度","craftRecipes":"docs/GAME_DESIGN.md · 6.2 关键装备解锁链","tiers":"docs/GAME_DESIGN.md · 6.1 四层稀有度与海域绑定"},"notes":["本文件是合法严格 JSON，不含注释；所有说明放在 notes / 字段旁边的 text 里。","spawnWeight 的口径：海面打捞物的 7 个权重之和恰为 12，等价于 game.js 中 Math.random()*12 的区间宽度。改这些数字即可在不发版的情况下调整海面垃圾的比例。","yield 只使用 enums.yieldKeys 中列出的材料键；目前游戏内经济只有 wood / plastic / metal 三条线，food 是可直接入口的食材，salvage（稀有残件）是寿司店造价里「稀有材料」的落点，游戏侧接入前会忽略该键。","source 在文档给定的 surface|dive|npc 之外扩展了一个 craft：由玩家用其它材料制作出来的装备，没有自然产出地。","gameBinding 只对已经在 game.js 里实现的 7 种垃圾存在，用来把数据表锚回代码；其余条目是设计落地，游戏尚未实现，故无此字段。","usage[] 已拆成 usedBy{buildings,recipes,npcs} 三个分类桶——早期把建筑/菜谱/NPC 三种 id 混在一个数组里会让后台无法按类型解析引用，这是有意做的结构修正。","usedBy 是从 buildings.cost / recipes.ingredients / tools.craftCost / npc.recruitCondition 反向推导出来的只读索引，不是手写数据——由 tools/derive-usedby 一步生成，改任何一张表后重跑即可，避免索引与实际数据漂移。","materials 是「垃圾 → 材料 → 建筑」两跳关系的显式中间层。7 种海面垃圾的 usedBy 为空是正确的而非缺数据：它们先被拆解成 wood/plastic/metal，材料才进入建筑造价。后台用 materials 把两跳串起来展示，避免把中间层误读成漏填。"],"enums":{"category":{"material":"建材，拆解后进入木 / 塑 / 铁三线","food":"食材，用于寿司店菜谱","artifact":"遗物，图鉴与叙事收集物","tool":"装备，由玩家制作，不参与拆解"},"tier":{"1":"近岸漂浮物 · 起始海域","2":"洋流带垃圾 · 中距离海域","3":"沉城残骸 · 需潜水","4":"深渊生物 · 深水区"},"source":{"surface":"海面打捞","dive":"潜水采集","npc":"NPC / 市场购入","craft":"玩家制作"},"yieldKeys":["wood","plastic","metal","food","salvage"],"unlockConditionType":{"firstPickup":"首次获得即解锁图鉴","buildBuilding":"建成某座建筑后进入刷新池","recruitNpc":"招募某位 NPC 后进入刷新池","progress":"达到某进度门槛后进入刷新池","craftKnown":"拥有对应图纸后可在工作台制作"},"usedByKeys":{"buildings":"直接作为造价材料的建筑 id","recipes":"直接作为食材的菜谱 id","npcs":"与该资源相关的 NPC id（招募条件或特长所需装备）","tools":"与该资源存在工具依赖的装备 id（制作消耗或被它采集/解锁）"}},"items":[{"id":"plasticBottle","name":"塑料瓶","icon":"BOTTLE_BOXES","color":"#8ee3b8","category":"material","tier":1,"source":"surface","yield":{"plastic":1},"spawnWeight":2.6,"unlockCondition":{"type":"firstPickup","value":null,"text":"首次打捞时解锁图鉴"},"codexText":"大潮之前它装水，大潮之后它常被拆去盖别人的屋顶。塑料永存，所以它总还有用。","gameBinding":{"pickupKindIndex":0,"scoreValue":1,"glow":"#8ee3b8"},"basePool":true,"usedBy":{}},{"id":"sodaCan","name":"易拉罐","icon":"CAN_BOXES","color":"#ff9a96","category":"material","tier":1,"source":"surface","yield":{"metal":1},"spawnWeight":2.6,"unlockCondition":{"type":"firstPickup","value":null,"text":"首次打捞时解锁图鉴"},"codexText":"被压扁的铝壳，煮过盐水的海面替它抛了光。敲平后能补船底的洞。","gameBinding":{"pickupKindIndex":1,"scoreValue":1,"glow":"#ff9a96"},"basePool":true,"usedBy":{}},{"id":"rubberDuck","name":"橡皮鸭","icon":"DUCK_BOXES","color":"#ffe066","category":"material","tier":1,"source":"surface","yield":{"plastic":1},"spawnWeight":1.6,"unlockCondition":{"type":"firstPickup","value":null,"text":"首次打捞时解锁图鉴"},"codexText":"它已经在海上漂了四十年，仍然看着水面。有人给它起了名字，然后拆了做鞋底。","gameBinding":{"pickupKindIndex":2,"scoreValue":1,"glow":"#ffe066"},"basePool":true,"usedBy":{}},{"id":"woodenCrate","name":"木箱","icon":"CRATE_BOXES","color":"#ffd166","category":"material","tier":1,"source":"surface","yield":{"wood":2},"spawnWeight":1.8,"unlockCondition":{"type":"firstPickup","value":null,"text":"首次打捞时解锁图鉴"},"codexText":"钉子是锈的，木板还是直的。拆开它，是小镇里最常听见的响声。","gameBinding":{"pickupKindIndex":3,"scoreValue":2,"glow":"#ffd166"},"basePool":true,"usedBy":{}},{"id":"barrel","name":"木桶","icon":"BARREL_BOXES","color":"#e0b072","category":"material","tier":2,"source":"surface","yield":{"wood":1,"metal":1},"spawnWeight":1.2,"unlockCondition":{"type":"firstPickup","value":null,"text":"首次打捞时解锁图鉴"},"codexText":"箍还在，说明它装过什么要紧的东西。现在它装雨水。","gameBinding":{"pickupKindIndex":4,"scoreValue":2,"glow":"#e0b072"},"basePool":true,"usedBy":{}},{"id":"tire","name":"轮胎","icon":"TIRE_BOXES","color":"#aab4c0","category":"material","tier":2,"source":"surface","yield":{"plastic":1,"metal":1},"spawnWeight":1,"unlockCondition":{"type":"firstPickup","value":null,"text":"首次打捞时解锁图鉴"},"codexText":"陆地上跑的东西留下的最后一件遗物。垫在浮岛下面，比什么都耐磨。","gameBinding":{"pickupKindIndex":5,"scoreValue":2,"glow":"#aab4c0"},"basePool":true,"usedBy":{}},{"id":"fishingNet","name":"渔网","icon":"NET_BOXES","color":"#7fd8b4","category":"material","tier":2,"source":"surface","yield":{"wood":1,"plastic":2},"spawnWeight":1.2,"unlockCondition":{"type":"firstPickup","value":null,"text":"首次打捞时解锁图鉴"},"codexText":"破洞的地方被补过三次，补网的人已经不在了。它还在捞东西。","gameBinding":{"pickupKindIndex":6,"scoreValue":3,"glow":"#7fd8b4"},"basePool":true,"usedBy":{}},{"id":"brokenBuoy","name":"破损浮标","icon":"PROC:buoy","color":"#7fc7e8","category":"material","tier":2,"source":"surface","yield":{"plastic":2,"metal":1},"spawnWeight":0.8,"unlockCondition":{"type":"buildBuilding","value":"workbench","text":"建成工作台后进入刷新池"},"codexText":"曾经标出一片安全水域。它现在标出的是它自己沉下去的位置。","basePool":false,"usedBy":{}},{"id":"metalFitting","name":"金属构件","icon":"PROC:beam","color":"#c8d0d8","category":"material","tier":3,"source":"dive","yield":{"metal":3},"spawnWeight":0.6,"unlockCondition":{"type":"progress","value":"dive","text":"潜水玩法开放后可采集"},"codexText":"沉城楼骨的断口，断面还是亮的。它比海面漂来的一切都结实。","usedBy":{}},{"id":"ceramicShard","name":"陶瓷残片","icon":"PROC:shard","color":"#e8dcc0","category":"material","tier":3,"source":"dive","yield":{"salvage":1},"spawnWeight":0.5,"unlockCondition":{"type":"progress","value":"dive","text":"潜水玩法开放后可采集"},"codexText":"釉色还留着一点蓝。烧它的人相信陆地上会有明天。","usedBy":{}},{"id":"brassGear","name":"黄铜齿轮","icon":"PROC:gear","color":"#d9b063","category":"material","tier":3,"source":"dive","yield":{"metal":2,"salvage":1},"spawnWeight":0.35,"unlockCondition":{"type":"progress","value":"dive","text":"潜水玩法开放后可采集"},"codexText":"齿没崩。转起来依旧咬合，只是带不动任何东西了。","usedBy":{}},{"id":"glassLens","name":"玻璃透镜","icon":"PROC:lens","color":"#9fe0e8","category":"material","tier":3,"source":"dive","yield":{"plastic":2,"salvage":1},"spawnWeight":0.3,"unlockCondition":{"type":"progress","value":"dive","text":"潜水玩法开放后可采集"},"codexText":"对着阳光还能聚出一个亮点。潜水的人用它换过一整夜的住宿。","usedBy":{}},{"id":"relic","name":"沉城文物","icon":"PROC:relic","color":"#c9a0e8","category":"artifact","tier":3,"source":"dive","yield":{"salvage":2},"spawnWeight":0.25,"unlockCondition":{"type":"progress","value":"dive","text":"潜水玩法开放后可采集"},"codexText":"一块刻着字的石板，字被水磨掉了一半。老人说那是地址。","usedBy":{}},{"id":"inscribedJar","name":"刻纹陶罐","icon":"PROC:jar","color":"#d8b48c","category":"artifact","tier":3,"source":"dive","yield":{"salvage":1},"spawnWeight":0.2,"unlockCondition":{"type":"recruitNpc","value":"namelessOld","text":"招募无名老人后才会指出陶罐的出土地"},"codexText":"罐口封着蜡。里面是空的，但蜡上压了一枚指印。","usedBy":{}},{"id":"seaweed","name":"海藻","icon":"PROC:kelp","color":"#6fbf8f","category":"food","tier":1,"source":"dive","yield":{"food":1},"spawnWeight":2,"unlockCondition":{"type":"progress","value":"dive","text":"潜水玩法开放后可采集"},"codexText":"浅水区最不缺的东西。晒干能存，卷起来能吃，煮汤也还行。","usedBy":{"recipes":["seaweedRoll","kelpSoup","squidGunkan","roeGunkan","deepCrabGunkan"]}},{"id":"clam","name":"贝壳","icon":"PROC:shell","color":"#e8c8b8","category":"food","tier":1,"source":"dive","yield":{"food":2},"spawnWeight":1.5,"unlockCondition":{"type":"progress","value":"dive","text":"潜水玩法开放后可采集"},"codexText":"壳上的纹路一年一道。数到第七道就够煮一碗汤了。","usedBy":{"recipes":["clamSashimi"]}},{"id":"squid","name":"墨鱼","icon":"PROC:squid","color":"#e8e0f0","category":"food","tier":2,"source":"dive","yield":{"food":2},"spawnWeight":0.9,"unlockCondition":{"type":"progress","value":"dive","text":"潜水玩法开放后可采集"},"codexText":"它看你一眼就喷墨跑了。快的人能吃上，慢的人只能洗网。","usedBy":{"recipes":["grilledSkewer","squidGunkan"]}},{"id":"silverScaleFish","name":"银鳞鱼","icon":"PROC:fishSilver","color":"#cfd8e8","category":"food","tier":3,"source":"dive","yield":{"food":3},"spawnWeight":0.5,"unlockCondition":{"type":"progress","value":"dive","text":"潜水玩法开放后可采集"},"codexText":"中层水域最容易看错的一种鱼——它转身的时候像一片会动的月光。","usedBy":{"recipes":["grilledSkewer","silverScaleNigiri"]}},{"id":"seaUrchin","name":"海胆","icon":"PROC:urchin","color":"#8f6fb0","category":"food","tier":3,"source":"dive","yield":{"food":3},"spawnWeight":0.4,"unlockCondition":{"type":"progress","value":"dive","text":"潜水玩法开放后可采集"},"codexText":"扎手，但值得。撬开的那一刻，壳里是小小一片橙色的日落。","usedBy":{"recipes":["seaUrchinBowl"]}},{"id":"fishRoe","name":"鱼子","icon":"PROC:roe","color":"#f0a860","category":"food","tier":3,"source":"dive","yield":{"food":3},"spawnWeight":0.35,"unlockCondition":{"type":"buildBuilding","value":"sushiRestaurant","text":"寿司店建成后才能分级处理鱼子"},"codexText":"一颗一颗咬破，是咸的响。处理它的人要有耐心。","usedBy":{"recipes":["roeGunkan"]}},{"id":"deepKelp","name":"深海藻","icon":"PROC:kelpDeep","color":"#3f8f7f","category":"food","tier":3,"source":"dive","yield":{"food":2},"spawnWeight":0.6,"unlockCondition":{"type":"progress","value":"dive","text":"潜水玩法开放后可采集"},"codexText":"比浅水海藻更厚、更韧，煮久了会发甜。深水区那片绿是它的。","usedBy":{"recipes":["kelpSoup","deepCrabGunkan"]}},{"id":"deepCrab","name":"深海蟹","icon":"PROC:crab","color":"#d85f5f","category":"food","tier":4,"source":"dive","yield":{"food":5},"spawnWeight":0.3,"unlockCondition":{"type":"progress","value":"tier4","text":"穿潜水服后可下潜 Tier 4"},"codexText":"壳上有寄生的白点，像星星。抓它要快，它夹人比鲨鱼疼。","usedBy":{"recipes":["deepCrabGunkan","abyssPlatter"]}},{"id":"abyssLanternfish","name":"深渊灯笼鱼","icon":"PROC:lanternfish","color":"#7fb0e8","category":"food","tier":4,"source":"dive","yield":{"food":4},"spawnWeight":0.25,"unlockCondition":{"type":"progress","value":"tier4","text":"穿潜水服后可下潜 Tier 4"},"codexText":"它提着灯找人，人提着灯找它。深水里遇到，谁也不该怪谁。","usedBy":{"recipes":["abyssPlatter"]}},{"id":"abyssLobster","name":"深渊龙虾","icon":"PROC:lobster","color":"#e06f8f","category":"food","tier":4,"source":"dive","yield":{"food":6},"spawnWeight":0.15,"unlockCondition":{"type":"progress","value":"tier4","text":"穿潜水服后可下潜 Tier 4"},"codexText":"传说里才有的东西，第一只出水时整条船沉默了三秒。","usedBy":{"recipes":["abyssPlatter"]}},{"id":"rice","name":"米","icon":"PROC:rice","color":"#f0e8d0","category":"food","tier":1,"source":"npc","yield":{"food":1},"spawnWeight":0,"unlockCondition":{"type":"buildBuilding","value":"market","text":"建成市场后可用材料换取"},"codexText":"不从海里来。所以它比任何鱼都贵，也比任何鱼都让人安心。","usedBy":{"recipes":["seaweedRoll","clamSashimi","squidGunkan","silverScaleNigiri","seaUrchinBowl","roeGunkan","abyssPlatter"]}},{"id":"snorkelMask","name":"浮潜镜","icon":"PROC:mask","color":"#7fd8e8","category":"tool","tier":2,"source":"craft","yield":{},"craftCost":{"plastic":4,"metal":1},"spawnWeight":0,"unlockCondition":{"type":"craftKnown","value":"lighthouse","text":"建成灯塔（光学件来源）后可制作"},"codexText":"把海面之下的世界第一次交到人手里。有人说第一次戴它时哭了。","usedBy":{"npcs":["ahai"]}},{"id":"oxygenTank","name":"氧气瓶","icon":"PROC:tank","color":"#e8a860","category":"tool","tier":3,"source":"craft","yield":{},"craftCost":{"metal":5,"wood":3},"spawnWeight":0,"unlockCondition":{"type":"craftKnown","value":"snorkelMask","text":"制作浮潜镜后可制作"},"codexText":"把潜水时长从 60 秒推到 120 秒。多出来的那一分钟，价格贵得离谱。","usedBy":{}},{"id":"diveSuit","name":"潜水服","icon":"PROC:suit","color":"#5f7fa8","category":"tool","tier":4,"source":"craft","yield":{},"craftCost":{"metal":8,"plastic":6},"spawnWeight":0,"unlockCondition":{"type":"craftKnown","value":"oxygenTank","text":"制作氧气瓶后可制作"},"codexText":"缝补出来的，接缝处糊了树脂。它不体面，但它能扛住深水。","usedBy":{}},{"id":"submersible","name":"深潜器","icon":"PROC:sub","color":"#a8b8c8","category":"tool","tier":4,"source":"craft","yield":{},"craftCost":{"metal":12,"salvage":4,"plastic":8},"spawnWeight":0,"unlockCondition":{"type":"craftKnown","value":"diveSuit","text":"消耗全部 Tier 3 材料制造"},"codexText":"用沉城自己的骨头造的东西。它下去的时候，像是回家。","usedBy":{}}],"materials":{"wood":{"id":"wood","label":"木","fromResources":["woodenCrate","barrel","fishingNet"],"usedByBuildings":["workbench","shelter","rainCatcher","fishBasket","scoopNet","purifier","cabin","waterTower","greenhouse","lighthouse","marketStall","windmill","townCenter","house","dock","market","inn","sushiRestaurant"],"usedByTools":["oxygenTank"]},"plastic":{"id":"plastic","label":"塑","fromResources":["plasticBottle","rubberDuck","tire","fishingNet","brokenBuoy","glassLens"],"usedByBuildings":["shelter","rainCatcher","waterTower","greenhouse","lighthouse","marketStall","windmill","townCenter","inn","sushiRestaurant"],"usedByTools":["snorkelMask","diveSuit","submersible"]},"metal":{"id":"metal","label":"铁","fromResources":["sodaCan","barrel","tire","brokenBuoy","metalFitting","brassGear"],"usedByBuildings":["purifier","lighthouse","marketStall","windmill","townCenter","dock","market","sushiRestaurant"],"usedByTools":["snorkelMask","oxygenTank","diveSuit","submersible"]},"food":{"id":"food","label":"食材","fromResources":["seaweed","clam","squid","silverScaleFish","seaUrchin","fishRoe","deepKelp","deepCrab","abyssLanternfish","abyssLobster","rice"],"usedByTools":[]},"salvage":{"id":"salvage","label":"稀有残件","fromResources":["ceramicShard","brassGear","glassLens","relic","inscribedJar"],"usedByBuildings":["sushiRestaurant"],"usedByTools":["submersible"]}}},
+    buildings: {"schema":"drift-town.buildings","version":1,"updatedAt":"2026-11-22","title":"建筑与设施表","summary":"从阶段 0 的工作台到阶段 4 的寿司店，所有可建造物的造价、前置、产出与位置约束。前置链是本表的重点，后台会据此高亮依赖关系。","sourceOfTruth":{"townBuildingsCost":"game.js · BUILDING_SPECS[].cost（6 座城镇建筑，造价不得改动）","townBuildingsPop":"game.js · BUILDING_SPECS[].pop","survivalSteps":"game.js · SURVIVAL_STEPS[] + DEFAULTS.rules.survival.*（workbench/shelter/rainCatcher/fishBasket/scoopNet/purifier 的 needs 与造价）","dependencies":"docs/UNLOCK_CHAIN.md · 二、硬依赖清单（不可并行）"},"notes":["cost 的单位与 game.js 的 {wood, plastic, metal} 完全同形，额外允许 food / salvage 两个键供寿司店等后期建筑使用；游戏侧遇到未知键会忽略，因此不会破坏当前实现。","buildTime 单位是秒。当前 game.js 中建筑是瞬间落成的（建造动画 1/1.6 秒内收敛），所以现存 6 座 + 6 个生存步骤的 buildTime 取 0 并令 instant=true，表示「与代码一致」；后期建筑给出设计值。","prereq 里的字符串全部是 other buildings 的 id；skill: / npc: 前缀表示技能或 NPC 类前置，后台按前缀分别高亮与校验。","positionRule 沿用文档给的三种枚举（water / land / shore）并扩展 anchor：生存装备是挂在木筏甲板上的小件，不占格，故用 anchor。","output 用「每项都是 {id, amount, text}」的形式，amount 为 null 时表示这是状态型增益（如耐久、声望），量值写在 effect 里。","effectKeys 枚举已补齐：早期版本漏了 survival 类建筑的速率键（waterRate/waterEvery/foodRate/foodEvery）与店铺/检查点类键，后台按枚举校验会误报。"],"enums":{"positionRule":{"water":"必须建在水面（浮岛/筏体上）","land":"必须建在实地上（不适用于纯漂流阶段）","shore":"必须贴着岸边/礁石","anchor":"固定在现成筏体甲板上的小件，不占格"},"prereqPrefix":{"building":"直接写建筑 id","skill":"skill:<branch> 技能分支","npc":"npc:<npcId> 需要该 NPC 已招募","progress":"progress:<key> 进度里程碑"},"effectKeys":["maxHearts","speed","water","shields","magnet","trade","pop","beds","storage","durability","priceBonus","traffic","unlock","checkpoint","waterRate","waterEvery","foodRate","foodEvery","tradeRatio","menuSlots","menuSlotsMax"]},"buildings":[{"id":"workbench","name":"工作台","icon":"WORKBENCH_BOXES","stage":0,"kind":"survival","cost":{"wood":4,"plastic":0,"metal":0},"buildTime":0,"instant":true,"prereq":[],"output":[],"positionRule":"anchor","effect":{"unlock":"buildMenu"},"desc":"解锁建造 · 木材加工","tip":"造出工作台，才能动手搭别的东西","implemented":true},{"id":"shelter","name":"庇护所","icon":"SHELTER_BOXES","stage":1,"kind":"survival","cost":{"wood":8,"plastic":2,"metal":0},"buildTime":0,"instant":true,"prereq":["workbench"],"output":[{"id":"beds","amount":2,"text":"床位 +2"}],"positionRule":"anchor","effect":{"beds":2,"unlock":"survivalGear","checkpoint":true},"desc":"床位+2 · 存档点 · 生存装备图纸","tip":"有了遮风挡雨的家，才顾得上喝水吃饭","implemented":true},{"id":"rainCatcher","name":"集雨器","icon":"RAINCATCHER_BOXES","stage":1,"kind":"survival","cost":{"wood":3,"plastic":2,"metal":0},"buildTime":0,"instant":true,"prereq":["shelter"],"output":[{"id":"water","amount":8,"text":"每 8 秒 +8 水"}],"positionRule":"anchor","effect":{"waterRate":8,"waterEvery":8},"desc":"每 8 秒 +8 水","tip":"","implemented":true},{"id":"fishBasket","name":"鱼篓","icon":"FISHBASKET_BOXES","stage":1,"kind":"survival","cost":{"wood":4,"plastic":0,"metal":0},"buildTime":0,"instant":true,"prereq":["shelter"],"output":[{"id":"food","amount":6,"text":"每 10 秒 +6 食"}],"positionRule":"anchor","effect":{"foodRate":6,"foodEvery":10},"desc":"每 10 秒 +6 食","tip":"","implemented":true},{"id":"scoopNet","name":"捞网","icon":"SCOOPNET_BOXES","stage":1,"kind":"survival","cost":{"wood":3,"plastic":0,"metal":0},"buildTime":0,"instant":true,"prereq":["shelter"],"output":[{"id":"magnet","amount":0.5,"text":"打捞范围 +50%"}],"positionRule":"anchor","effect":{"magnet":0.5},"desc":"打捞范围 +50%","tip":"","implemented":true},{"id":"purifier","name":"净水器","icon":"PURIFIER_BOXES","stage":1,"kind":"survival","cost":{"wood":4,"plastic":0,"metal":2},"buildTime":0,"instant":true,"prereq":["rainCatcher","workbench"],"output":[{"id":"water","amount":12,"text":"每 5 秒 +12 水"}],"positionRule":"anchor","effect":{"waterRate":12,"waterEvery":5},"desc":"每 5 秒 +12 水","tip":"","implemented":true},{"id":"cabin","name":"小屋","icon":"CABIN_BOXES","stage":2,"kind":"town","cost":{"wood":4,"plastic":0,"metal":0},"buildTime":0,"instant":true,"prereq":["townCenter"],"output":[{"id":"pop","amount":1,"text":"居民 +1"}],"positionRule":"water","effect":{"maxHearts":1,"pop":1},"desc":"+1 心","tip":"第一间真正意义上的房子","implemented":true},{"id":"waterTower","name":"水塔","icon":"TOWER_BOXES","stage":2,"kind":"town","cost":{"wood":3,"plastic":3,"metal":0},"buildTime":0,"instant":true,"prereq":["townCenter"],"output":[{"id":"pop","amount":1,"text":"居民 +1"}],"positionRule":"water","effect":{"water":25,"pop":1},"desc":"水壶 +25","tip":"","implemented":true},{"id":"greenhouse","name":"温室","icon":"GREENHOUSE_BOXES","stage":2,"kind":"town","cost":{"wood":2,"plastic":4,"metal":0},"buildTime":0,"instant":true,"prereq":["townCenter"],"output":[{"id":"pop","amount":1,"text":"居民 +1"}],"positionRule":"water","effect":{"magnet":0.9,"pop":1},"desc":"吸附范围+","tip":"","implemented":true},{"id":"lighthouse","name":"灯塔","icon":"LIGHTHOUSE_BOXES","stage":2,"kind":"town","cost":{"wood":3,"plastic":2,"metal":3},"buildTime":0,"instant":true,"prereq":["townCenter"],"output":[],"positionRule":"water","effect":{"shields":2},"desc":"护盾更久","tip":"","implemented":true},{"id":"marketStall","name":"市集","icon":"STALL_BOXES","stage":2,"kind":"town","cost":{"wood":4,"plastic":3,"metal":3},"buildTime":0,"instant":true,"prereq":["townCenter"],"output":[{"id":"pop","amount":2,"text":"居民 +2"}],"positionRule":"water","effect":{"trade":1,"pop":2},"desc":"收益 +1","tip":"","implemented":true},{"id":"windmill","name":"风车","icon":"WINDMILL_BOXES","stage":2,"kind":"town","cost":{"wood":5,"plastic":3,"metal":4},"buildTime":0,"instant":true,"prereq":["townCenter"],"output":[{"id":"pop","amount":1,"text":"居民 +1"}],"positionRule":"water","effect":{"speed":0.5,"pop":1},"desc":"船速 +","tip":"","implemented":true},{"id":"townCenter","name":"城镇中心","icon":"PROC:townHall","stage":2,"kind":"town","cost":{"wood":15,"plastic":8,"metal":5},"buildTime":45,"instant":false,"prereq":["shelter","progress:selfSustain"],"output":[{"id":"storage","amount":200,"text":"仓储上限 200"}],"positionRule":"water","effect":{"beds":4,"unlock":"islandExpansion,reputation,residentCap"},"desc":"解锁浮岛扩建 / 居民上限 / 声望系统","tip":"关键里程碑：从营地变成社会","implemented":false},{"id":"house","name":"民居","icon":"PROC:house","stage":2,"kind":"town","cost":{"wood":6,"plastic":0,"metal":0},"buildTime":25,"instant":false,"prereq":["townCenter"],"output":[{"id":"beds","amount":2,"text":"床位 +2 / 居民 +2"}],"positionRule":"water","effect":{"beds":2,"pop":2},"desc":"居民 +2","tip":"城镇判定要求 ≥2 座民居","implemented":false},{"id":"dock","name":"码头","icon":"PROC:dock","stage":2,"kind":"town","cost":{"wood":10,"plastic":0,"metal":3},"buildTime":40,"instant":false,"prereq":["townCenter"],"output":[{"id":"fleet","amount":1,"text":"解锁更大船只"}],"positionRule":"shore","effect":{"unlock":"farSea"},"desc":"解锁更大船只 · 可去更远海域","tip":"","implemented":false},{"id":"market","name":"市场","icon":"PROC:market","stage":2,"kind":"town","cost":{"wood":12,"plastic":0,"metal":4},"buildTime":40,"instant":false,"prereq":["townCenter"],"output":[{"id":"trade","amount":1,"text":"解锁资源交易"}],"positionRule":"water","effect":{"unlock":"trade","tradeRatio":0.6},"desc":"解锁交易，可买卖资源","tip":"小满的招募条件需要它","implemented":false},{"id":"inn","name":"旅店","icon":"PROC:inn","stage":3,"kind":"town","cost":{"wood":14,"plastic":6,"metal":0},"buildTime":60,"instant":false,"prereq":["townCenter","house"],"output":[{"id":"beds","amount":3,"text":"床位 +3 / 招募设施"}],"positionRule":"water","effect":{"beds":3,"unlock":"npcRecruit"},"desc":"流浪 NPC 的招募设施前置","tip":"没有旅店，漂流者无处可来","implemented":false},{"id":"sushiRestaurant","name":"寿司店","icon":"PROC:sushi","stage":4,"kind":"shop","cost":{"wood":18,"plastic":10,"metal":12,"salvage":4},"buildTime":90,"instant":false,"prereq":["inn","npc:xiaoman","market"],"output":[{"id":"menu","amount":3,"text":"菜单位 3 格（可扩到 6）"}],"positionRule":"water","effect":{"unlock":"dive,foodEconomy,shopManagement","menuSlots":3,"menuSlotsMax":6},"desc":"解锁潜水采集 / 食材经营 / 店铺管理","tip":"核心链路终点：这条链任一环延期都会阻塞后续所有内容","implemented":false}]},
+    recipes: {"schema":"drift-town.recipes","version":1,"updatedAt":"2026-11-22","title":"寿司店菜谱表","summary":"潜水收获在寿司店里变成钱。每道菜给出食材、制作时长、基础售价与建议定价区间，后台据此计算毛利率。","sourceOfTruth":{"designSamples":"docs/GAME_DESIGN.md · 4.3 菜单配置示例（海藻卷 / 银鳞握寿司 / 深海蟹肉军舰 的成本与建议售价）","ingredients":"data/resources.json · items[].id（食材键必须能在资源表里找到）","selling":"docs/GAME_DESIGN.md · 4.4 店铺管理（菜单格 / 口碑 / 日结算）"},"notes":["ingredients 的键必须是 resources.json 里 category=food 的 id，后台会做交叉校验。","basePrice 与 suggestedPriceRange 沿用设计文档的口径：basePrice 视为「食材成本价」，区间下限接近成本、上限是高价策略的封顶。毛利率由后台用 basePrice 与区间中值算，不写在数据里，避免两处口径打架。","cookTime 是单份制作时长（秒）。菜单格数量有限，所以 cookTime 与利润一起决定哪几道菜值得上架——这是设计文档「菜单博弈」的数据基础。","reputationBonus 是卖出一道加多少口碑；负值代表它拉低口碑（便宜菜走量，损口碑），这是有意设计的取舍。","tierGate 不是必填字段的替代，而是额外声明：数值越大表示食材越稀有，后台用它做分支着色；解锁条件仍以 unlockCondition 为准。"],"enums":{"category":{"roll":"卷物，海藻为主，走量","nigiri":"握寿司，鱼为主，中高价","gunkan":"军舰卷，海藻包边 + 稀有料，高价","soup":"汤物，低成本高口碑","platter":"拼盘，多食材，最高价"}},"recipes":[{"id":"seaweedRoll","name":"海藻卷","category":"roll","tier":1,"ingredients":{"seaweed":2,"rice":1},"cookTime":12,"basePrice":8,"suggestedPriceRange":[15,22],"unlockCondition":{"type":"building","value":"sushiRestaurant","text":"寿司店建成后默认拥有"},"reputationBonus":1,"desc":"最便宜的一道，也是最稳的一道。客人点它的时候通常还没想清楚要吃什么。"},{"id":"clamSashimi","name":"贝壳刺身","category":"nigiri","tier":1,"ingredients":{"clam":2,"rice":1},"cookTime":14,"basePrice":10,"suggestedPriceRange":[16,24],"unlockCondition":{"type":"building","value":"sushiRestaurant","text":"寿司店建成后默认拥有"},"reputationBonus":1,"desc":"什么都没有加，只靠新鲜。阿海说这道菜考的是采集，不是刀工。"},{"id":"kelpSoup","name":"海藻汤","category":"soup","tier":1,"ingredients":{"seaweed":1,"deepKelp":1},"cookTime":20,"basePrice":12,"suggestedPriceRange":[18,26],"unlockCondition":{"type":"npc","value":"xiaoman","text":"招募小满后解锁"},"reputationBonus":2,"desc":"熬得越久越甜。成本低，口碑高，是撑客流的底菜。"},{"id":"grilledSkewer","name":"炙烤串","category":"nigiri","tier":2,"ingredients":{"squid":1,"silverScaleFish":1},"cookTime":18,"basePrice":16,"suggestedPriceRange":[26,38],"unlockCondition":{"type":"npc","value":"xiaoman","text":"招募小满后解锁"},"reputationBonus":2,"desc":"两种鱼放在一起烤，边缘焦一点更好吃。深水客人喝醉了爱点。"},{"id":"squidGunkan","name":"墨鱼军舰","category":"gunkan","tier":2,"ingredients":{"squid":1,"seaweed":1,"rice":1},"cookTime":22,"basePrice":20,"suggestedPriceRange":[32,46],"unlockCondition":{"type":"npc","value":"xiaoman","text":"招募小满后解锁"},"reputationBonus":3,"desc":"墨汁染黑了海藻，卖相怪，但吃过的人都回来点第二次。"},{"id":"silverScaleNigiri","name":"银鳞握寿司","category":"nigiri","tier":3,"ingredients":{"silverScaleFish":1,"rice":1},"cookTime":16,"basePrice":12,"suggestedPriceRange":[28,40],"unlockCondition":{"type":"resource","value":"silverScaleFish","text":"首次获得银鳞鱼后解锁"},"reputationBonus":3,"desc":"设计文档的基准菜：成本 12，建议 28。刀要快，慢一秒鳞光就没了。"},{"id":"seaUrchinBowl","name":"海胆盖饭","category":"gunkan","tier":3,"ingredients":{"seaUrchin":1,"rice":2},"cookTime":24,"basePrice":22,"suggestedPriceRange":[42,58],"unlockCondition":{"type":"resource","value":"seaUrchin","text":"首次获得海胆后解锁"},"reputationBonus":4,"desc":"橙色铺满整碗。定价的时候手会抖，但卖得掉。"},{"id":"roeGunkan","name":"鱼子军舰","category":"gunkan","tier":3,"ingredients":{"fishRoe":1,"seaweed":1,"rice":1},"cookTime":26,"basePrice":26,"suggestedPriceRange":[46,64],"unlockCondition":{"type":"resource","value":"fishRoe","text":"首次获得鱼子后解锁"},"reputationBonus":4,"desc":"一颗一颗铺平，不能压破。这道菜是给小满练手感的。"},{"id":"deepCrabGunkan","name":"深海蟹肉军舰","category":"gunkan","tier":4,"ingredients":{"deepCrab":1,"seaweed":1,"deepKelp":1},"cookTime":32,"basePrice":30,"suggestedPriceRange":[75,98],"unlockCondition":{"type":"resource","value":"deepCrab","text":"首次获得深海蟹后解锁"},"reputationBonus":6,"desc":"设计文档的旗舰菜：成本 30，建议 75。拆蟹要 32 秒，但客人愿意等。"},{"id":"abyssPlatter","name":"深渊拼盘","category":"platter","tier":4,"ingredients":{"abyssLobster":1,"deepCrab":1,"abyssLanternfish":1,"rice":2},"cookTime":45,"basePrice":58,"suggestedPriceRange":[120,160],"unlockCondition":{"type":"building","value":"sushiRestaurant","text":"需寿司店 + 已解锁 Tier 4 潜水"},"reputationBonus":10,"desc":"三样深海货摆在一起，卖的不是味道，是「你下得去」。镇史里会被记住的一盘。"}]},
+    npcs: {"schema":"drift-town.npcs","version":1,"updatedAt":"2026-11-22","title":"NPC 与事件表","summary":"六位流浪者的小传、特长、招募条件、出现时机与好感度事件链，外加一张可复用的通用事件表结构。人和事件是两张表，用 npcId 关联。","sourceOfTruth":{"roster":"docs/GAME_DESIGN.md · 阶段 3 · 3.1 NPC 类型（首批 6 位）表格","recruitGating":"docs/UNLOCK_CHAIN.md · 一、解锁链全图 阶段 3","eventShape":"docs/GAME_DESIGN.md · 6.3 模块四（触发条件 / 类型 / 选项与结果 / 冷却）"},"notes":["recruitCondition 拆成两类键：hard 是必须全部满足的硬门槛（对应文档的「招募条件」列），personality 是「人格化任务」，用来规避风险 R4「NPC 招募变成纯数值门槛」。两者分开存，后台可以分别校验。","appearTiming 用 { type, value } 而不是纯字符串，因为「第 N 天」和「建成某建筑后」需要程序判定，而不是人读。","unlocks 只写「这个人带来什么玩法解锁」，具体数值效果落在 specialties.effects 里，避免同一件事两处记录。","affinityEvents 是这位 NPC 专属的好感度事件链，通用事件规则见文件末尾 events 表；两者用 eventType 对齐，冷却单位统一为游戏日。","portrait 用 PROC: 前缀表示程序化绘制（当前项目全部角色都是体素/Canvas 绘制，没有 PNG 立绘），这是与 assets 目录解耦的约定。","legacy 记录 NPC 来之前的事。它是叙事资产，也是莉莉这类 NPC 收费逻辑的动机来源，不是空字段。"],"enums":{"specialty":{"salvage":"打捞","build":"建造","cook":"烹饪","dive":"潜水","run":"经营","story":"剧情"},"eventType":{"help":"求助：NPC 要东西 / 要条件","trade":"交易：一口价交换","conflict":"冲突：两个居民起矛盾，需要裁决","story":"剧情：推进世界观与沉城线索"},"recruitConditionType":{"resource":"交付指定数量的资源","building":"已建成某座建筑","tool":"已拥有某件装备","reputation":"声望达到某级","townLevel":"城镇等级达到某级"},"appearTimingType":{"gameDay":"第 N 个游戏日起可出现","afterBuilding":"某建筑建成后可出现","afterRecruit":"某 NPC 已招募后可出现"}},"npcs":[{"id":"laochen","name":"老陈","portrait":"PROC:laochen","title":"捞了四十年的老手","specialty":"salvage","bio":"大潮前是渔船上的水手，大潮后是海上最会看垃圾往哪漂的人。话少，手快，说「这玩意儿有用」的时候基本都对。","legacy":"他原来的船叫「陈记二号」，沉在离这里两天航程的地方。他从不提船，只提船上那口锅。","recruitCondition":{"hard":[{"type":"resource","key":"wood","amount":20,"text":"交付木×20"}],"personality":{"id":"laochen-net","text":"他要你陪他把一张破网补完——不是交东西，是花时间。补网时他会顺手教你分辨哪种漂浮物值得捞。","check":"完成补网小游戏（3 次正确补洞）"}},"appearTiming":{"type":"gameDay","value":2,"text":"第 2 个游戏日起，每 1–2 日可出现 1 位"},"unlocks":["自动打捞（离线收益）"],"specialties":{"desc":"自动打捞","effects":{"offlineSalvagePerHour":40,"salvageRangeBonus":0.15}},"affinityEvents":[{"id":"laochen-1","eventType":"help","title":"补网","desc":"他又弄破了一张网，说这次是故意的，想看看你学没学会。","choices":[{"text":"帮他补","result":{"affinity":10,"message":"他没说话，但第二天甲板上多了一桶淡水。"}},{"text":"让他自己补","result":{"affinity":2,"message":"「也对，我还没老到不能动。」"}}]},{"id":"laochen-2","eventType":"story","title":"陈记二号","desc":"喝了点酒后，他第一次说起了自己的船。","choices":[{"text":"问船沉在哪里","result":{"affinity":15,"message":"他画了一张潦草的图，标注了两天航程外的一片水域。"}},{"text":"什么都不问","result":{"affinity":5,"message":"他点点头，把酒壶收了回去。"}}]}]},{"id":"ahai","name":"阿海","portrait":"PROC:ahai","title":"第一个戴上面镜的人","specialty":"dive","bio":"在别的聚落做过潜水员，是唯一一个见过海面之下的人。说话时眼睛总往水下看，像在数还有多少没捞上来。","legacy":"他上一任搭档没上来。这件事他没跟任何人讲，但每次下水他都会多带一根绳子。","recruitCondition":{"hard":[{"type":"tool","key":"snorkelMask","amount":1,"text":"已有浮潜镜"}],"personality":{"id":"ahai-breath","text":"他先要看你敢不敢下水——不是考胆子，是考你知不知道自己能憋多久。","check":"在浅水区完成一次 30 秒不换气的停留"}},"appearTiming":{"type":"afterBuilding","value":"sushiRestaurant","text":"寿司店建成、潜水开放后"},"unlocks":["潜水氧气 +20s"],"specialties":{"desc":"潜水","effects":{"oxygenMax":20,"diveHint":true}},"affinityEvents":[{"id":"ahai-1","eventType":"help","title":"多带的绳子","desc":"他把绳子递给你，说他每次下水都多带一根。","choices":[{"text":"问他为什么","result":{"affinity":12,"message":"「万一有人需要。」他这么说的时候没看你。"}},{"text":"收下就好","result":{"affinity":6,"message":"他松了口气。"}}]},{"id":"ahai-2","eventType":"story","title":"中层的光","desc":"他说中层水域有一片会发光的东西，他从来没敢靠近。","choices":[{"text":"提议一起去","result":{"affinity":18,"unlock":"diveLightSeen","message":"你们一起下去了。那是一片会随着水流呼吸的藻。"}},{"text":"记在地图上","result":{"affinity":8,"message":"他把位置画在航海图边缘，很轻。"}}]}]},{"id":"xiaoman","name":"小满","portrait":"PROC:xiaoman","title":"把海的馈赠做成一餐的人","specialty":"cook","bio":"大潮前在陆地上的一家小店里切鱼，大潮后一直在找一个能重新开火的地方。她是解锁寿司店的关键 NPC。","legacy":"她的刀是父亲留下的，刀柄缠过三次布。她说刀还在，店就还没关。","recruitCondition":{"hard":[{"type":"building","key":"market","amount":1,"text":"有市场"}],"personality":{"id":"xiaoman-knife","text":"她不问你有什么，问你有没有一处「干净的台面」。她要看的是你愿不愿意为一件正经事腾地方。","check":"清空一块 2×2 的甲板作为料理台位置"}},"appearTiming":{"type":"afterBuilding","value":"inn","text":"旅店建成、城镇判定通过后"},"unlocks":["寿司店图纸","食材经营","店铺管理"],"specialties":{"desc":"烹饪","effects":{"cookSpeed":0.1,"menuUnlock":true}},"affinityEvents":[{"id":"xiaoman-1","eventType":"help","title":"磨刀","desc":"她的刀钝了，磨刀石却丢在了水里。","choices":[{"text":"潜下去找","result":{"affinity":15,"message":"你捞上来一块石头。她接过去，掂了掂，说「这个比原来的好」。"}},{"text":"找块新的给她","result":{"affinity":8,"message":"她收下了，但看得出不是她想要的那种。"}}]},{"id":"xiaoman-2","eventType":"conflict","title":"第一道菜","desc":"她要你决定寿司店的第一道菜是什么。选错了她会照做，但不会高兴。","choices":[{"text":"海藻卷（稳）","result":{"affinity":10,"message":"「稳妥。」她开始洗海藻，动作很快。"}},{"text":"深海蟹肉军舰（赌）","result":{"affinity":20,"message":"她愣了两秒，然后笑了：「有胆。」"}}]}]},{"id":"tiejiangBo","name":"铁匠波","portrait":"PROC:tiejiangbo","title":"只会往硬里做的匠人","specialty":"build","bio":"手上有旧伤，握锤的姿势不对但打得比谁都稳，大潮时失去了一条腿（一条木腿是他自己做的）。说话直接，讨厌废话。","legacy":"他的工坊本来在沉城的第三层，现在那里是 Tier 3 海域。他说过想再回去看一眼。","recruitCondition":{"hard":[{"type":"resource","key":"metal","amount":15,"text":"有铁×15"}],"personality":{"id":"tiejiangbo-hammer","text":"他要一块「没被海水泡过的木头」——这在海上几乎是不可能的要求，他要看你有没有认真找。","check":"提交 1 个未拆封的干燥木材（宝箱掉落）"}},"appearTiming":{"type":"afterBuilding","value":"townCenter","text":"城镇中心建成后"},"unlocks":["建筑耐久+","配方折扣"],"specialties":{"desc":"建造","effects":{"durabilityBonus":0.25,"craftCostDiscount":0.1}},"affinityEvents":[{"id":"tiejiangbo-1","eventType":"trade","title":"木腿","desc":"他的木腿裂了，想换一条。「但我不会求人。」","choices":[{"text":"给他材料","result":{"affinity":12,"message":"他收了，第二天给你打了一副更结实的工具。"}},{"text":"帮他一起做","result":{"affinity":20,"message":"你们花了一整晚。他最后说：「这条腿比上一条好。」"}}]},{"id":"tiejiangbo-2","eventType":"story","title":"第三层","desc":"他提起沉城的工坊，声音低了下去。","choices":[{"text":"承诺带他回去","result":{"affinity":15,"message":"「不用。你下去的时候帮我看看，那炉火是不是还亮着。」"}},{"text":"转移话题","result":{"affinity":3,"message":"他点点头，继续敲他的铁。"}}]}]},{"id":"lili","name":"莉莉","portrait":"PROC:lili","title":"会在定价上跟你较劲的人","specialty":"run","bio":"大潮前在岸上做买卖，算账比谁都快。来了就重新规划摊位位置，说「东西好吗不重要，要让人以为它好」。","legacy":"她有一本记满了价格的旧账本，最后一页没写完。她说那天她正在算最后一笔。","recruitCondition":{"hard":[{"type":"reputation","key":"reputation","amount":3,"text":"声望 3 级"}],"personality":{"id":"lili-bargain","text":"她要先跟你做一笔生意——她会用高于市价的价格买你说「不值钱」的东西，看你敢不敢拒绝。","check":"在一次交易中主动拒绝溢价报价（不贪）"}},"appearTiming":{"type":"afterBuilding","value":"market","text":"市场建成、声望 3 级后"},"unlocks":["售价 +10%"],"specialties":{"desc":"经营","effects":{"priceBonus":0.1,"trafficBonus":0.05}},"affinityEvents":[{"id":"lili-1","eventType":"trade","title":"旧账本","desc":"她让你帮她算完账本上最后一页。","choices":[{"text":"认真算","result":{"affinity":15,"message":"数字对不上的地方，她一直知道，只是需要有人一起看见。"}},{"text":"随手填个数字","result":{"affinity":-3,"message":"她合上账本，什么都没说。"}}]},{"id":"lili-2","eventType":"conflict","title":"涨价","desc":"她想把海藻卷涨到两倍价。小满不同意。","choices":[{"text":"支持莉莉","result":{"affinity":12,"message":"客流掉了两天，然后回来了。她赢了这一局。"}},{"text":"支持小满","result":{"affinity":5,"message":"「行吧，你们管味道。」她把账本翻到新的一页。"}}]}]},{"id":"namelessOld","name":"无名老人","portrait":"PROC:namelessold","title":"知道沉城在哪的人","specialty":"story","bio":"没有人知道他的名字。他从不索取，只在合适的时机说一句话，然后转身看海。他说的每个字都指向沉城。","legacy":"他可能是唯一记得大陆是什么样子的人。他的沉默比任何档案都完整。","recruitCondition":{"hard":[{"type":"townLevel","key":"townLevel","amount":5,"text":"城镇等级 5"}],"personality":{"id":"namelessold-listen","text":"他不提要求。他只是等你先开口——三层好感事件中只要有一次选择听他说完，他就留下。","check":"听完一次完整的沉城讲述（不打断）"}},"appearTiming":{"type":"afterBuilding","value":"inn","text":"旅店建成、城镇等级 5 后"},"unlocks":["沉城线索","Tier 3 海域"],"specialties":{"desc":"剧情","effects":{"tier3Unlock":true,"codexReveal":"sunken-city"}},"affinityEvents":[{"id":"namelessold-1","eventType":"story","title":"第一句话","desc":"他在码头站了一整个下午，然后说：「那里从前有一条街。」","choices":[{"text":"问是哪条街","result":{"affinity":10,"unlock":"sunkenCityClue1","message":"他报了一个名字。你记了下来。"}},{"text":"沉默陪他站着","result":{"affinity":15,"message":"过了很久，他说：「你比大多数人耐心。」"}}]},{"id":"namelessold-2","eventType":"story","title":"第三层","desc":"他给了你一片陶瓷残片，说这上面的蓝色只有第三层的水能洗出来。","choices":[{"text":"立即组织下潜","result":{"affinity":12,"unlock":"tier3Route","message":"他点头，把位置说了。句子很短，坐标很准。"}},{"text":"问他为什么现在才说","result":{"affinity":20,"message":"「因为现在有人能下去，也有人会上来。」"}}]}]}],"events":{"schema":"drift-town.events","version":1,"summary":"通用事件表结构。npc.eventsAffinity 里的条目是这一结构的实例；这里给出字段定义、枚举与全局冷却规则，供后台直接渲染与校验。","fields":{"id":"唯一键","npcId":"关联 npcs[].id，可为 null 表示与具体 NPC 无关的环境事件","eventType":"help | trade | conflict | story","title":"事件标题（玩家可见）","trigger":"触发条件对象，见 triggerTypes","weight":"随机触发时的相对权重；条件不满足则不参与抽取","choices":"选项数组，每项含 text 与 result","cooldown":"同一事件再次触发的冷却，单位游戏日；0 表示一次性事件","once":"是否一次性事件"},"triggerTypes":{"time":"指定游戏日 / 时段（slot: day | dusk | night）","progress":"进度里程碑（townLevel / reputation / 已建成建筑数）","affinity":"某 NPC 好感度达到阈值","random":"在满足其它条件时按 weight 随机","building":"指定建筑建成时"},"resultShape":"result 可能含：affinity（好感度增减）、resource（资源增减）、unlock（解锁标记）、message（一句反馈文本）。数值口径与 game.js 的资源键一致。","eventsList":[{"id":"evt-driftwood-gift","npcId":null,"eventType":"story","title":"漂来的木箱","trigger":{"type":"progress","key":"townLevel","value":2,"slot":"day"},"weight":10,"choices":[{"text":"打开看看","result":{"resource":{"wood":6},"message":"箱子里是干的木头——海上最奢侈的东西。"}},{"text":"留着当浮力","result":{"resource":{"plastic":2},"message":"你把它绑在筏子边缘。"}}],"cooldown":4,"once":false},{"id":"evt-water-dispute","npcId":null,"eventType":"conflict","title":"接水排队","trigger":{"type":"progress","key":"residentCount","value":4,"slot":"day"},"weight":8,"choices":[{"text":"加装集雨器","result":{"affinity":5,"resource":{"plastic":-2},"message":"排队短了，但材料没了。"}},{"text":"规定接水时段","result":{"affinity":3,"message":"没人吵了，但气氛也淡了。"}}],"cooldown":6,"once":false},{"id":"evt-night-market","npcId":"lili","eventType":"trade","title":"夜市的提议","trigger":{"type":"affinity","key":"lili","value":40,"slot":"night"},"weight":12,"choices":[{"text":"开夜市","result":{"resource":{"wood":-5},"unlock":"nightMarket","message":"灯挂上了。有人愿意在晚上花钱。"}},{"text":"不了，白天够了","result":{"affinity":-2,"message":"她把账本合上了。"}}],"cooldown":0,"once":true},{"id":"evt-shark-alert","npcId":null,"eventType":"help","title":"鲨鱼靠近","trigger":{"type":"time","slot":"night","value":0},"weight":6,"choices":[{"text":"加固筏边","result":{"resource":{"metal":-2},"affinity":3,"message":"多了一圈铁皮，夜里踏实些。"}},{"text":"先不管","result":{"affinity":-3,"message":"有人的渔网被咬破了。"}}],"cooldown":3,"once":false},{"id":"evt-sunken-city-hint","npcId":"namelessOld","eventType":"story","title":"一片蓝色的残片","trigger":{"type":"progress","key":"townLevel","value":5,"slot":"dusk"},"weight":15,"choices":[{"text":"追问沉城坐标","result":{"unlock":"tier3Route","affinity":10,"message":"他说了一串数字，然后去看海。"}},{"text":"把残片收进图鉴","result":{"unlock":"sunkenCityClue1","affinity":5,"message":"图鉴多了一页，标签是手写的。"}}],"cooldown":0,"once":true}]}}
+  };
+  /* === EMBEDDED:END === */
+
+  /* --- 1. 常量与枚举兜底 ------------------------------------------------ */
+
+  var TABLE_NAMES = ['resources', 'buildings', 'recipes', 'npcs'];
+  /* 每张表的条目数组在 JSON 里的键名（resources 用 items，其余同名）。 */
+  var ITEM_KEY = { resources: 'items', buildings: 'buildings', recipes: 'recipes', npcs: 'npcs' };
+  var SCHEMAS = {
+    resources: 'drift-town.resources',
+    buildings: 'drift-town.buildings',
+    recipes: 'drift-town.recipes',
+    npcs: 'drift-town.npcs'
+  };
+
+  /* game.js 的经济只有 wood / plastic / metal 三条线；数据表额外允许
+   * food / salvage 两个键（见 resources.json notes）。转换给游戏的 cost/res
+   * 必须裁剪成这三个键，否则 game.js 里 res[rk] += ... 会把 undefined 变 NaN。 */
+  var COST_KEYS = ['wood', 'plastic', 'metal'];
+  var COST_KEYS_DATA = ['wood', 'plastic', 'metal', 'food', 'salvage'];
+
+  /* game.js: `var roll = Math.random() * 12` —— 海面刷新池的区间总宽度。 */
+  var SURFACE_POOL_TOTAL = 12;
+
+  var HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+  /* 建筑 effect 里挑一个当 game.js 的 perk：按此顺序取第一个命中的键。 */
+  var PERK_ORDER = [
+    'maxHearts', 'speed', 'water', 'shields', 'magnet', 'trade',
+    'beds', 'storage', 'durability', 'priceBonus', 'traffic',
+    'unlock', 'checkpoint', 'tradeRatio', 'menuSlots', 'menuSlotsMax',
+    'waterRate', 'waterEvery', 'foodRate', 'foodEvery'
+  ];
+
+  /* 数据表里的 enums 缺失时（例如被裁剪过的内联数据）用这份兜底校验。 */
+  var FALLBACK_ENUMS = {
+    resources: {
+      category: ['material', 'food', 'artifact', 'tool'],
+      source: ['surface', 'dive', 'npc', 'craft'],
+      tier: [1, 2, 3, 4],
+      yieldKeys: ['wood', 'plastic', 'metal', 'food', 'salvage'],
+      unlockConditionType: ['firstPickup', 'buildBuilding', 'recruitNpc', 'progress', 'craftKnown']
+    },
+    buildings: {
+      positionRule: ['water', 'land', 'shore', 'anchor'],
+      effectKeys: [
+        'maxHearts', 'speed', 'water', 'shields', 'magnet', 'trade', 'pop', 'beds',
+        'storage', 'durability', 'priceBonus', 'traffic', 'unlock', 'checkpoint',
+        'waterRate', 'waterEvery', 'foodRate', 'foodEvery', 'tradeRatio',
+        'menuSlots', 'menuSlotsMax'
+      ]
+    }
+  };
+
+  /* --- 2. 小工具 -------------------------------------------------------- */
+
+  function isArray(v) { return Object.prototype.toString.call(v) === '[object Array]'; }
+  function isObject(v) { return !!v && typeof v === 'object' && !isArray(v); }
+  function isNum(v) { return typeof v === 'number' && isFinite(v); }
+  function isStr(v) { return typeof v === 'string'; }
+  function isInt(v) { return isNum(v) && Math.floor(v) === v; }
+
+  /* 深拷贝：数据是纯 JSON，交给调用方的都复制一份，防止游戏改坏真相来源。 */
+  function clone(value) {
+    var i, k, out;
+    if (value === null || typeof value !== 'object') return value;
+    if (isArray(value)) {
+      out = [];
+      for (i = 0; i < value.length; i++) out.push(clone(value[i]));
+      return out;
+    }
+    out = {};
+    for (k in value) if (Object.prototype.hasOwnProperty.call(value, k)) out[k] = clone(value[k]);
+    return out;
+  }
+
+  function round4(n) { return Math.round(n * 10000) / 10000; }
+
+  /* 从 icon 名推 game.js 侧查模型用的键：BOTTLE_BOXES -> BOTTLE。
+   * 非 *_BOXES 的图标（如 PROC:townHall，表示还没做成体素模型）返回 null。 */
+  function modelKeyOf(icon) {
+    if (!isStr(icon) || !icon) return null;
+    var m = /^(.+)_BOXES$/.exec(icon);
+    return m ? m[1] : null;
+  }
+
+  /* 数据表里的枚举有两种写法：数组（effectKeys / yieldKeys）和对象字典
+   * （category / source / positionRule），两种都接受，返回允许值列表。 */
+  function enumList(enums, group, field) {
+    var fallback = (FALLBACK_ENUMS[group] && FALLBACK_ENUMS[group][field]) || [];
+    if (!enums || !isObject(enums)) return fallback;
+    var value = enums[field];
+    if (isArray(value) && value.length) return value;
+    if (isObject(value)) {
+      var keys = Object.keys(value);
+      if (keys.length) return keys;
+    }
+    return fallback;
+  }
+
+  /* --- 3. 内部状态 ------------------------------------------------------ */
+
+  var state = {
+    tables: null,   // { resources: <整张表>, ... }
+    items: null,    // { resources: [条目, ...], ... }
+    index: null,    // { resources: { id: 条目 }, ... }
+    derived: null,  // 转换结果缓存
+    source: 'none'  // 'embedded' | 'inline'
+  };
+
+  function normalizeTable(name, raw) {
+    var table;
+    if (isArray(raw)) {
+      table = {};
+      table[ITEM_KEY[name]] = raw;
+      return table;
+    }
+    return isObject(raw) ? clone(raw) : null;
+  }
+
+  function buildItems() {
+    var items = {}, index = {}, name, list, map, i;
+    for (i = 0; i < TABLE_NAMES.length; i++) {
+      name = TABLE_NAMES[i];
+      list = state.tables[name] ? state.tables[name][ITEM_KEY[name]] : null;
+      items[name] = isArray(list) ? list : [];
+      map = {};
+      for (var j = 0; j < items[name].length; j++) {
+        if (isStr(items[name][j].id) && items[name][j].id) map[items[name][j].id] = items[name][j];
+      }
+      index[name] = map;
+    }
+    state.items = items;
+    state.index = index;
+  }
+
+  /* --- 4. 派生：给 game.js 用的三个转换 -------------------------------- */
+
+  /* 海面打捞物：source=surface 且数据表用 gameBinding 锚定了 game.js 的条目
+   * （目前 7 条）。未被 game.js 实现的 surface 项（如破损浮标）不在此列。 */
+  function surfaceBindings() {
+    var out = [], list = state.items.resources, i, item;
+    for (i = 0; i < list.length; i++) {
+      item = list[i];
+      if (item && item.source === 'surface' && isObject(item.gameBinding) && isInt(item.gameBinding.pickupKindIndex)) {
+        out.push(item);
+      }
+    }
+    out.sort(function (a, b) { return a.gameBinding.pickupKindIndex - b.gameBinding.pickupKindIndex; });
+    return out;
+  }
+
+  /* 只保留游戏认识的材料键。
+   * zeroFill=true 用于 game.js 的 cost（三键必填，可为 0，因为它直接做减法）；
+   * zeroFill=false 用于 res / yield（保持数据表原样，不凭空补 0 键）。 */
+  function pickMaterials(raw, allowedKeys, zeroFill) {
+    var out = {}, i, k;
+    for (i = 0; i < allowedKeys.length; i++) {
+      k = allowedKeys[i];
+      if (isObject(raw) && isNum(raw[k])) out[k] = raw[k];
+      else if (zeroFill) out[k] = 0;
+    }
+    return out;
+  }
+
+  function rebuildDerived() {
+    var derived = {
+      pickupKinds: [],
+      buildingSpecs: [],
+      survivalCosts: {},
+      survivalSteps: [],
+      survivalRates: {},
+      surfaceWeightTotal: 0
+    };
+    var i, j, item, b, effect, perk, perkValue, cursor, cost, full, name;
+
+    /* (1) 海面打捞物，顺序 = game.js PICKUP_KINDS 的下标顺序。
+     *     spawnFrom/spawnTo 是按「数组下标顺序」累加出来的区间。注意 game.js 的
+     *     addPickup() 里 if 链的排列是 [0][1][3][2][4][5][6]（木箱在橡皮鸭之前），
+     *     与数组顺序不同；但每种物品拿到的区间宽度都恰好等于它自己的 spawnWeight，
+     *     所以两种排列的概率分布完全相同，只是 roll 值与物品的对应关系不同。
+     *     要换成通用加权抽样时，用 spawnFrom <= roll < spawnTo 即可，无需复刻 if 链。 */
+    var bound = surfaceBindings();
+    cursor = 0;
+    for (i = 0; i < bound.length; i++) {
+      item = bound[i];
+      var weight = isNum(item.spawnWeight) ? item.spawnWeight : 0;
+      var res = pickMaterials(item.yield, COST_KEYS, false);
+      derived.pickupKinds.push({
+        id: item.id,
+        name: isStr(item.name) ? item.name : item.id,
+        value: isNum(item.gameBinding.scoreValue) ? item.gameBinding.scoreValue : 1,
+        res: res,
+        yieldAll: pickMaterials(item.yield, COST_KEYS_DATA, false),
+        glowColor: isStr(item.gameBinding.glow) ? item.gameBinding.glow : (isStr(item.color) ? item.color : '#ffffff'),
+        spawnWeight: weight,
+        spawnFrom: round4(cursor),
+        spawnTo: round4(cursor + weight),
+        modelKey: modelKeyOf(item.icon),
+        icon: isStr(item.icon) ? item.icon : null,
+        tier: isNum(item.tier) ? item.tier : null,
+        category: isStr(item.category) ? item.category : null
+      });
+      cursor += weight;
+    }
+    derived.surfaceWeightTotal = round4(cursor);
+
+    /* (2) 城镇建筑：kind=town 且 implemented。顺序 = game.js BUILDING_SPECS 的顺序。 */
+    var buildings = state.items.buildings;
+    for (i = 0; i < buildings.length; i++) {
+      b = buildings[i];
+      if (!b || b.kind !== 'town' || b.implemented !== true) continue;
+      effect = isObject(b.effect) ? b.effect : {};
+      perk = null;
+      perkValue = null;
+      for (j = 0; j < PERK_ORDER.length; j++) {
+        if (Object.prototype.hasOwnProperty.call(effect, PERK_ORDER[j]) && PERK_ORDER[j] !== 'pop') {
+          perk = PERK_ORDER[j];
+          perkValue = effect[PERK_ORDER[j]];
+          break;
+        }
+      }
+      derived.buildingSpecs.push({
+        id: b.id,
+        name: isStr(b.name) ? b.name : b.id,
+        cost: pickMaterials(b.cost, COST_KEYS, true),
+        costAll: pickMaterials(b.cost, COST_KEYS_DATA, true),
+        pop: isNum(effect.pop) ? effect.pop : 0,
+        perk: perk,
+        perkValue: perkValue,
+        desc: isStr(b.desc) ? b.desc : '',
+        tip: isStr(b.tip) ? b.tip : '',
+        modelKey: modelKeyOf(b.icon),
+        icon: isStr(b.icon) ? b.icon : null,
+        prereq: isArray(b.prereq) ? clone(b.prereq) : []
+      });
+    }
+
+    /* (3) 生存层：6 个步骤的造价、前置、以及 game.js DEFAULTS.survival 里的
+     *     速率常量。数据表 effect 里的 waterRate/waterEvery 等直接对应
+     *     game.js 的 rainEvery/rainAmount、fishEvery/fishAmount、purifyEvery/purifyAmount。 */
+    for (i = 0; i < buildings.length; i++) {
+      b = buildings[i];
+      if (!b || b.kind !== 'survival' || b.implemented !== true) continue;
+      effect = isObject(b.effect) ? b.effect : {};
+      cost = pickMaterials(b.cost, COST_KEYS, true);
+      derived.survivalCosts[b.id] = cost;
+      derived.survivalSteps.push({
+        id: b.id,
+        name: isStr(b.name) ? b.name : b.id,
+        stage: isNum(b.stage) ? b.stage : null,
+        cost: clone(cost),
+        needs: isArray(b.prereq) ? clone(b.prereq) : [],
+        effect: clone(effect),
+        desc: isStr(b.desc) ? b.desc : '',
+        tip: isStr(b.tip) ? b.tip : '',
+        modelKey: modelKeyOf(b.icon),
+        icon: isStr(b.icon) ? b.icon : null
+      });
+      /* 速率键：waterRate/waterEvery -> rain* 或 purify*，foodRate/foodEvery -> fish*。 */
+      name = b.id;
+      if (isNum(effect.waterEvery) && isNum(effect.waterRate)) {
+        var prefix = name === 'purifier' ? 'purify' : (name === 'rainCatcher' ? 'rain' : null);
+        if (prefix) {
+          derived.survivalRates[prefix + 'Every'] = effect.waterEvery;
+          derived.survivalRates[prefix + 'Amount'] = effect.waterRate;
+        }
+      }
+      if (name === 'fishBasket' && isNum(effect.foodEvery) && isNum(effect.foodRate)) {
+        derived.survivalRates.fishEvery = effect.foodEvery;
+        derived.survivalRates.fishAmount = effect.foodRate;
+      }
+    }
+
+    state.derived = derived;
+  }
+
+  /* --- 5. 加载 ---------------------------------------------------------- */
+
+  function apply(inlineData, sourceLabel) {
+    var next = {}, name, raw, previous = state.tables;
+    for (var i = 0; i < TABLE_NAMES.length; i++) {
+      name = TABLE_NAMES[i];
+      if (inlineData && isObject(inlineData) && inlineData[name] !== undefined) {
+        raw = inlineData[name];
+      } else if (previous && previous[name]) {
+        raw = previous[name];
+      } else {
+        raw = EMBEDDED && EMBEDDED[name];
+      }
+      next[name] = normalizeTable(name, raw);
+    }
+    state.tables = next;
+    state.source = sourceLabel;
+    buildItems();
+    rebuildDerived();
+    return validate();
+  }
+
+  /* 用内联数据（或缺省用 EMBEDDED）初始化；返回 { ok, problems, warnings }。 */
+  function init(inlineData) {
+    return apply(inlineData, inlineData ? 'inline' : 'embedded');
+  }
+
+  /* 与 init 相同语义，但明确表示「后台改过数据，整份换掉」。 */
+  function reload(inlineData) {
+    state.tables = null;
+    return apply(inlineData, inlineData ? 'inline' : 'embedded');
+  }
+
+  /* --- 6. 校验 ---------------------------------------------------------- */
+
+  function validate() {
+    var problems = [], warnings = [];
+    var i, j, k, item, b, r, n, list, seen, enums, keys, effectKeys, sum;
+
+    if (!state.tables) {
+      return { ok: false, problems: ['尚未初始化：先调用 GameData.init()'], warnings: warnings };
+    }
+
+    /* 6.1 四张表的结构 */
+    for (i = 0; i < TABLE_NAMES.length; i++) {
+      var name = TABLE_NAMES[i];
+      var table = state.tables[name];
+      if (!isObject(table)) { problems.push(name + ': 整张表缺失或不是对象'); continue; }
+      if (table.schema !== SCHEMAS[name]) {
+        problems.push(name + '.schema: 期望 ' + SCHEMAS[name] + '，实际 ' + String(table.schema));
+      }
+      if (!isNum(table.version) || table.version < 1) {
+        problems.push(name + '.version: 期望 >=1 的数字，实际 ' + String(table.version));
+      }
+      list = state.items[name];
+      if (!list.length) problems.push(name + ': 条目数组为空（键名应为 ' + ITEM_KEY[name] + '）');
+      seen = {};
+      for (j = 0; j < list.length; j++) {
+        item = list[j];
+        if (!isObject(item)) { problems.push(name + '[' + j + ']: 不是对象'); continue; }
+        if (!isStr(item.id) || !item.id) { problems.push(name + '[' + j + '].id: 缺失'); continue; }
+        if (seen[item.id]) problems.push(name + ': id 重复 ' + item.id);
+        seen[item.id] = true;
+        if (!isStr(item.name) || !item.name) problems.push(name + '.' + item.id + '.name: 缺失');
+      }
+    }
+
+    /* 6.2 资源表 */
+    enums = (isObject(state.tables.resources) && isObject(state.tables.resources.enums)) ? state.tables.resources.enums : null;
+    var categories = enumList(enums, 'resources', 'category');
+    var sources = enumList(enums, 'resources', 'source');
+    var yieldKeys = enumList(enums, 'resources', 'yieldKeys');
+    var unlockTypes = enumList(enums, 'resources', 'unlockConditionType');
+    list = state.items.resources;
+    for (i = 0; i < list.length; i++) {
+      item = list[i];
+      if (!isObject(item)) continue;
+      if (categories.length && categories.indexOf(item.category) < 0) {
+        problems.push('resources.' + item.id + '.category: 不在枚举内（' + String(item.category) + '）');
+      }
+      if (!(isInt(item.tier) && item.tier >= 1 && item.tier <= 4)) {
+        problems.push('resources.' + item.id + '.tier: 期望 1-4 的整数，实际 ' + String(item.tier));
+      }
+      if (sources.length && sources.indexOf(item.source) < 0) {
+        problems.push('resources.' + item.id + '.source: 不在枚举内（' + String(item.source) + '）');
+      }
+      if (!isNum(item.spawnWeight) || item.spawnWeight < 0) {
+        problems.push('resources.' + item.id + '.spawnWeight: 期望 >=0 的数字，实际 ' + String(item.spawnWeight));
+      }
+      if (!isObject(item.yield)) {
+        problems.push('resources.' + item.id + '.yield: 缺失或不是对象');
+      } else {
+        for (k in item.yield) {
+          if (!Object.prototype.hasOwnProperty.call(item.yield, k)) continue;
+          if (yieldKeys.length && yieldKeys.indexOf(k) < 0) {
+            problems.push('resources.' + item.id + '.yield.' + k + ': 不在 enums.yieldKeys 内');
+          }
+          if (!isNum(item.yield[k])) {
+            problems.push('resources.' + item.id + '.yield.' + k + ': 应为数字');
+          }
+        }
+      }
+      if (isStr(item.color) && !HEX_COLOR.test(item.color)) {
+        problems.push('resources.' + item.id + '.color: 不是 #rrggbb（' + item.color + '）');
+      }
+      if (isObject(item.unlockCondition) && unlockTypes.length && unlockTypes.indexOf(item.unlockCondition.type) < 0) {
+        problems.push('resources.' + item.id + '.unlockCondition.type: 不在枚举内（' + String(item.unlockCondition.type) + '）');
+      }
+    }
+
+    /* 6.3 海面刷新池：gameBinding 的下标必须从 0 连续，权重之和必须等于 12 */
+    var bound = surfaceBindings();
+    var slots = {};
+    for (i = 0; i < bound.length; i++) {
+      var idx = bound[i].gameBinding.pickupKindIndex;
+      var where = 'resources.' + bound[i].id + '.gameBinding';
+      if (slots[idx] !== undefined) problems.push(where + '.pickupKindIndex: 与 ' + slots[idx] + ' 重复（' + idx + '）');
+      slots[idx] = bound[i].id;
+      if (bound[i].source !== 'surface') problems.push(where + ': 锚定了 game.js 但不是 source=surface');
+      if (!isNum(bound[i].spawnWeight) || bound[i].spawnWeight <= 0) {
+        problems.push(where + ': 进刷新池的条目 spawnWeight 必须 >0');
+      }
+      if (!isNum(bound[i].gameBinding.scoreValue)) problems.push(where + '.scoreValue: 缺失');
+      if (!isStr(bound[i].gameBinding.glow) || !HEX_COLOR.test(bound[i].gameBinding.glow)) {
+        problems.push(where + '.glow: 缺失或不是 #rrggbb');
+      }
+      if (modelKeyOf(bound[i].icon) === null) {
+        problems.push(where + ': icon 不是 *_BOXES，游戏无法用它查体素模型');
+      }
+      for (k in (bound[i].yield || {})) {
+        if (!Object.prototype.hasOwnProperty.call(bound[i].yield || {}, k)) continue;
+        if (COST_KEYS.indexOf(k) < 0) {
+          warnings.push(where + '.yield.' + k + ': 游戏经济只有 ' + COST_KEYS.join('/') + '，转换给游戏的 res 已裁剪掉它');
+        }
+      }
+    }
+    var surfaceItems = 0;
+    for (i = 0; i < list.length; i++) if (list[i] && list[i].source === 'surface') surfaceItems++;
+    if (surfaceItems > bound.length) {
+      warnings.push('resources: surface 条目 ' + surfaceItems + ' 条，其中 ' + bound.length + ' 条有 gameBinding（已进游戏）；其余尚未在 game.js 实现，转换时被排除');
+    }
+    if (bound.length) {
+      for (i = 0; i < bound.length; i++) {
+        if (slots[i] === undefined) { problems.push('resources: gameBinding 下标不连续，缺 ' + i); break; }
+      }
+    }
+    sum = 0;
+    for (i = 0; i < bound.length; i++) sum += bound[i].spawnWeight;
+    if (bound.length && Math.abs(sum - SURFACE_POOL_TOTAL) > 1e-9) {
+      problems.push('resources: 海面刷新池权重之和应为 ' + SURFACE_POOL_TOTAL + '（= game.js Math.random()*' + SURFACE_POOL_TOTAL + '），实际 ' + sum);
+    }
+
+    /* 6.4 建筑表 */
+    enums = (isObject(state.tables.buildings) && isObject(state.tables.buildings.enums)) ? state.tables.buildings.enums : null;
+    var positionRules = enumList(enums, 'buildings', 'positionRule');
+    effectKeys = enumList(enums, 'buildings', 'effectKeys');
+    var buildingIds = state.index.buildings;
+    list = state.items.buildings;
+    for (i = 0; i < list.length; i++) {
+      b = list[i];
+      if (!isObject(b)) continue;
+      if (!isObject(b.cost)) {
+        problems.push('buildings.' + b.id + '.cost: 缺失或不是对象');
+      } else {
+        for (k in b.cost) {
+          if (!Object.prototype.hasOwnProperty.call(b.cost, k)) continue;
+          if (COST_KEYS_DATA.indexOf(k) < 0) problems.push('buildings.' + b.id + '.cost.' + k + ': 未知材料键');
+          if (!isNum(b.cost[k]) || b.cost[k] < 0) problems.push('buildings.' + b.id + '.cost.' + k + ': 应为 >=0 的数字');
+        }
+        for (j = 0; j < COST_KEYS.length; j++) {
+          if (!isNum(b.cost[COST_KEYS[j]])) {
+            problems.push('buildings.' + b.id + '.cost.' + COST_KEYS[j] + ': 缺失（game.js 的造价同形，三键必填，可为 0）');
+          }
+        }
+      }
+      if (positionRules.length && positionRules.indexOf(b.positionRule) < 0) {
+        problems.push('buildings.' + b.id + '.positionRule: 不在枚举内（' + String(b.positionRule) + '）');
+      }
+      if (isArray(b.prereq)) {
+        for (j = 0; j < b.prereq.length; j++) {
+          var pre = b.prereq[j];
+          if (!isStr(pre) || !pre) { problems.push('buildings.' + b.id + '.prereq[' + j + ']: 应为非空字符串'); continue; }
+          if (pre.indexOf(':') >= 0) continue; /* skill: / npc: / progress: 前缀不是建筑 id */
+          if (!buildingIds[pre]) problems.push('buildings.' + b.id + '.prereq: 引用了不存在的建筑 ' + pre);
+        }
+      }
+      if (isObject(b.effect)) {
+        for (k in b.effect) {
+          if (!Object.prototype.hasOwnProperty.call(b.effect, k)) continue;
+          if (effectKeys.length && effectKeys.indexOf(k) < 0) {
+            problems.push('buildings.' + b.id + '.effect.' + k + ': 不在 enums.effectKeys 内');
+          }
+        }
+      }
+      if (b.kind === 'town' && b.implemented === true) {
+        if (!isStr(b.desc) || !b.desc) problems.push('buildings.' + b.id + '.desc: 缺失（game.js BUILDING_SPECS[].desc 要显示它）');
+        if (modelKeyOf(b.icon) === null) problems.push('buildings.' + b.id + '.icon: 不是 *_BOXES，游戏无法用它查体素模型');
+      }
+    }
+
+    /* 6.5 菜谱表：食材必须能在资源表里找到 */
+    list = state.items.recipes;
+    for (i = 0; i < list.length; i++) {
+      r = list[i];
+      if (!isObject(r)) continue;
+      if (!isObject(r.ingredients) || !Object.keys(r.ingredients).length) {
+        problems.push('recipes.' + r.id + '.ingredients: 缺失或为空');
+      } else {
+        for (k in r.ingredients) {
+          if (!Object.prototype.hasOwnProperty.call(r.ingredients, k)) continue;
+          if (!state.index.resources[k]) problems.push('recipes.' + r.id + '.ingredients: 引用了不存在的资源 ' + k);
+          if (!isNum(r.ingredients[k])) problems.push('recipes.' + r.id + '.ingredients.' + k + ': 应为数字');
+        }
+      }
+      if (!isNum(r.basePrice)) problems.push('recipes.' + r.id + '.basePrice: 缺失或不是数字');
+      if (!isNum(r.cookTime)) problems.push('recipes.' + r.id + '.cookTime: 缺失或不是数字');
+      if (isArray(r.suggestedPriceRange) && r.suggestedPriceRange.length === 2) {
+        if (r.suggestedPriceRange[0] > r.suggestedPriceRange[1]) {
+          problems.push('recipes.' + r.id + '.suggestedPriceRange: 下限大于上限');
+        }
+      }
+    }
+
+    /* 6.6 NPC 表 */
+    list = state.items.npcs;
+    for (i = 0; i < list.length; i++) {
+      n = list[i];
+      if (!isObject(n)) continue;
+      if (!isObject(n.recruitCondition)) problems.push('npcs.' + n.id + '.recruitCondition: 缺失或不是对象');
+      if (!isStr(n.specialty)) warnings.push('npcs.' + n.id + '.specialty: 缺失（后台按此展示特长，游戏暂不消费）');
+    }
+
+    /* 6.7 转换结果自检：产物必须是 game.js 能直接吃的形状 */
+    var kinds = state.derived.pickupKinds;
+    if (bound.length && kinds.length !== bound.length) {
+      problems.push('pickupKindsForGame(): 产出 ' + kinds.length + ' 条，与 gameBinding 条目 ' + bound.length + ' 条不一致');
+    }
+    for (i = 0; i < kinds.length; i++) {
+      if (!isStr(kinds[i].name) || !kinds[i].name) problems.push('pickupKindsForGame()[' + i + '].name: 缺失');
+      if (!isNum(kinds[i].value)) problems.push('pickupKindsForGame()[' + i + '].value: 缺失');
+      if (!isObject(kinds[i].res) || !Object.keys(kinds[i].res).length) problems.push('pickupKindsForGame()[' + i + '].res: 为空');
+      if (!isStr(kinds[i].glowColor)) problems.push('pickupKindsForGame()[' + i + '].glowColor: 缺失');
+      if (!isStr(kinds[i].modelKey)) problems.push('pickupKindsForGame()[' + i + '].modelKey: 缺失');
+    }
+    var specs = state.derived.buildingSpecs;
+    for (i = 0; i < specs.length; i++) {
+      for (j = 0; j < COST_KEYS.length; j++) {
+        if (!isNum(specs[i].cost[COST_KEYS[j]])) {
+          problems.push('buildingSpecsForGame()[' + i + '].cost.' + COST_KEYS[j] + ': 缺失');
+        }
+      }
+      if (!isNum(specs[i].pop)) problems.push('buildingSpecsForGame()[' + i + '].pop: 缺失');
+      if (specs[i].perk === null) {
+        problems.push('buildingSpecsForGame()[' + i + '] (' + specs[i].name + ').perk: 数据表 effect 里没有可用作 perk 的键');
+      }
+      if (!isStr(specs[i].desc) || !specs[i].desc) problems.push('buildingSpecsForGame()[' + i + '].desc: 缺失');
+    }
+    if (!specs.length) problems.push('buildingSpecsForGame(): 没有任何 kind=town 且 implemented=true 的建筑');
+
+    var steps = state.derived.survivalSteps;
+    for (i = 0; i < steps.length; i++) {
+      for (j = 0; j < steps[i].needs.length; j++) {
+        var need = steps[i].needs[j];
+        if (!state.index.buildings[need]) problems.push('survival.' + steps[i].id + '.needs: 引用了不存在的建筑 ' + need);
+      }
+    }
+
+    return { ok: problems.length === 0, problems: problems, warnings: warnings };
+  }
+
+  /* --- 7. 公开接口 ------------------------------------------------------ */
+
+  var api = {
+    version: MODULE_VERSION,
+
+    /* 加载。inlineData 形如 { resources: <整张表>, buildings: ..., recipes: ..., npcs: ... }；
+     * 缺省的表沿用当前数据（首次调用则用 EMBEDDED）。返回 validate() 的结果。 */
+    init: init,
+    reload: reload,
+
+    /* 整表查询（返回副本，改它不会影响真相来源）。 */
+    resources: function () { return state.items ? clone(state.items.resources) : []; },
+    resourceById: function (id) { return state.index && state.index.resources[id] ? clone(state.index.resources[id]) : null; },
+    buildings: function () { return state.items ? clone(state.items.buildings) : []; },
+    buildingById: function (id) { return state.index && state.index.buildings[id] ? clone(state.index.buildings[id]) : null; },
+    recipes: function () { return state.items ? clone(state.items.recipes) : []; },
+    recipeById: function (id) { return state.index && state.index.recipes[id] ? clone(state.index.recipes[id]) : null; },
+    npcs: function () { return state.items ? clone(state.items.npcs) : []; },
+    npcById: function (id) { return state.index && state.index.npcs[id] ? clone(state.index.npcs[id]) : null; },
+
+    /* 表头信息（版本 / 更新时间 / 条目数），后台与调试用。 */
+    tableMeta: function (name) {
+      var t = state.tables && state.tables[name];
+      if (!isObject(t)) return null;
+      return {
+        schema: t.schema, version: t.version, updatedAt: t.updatedAt || null,
+        title: t.title || null, count: state.items[name].length
+      };
+    },
+
+    /* 海面打捞物（source=surface）。opts.implementedOnly=true 只取已锚定 game.js 的。 */
+    surfaceResources: function (opts) {
+      var onlyImplemented = !!(opts && opts.implementedOnly);
+      var out = [], list = state.items ? state.items.resources : [], i;
+      for (i = 0; i < list.length; i++) {
+        if (!list[i] || list[i].source !== 'surface') continue;
+        if (onlyImplemented && !(isObject(list[i].gameBinding) && isInt(list[i].gameBinding.pickupKindIndex))) continue;
+        out.push(clone(list[i]));
+      }
+      return out;
+    },
+
+    /* 与 game.js PICKUP_KINDS 结构对齐。game.js 侧用 modelKey 查自己的体素模型表：
+     *   { id, name, value, res: {wood,plastic,metal}, glowColor, spawnWeight,
+     *     spawnFrom, spawnTo, modelKey, icon, tier, category, yieldAll } */
+    pickupKindsForGame: function () { return clone(state.derived ? state.derived.pickupKinds : []); },
+
+    /* 与 game.js BUILDING_SPECS 结构对齐（kind=town 且 implemented，顺序即建造顺序）：
+     *   { id, name, cost: {wood,plastic,metal}, pop, perk, perkValue, desc, tip, modelKey, ... } */
+    buildingSpecsForGame: function () { return clone(state.derived ? state.derived.buildingSpecs : []); },
+
+    /* 生存层：6 步造价（可直接替换 game.js R.survival.workbench 等） */
+    survivalCostsForGame: function () { return clone(state.derived ? state.derived.survivalCosts : {}); },
+    /* 生存层：建造步骤（id/name/cost/needs/desc/tip/modelKey），顺序即解锁顺序 */
+    survivalStepsForGame: function () { return clone(state.derived ? state.derived.survivalSteps : []); },
+    /* 生存层：速率（rainEvery/rainAmount/fishEvery/fishAmount/purifyEvery/purifyAmount） */
+    survivalRatesForGame: function () { return clone(state.derived ? state.derived.survivalRates : {}); },
+
+    /* game.js 里 Math.random() * <这个数> 就是海面刷新池的区间总宽度。 */
+    spawnWeightTotal: function () { return state.derived ? state.derived.surfaceWeightTotal : SURFACE_POOL_TOTAL; },
+
+    validate: validate,
+
+    /* 一段话概括当前状态，方便日志与自检。 */
+    info: function () {
+      var ok = state.tables !== null;
+      return {
+        moduleVersion: MODULE_VERSION,
+        source: state.source,
+        ready: ok,
+        counts: ok ? {
+          resources: state.items.resources.length,
+          buildings: state.items.buildings.length,
+          recipes: state.items.recipes.length,
+          npcs: state.items.npcs.length,
+          pickupKinds: state.derived.pickupKinds.length,
+          buildingSpecs: state.derived.buildingSpecs.length,
+          survivalSteps: state.derived.survivalSteps.length
+        } : null,
+        surfaceWeightTotal: state.derived ? state.derived.surfaceWeightTotal : null,
+        embeddedTables: EMBEDDED ? Object.keys(EMBEDDED) : []
+      };
+    }
+  };
+
+  /* 加载即初始化：游戏侧 import 完就能查，不强制先调 init()。 */
+  try {
+    apply(null, 'embedded');
+  } catch (error) {
+    /* 数据本身有问题时不能让整个游戏黑屏：留给 init()/validate() 报错。 */
+    state.tables = null;
+    state.items = null;
+    state.index = null;
+    state.derived = null;
+  }
+
+  return api;
+});

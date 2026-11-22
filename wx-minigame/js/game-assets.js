@@ -19,7 +19,7 @@ var cancelAnimationFrame = function (id) { return (__wxRoot.cancelAnimationFrame
 window.GAME = Object.assign(window.GAME || {}, {
   "title": "漂流小镇",
   "rules": {
-    "duration": 85,
+    "duration": 240,
     "hearts": 4,
     "heroSpeed": 8,
     "enemySpeed": 1.6,
@@ -45,6 +45,51 @@ window.GAME = Object.assign(window.GAME || {}, {
     "comboWindow": 5,
     "specialEvery": 10,
     "autoBuild": false,
+    "survival": {
+      "thirstRate": 1.5,
+      "hungerRate": 0.6,
+      "starveEvery": 1.6,
+      "selfSustainSec": 60,
+      "shelterCountsAsTown": true,
+      "rainEvery": 8,
+      "rainAmount": 8,
+      "fishEvery": 10,
+      "fishAmount": 6,
+      "purifyEvery": 5,
+      "purifyAmount": 12,
+      "foodDropEvery": 9,
+      "foodDropAmount": 26,
+      "workbench": {
+        "wood": 4,
+        "plastic": 0,
+        "metal": 0
+      },
+      "shelter": {
+        "wood": 8,
+        "plastic": 2,
+        "metal": 0
+      },
+      "rainCatcher": {
+        "wood": 3,
+        "plastic": 2,
+        "metal": 0
+      },
+      "fishBasket": {
+        "wood": 4,
+        "plastic": 0,
+        "metal": 0
+      },
+      "scoopNet": {
+        "wood": 3,
+        "plastic": 0,
+        "metal": 0
+      },
+      "purifier": {
+        "wood": 4,
+        "plastic": 0,
+        "metal": 2
+      }
+    },
     "worldSize": 34,
     "seed": 7,
     "palette": {
