@@ -19,8 +19,8 @@ var cancelAnimationFrame = function (id) { return (__wxRoot.cancelAnimationFrame
 window.GAME = Object.assign(window.GAME || {}, {
   "title": "漂流小镇",
   "rules": {
-    "duration": 240,
-    "hearts": 4,
+    "duration": 999999,
+    "hearts": 5,
     "heroSpeed": 8,
     "enemySpeed": 1.6,
     "enemySpeedGrowth": 0.02,
@@ -46,8 +46,8 @@ window.GAME = Object.assign(window.GAME || {}, {
     "specialEvery": 10,
     "autoBuild": false,
     "survival": {
-      "thirstRate": 1.5,
-      "hungerRate": 0.6,
+      "thirstRate": 0.4,
+      "hungerRate": 0.15,
       "starveEvery": 1.6,
       "selfSustainSec": 60,
       "shelterCountsAsTown": true,

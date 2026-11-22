@@ -8963,9 +8963,9 @@ var THREE = __wxRoot.THREE || window.THREE;
       }], font * 0.78);
     }
     // TEMP diagnostics removed.
-    hudCtx.font = '700 ' + font + 'px ' + FONT;
-    var seconds = Math.ceil(timeLeft);
-    var timerText = Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+    // Session clock counts UP (no round timer any more — the world persists).
+    var sessionMin = Math.floor(elapsed / 60), sessionSec = Math.floor(elapsed % 60);
+    var timerText = sessionMin + ':' + String(sessionSec).padStart(2, '0');
     var cap = window.GAME && window.GAME.safeArea; // keep clear of WeChat's capsule button
     var ty = cap && typeof cap.bottom === 'number' && cap.bottom > 0 ? cap.bottom + 10 : m;
     drawPill(w - m - hudCtx.measureText(timerText).width - 20, ty, [{ text: timerText, color: '#fff' }], font);
@@ -10053,8 +10053,10 @@ var THREE = __wxRoot.THREE || window.THREE;
   }
   function start() {
     clearEntities();
-    // 面板全部关掉，避免上一局的面板残留到新一局
     closeNpcPanel(); closeSushiPanel();
+    /* --- Cold start only. After the first start(), dying calls respawn(),
+     * not start(): buildings, survival gear, recruits and castaways persist,
+     * only the volatile combat state resets. --- */
     buildings.forEach(function (b) { hero.node.userData.body.remove(b); });
     buildings = [];
     survivalModels.forEach(function (b) { hero.node.userData.body.remove(b); });
@@ -10071,26 +10073,28 @@ var THREE = __wxRoot.THREE || window.THREE;
     starveT = 0; foodDropT = 0; selfSustainT = 0; townReady = false; townReadyBanner = 0;
     buildOffer = null; buildSel = 0; buildOfferT = 0; offerCooldown = 5;
     manageOpen = false; manageRects = null; manageSel = 0;
-    // 面板状态一起复位：不把上一局的面板 / 滚动 / 缓存数据带进新一局。
     closePanel(); panelTab = 'local';
     docked = false; dockX = 0; dockZ = 0; fishTimer = 0; fishReady = false;
     castaways.forEach(function (c) { scene.remove(c.node); scene.remove(c.ring); });
     castaways = []; recruited = [];
     castawayTimer = 26; buildDiscount = 0; foodPerk = 0; scorePerk = 0; oxygenPerk = 0;
     surgeT = 0; surgeShowT = 0; waterDry = 0; waterDropT = 0; guardT = 0;
-    // Keep the patrolled zone a short sail away from where the raft starts.
     var zAng = Math.random() * Math.PI * 2, zDist = 14 + Math.random() * 6;
     zone.x = Math.cos(zAng) * zDist; zone.z = Math.sin(zAng) * zDist;
     hero.x = 0; hero.z = 0; hero.vx = hero.vz = 0; hero.dashT = 0; hero.dashCd = 0;
     ensureMusic();
+    /* Persistent world: restore a saved session if one exists. */
+    var saved = loadWorld();
+    if (saved) {
+      restoreWorld(saved);
+      if (survival.length || buildings.length) {
+        addFT('欢迎回来 · 你的小镇还在', hero.x, hero.z, '#9ff0b8', 3);
+      }
+    }
     for (var i = 0; i < R.maxPickups; i++) addPickup();
-    addEnemy();   // one shark to start; the spawn timer brings the rest
+    addEnemy();
     blip(520, 0.12, 'triangle', 0.07, 780);
     setPhase('playing');
-    /* Debug-only: R.debugPanel opens a panel for screenshots (see DEFAULTS).
-     * The two -Key variants go through the real keyboard handlers with a
-     * synthetic key event, so the A / L bindings themselves are proven — not
-     * just the open function the other two values call directly. */
     if (R.debugPanel === 'ach') openAchievePanel();
     else if (R.debugPanel === 'lb') openLeaderPanel();
     else if (R.debugPanel === 'achKey' || R.debugPanel === 'lbKey') {
@@ -10100,32 +10104,166 @@ var THREE = __wxRoot.THREE || window.THREE;
         window.dispatchEvent(new KeyboardEvent('keyup', { code: code }));
       } catch (e) { /* no KeyboardEvent (older WeChat): the hook is debug-only */ }
     } else if (R.debugPanel === 'selfcheck') {
-      /* Run the panel self-check once the round is live, then leave the result
-       * for drawSelfCheckOverlay to paint over the HUD. */
       try { selfCheckResult = panelSelfCheck(); } catch (e) {
         selfCheckResult = { passed: false, total: 1, passedCount: 0,
                             items: [{ name: '自检抛异常', ok: false, detail: String(e && e.message || e) }] };
       }
     }
   }
+
+  /** Death in a persistent world: lose some resources, keep every building,
+   *  every recruit, every piece of survival gear. This is what makes the game
+   *  "playable" in the survival-builder sense — dying costs you materials,
+   *  not your town. */
+  function respawn() {
+    clearEntities();                       // enemies and pickups only
+    closeNpcPanel(); closeSushiPanel(); closePanel(); closeManage();
+    // What you lose: half of every resource, and the combo.
+    res.wood = Math.floor(res.wood * 0.5);
+    res.plastic = Math.floor(res.plastic * 0.5);
+    res.metal = Math.floor(res.metal * 0.5);
+    combo = 0; lastPick = -99; comboShowT = 0;
+    // What you keep: buildings, survivalModels, survival[], recruited[],
+    // castaways, SushiShop state, NpcDialogue state, pop, perks.
+    // What resets: your body.
+    hearts = R.hearts;
+    canteen = maxWater; food = maxFood;
+    invulnerable = 3;                      // a generous grace window
+    hurtFlash = 0; shake = 0;
+    hero.x = 0; hero.z = 0; hero.vx = hero.vz = 0; hero.dashT = 0; hero.dashCd = 0;
+    docked = false;
+    for (var i = 0; i < R.maxPickups; i++) addPickup();
+    addFT('你被救回船上 · 损失一半材料', hero.x, hero.z, '#ffb4a0', 3.2);
+    blip(220, 0.3, 'sine', 0.05, 440);
+    setPhase('playing');
+    for (var e = 0; e < 2; e++) addEnemy();  // some danger, not a wall
+  }
   function finish(result) {
     if (score > best) { best = score; try { window.localStorage.setItem('dsh-game-studio:drift-town:best', String(best)); } catch (e) { /* sandboxed */ } }
-    var won = result === 'town' || result === 'partial';
-    lastReason = result;
-    /* Report the run to the leaderboard. The local board always works; the
-     * friend board only works inside WeChat with the open-data domain wired up,
-     * and the server board has no backend — the module says so rather than
-     * inventing a ranking. */
+    /* Report the run to the leaderboard. The local board always works. */
     try {
       if (window.Leaderboard && window.Achievements) {
         var rec = window.Leaderboard.recordFromState(window.__gameState(), window.Achievements);
         window.Leaderboard.submit(rec, { local: true, remote: true });
       }
     } catch (e) { /* never let stats break the round end */ }
-    blip(won ? 660 : 220, 0.5, won ? 'triangle' : 'sawtooth', 0.06, won ? 990 : 110);
-    setPhase(won ? 'won' : 'lost');
+    lastReason = result;
+    /* In the persistent world, dying is a setback, not a game over:
+     * you respawn on your ship, keep every building, lose half your materials.
+     * Building the full town is a milestone, not an ending — it stays on screen
+     * and the player keeps playing. */
+    if (result === 'shark' || result === 'hunger' || result === 'thirst') {
+      respawn();
+      return;
+    }
+    if (result === 'town') {
+      // Milestone: celebrate, then keep playing.
+      addFT('漂流小镇落成！继续经营你的海上小镇', hero.x, hero.z, '#ffe2a8', 4);
+      fanfare([523, 659, 784, 1047, 1319], 0.13, 'triangle', 0.08);
+      if (window.Achievements) { try { window.Achievements.note({ townComplete: 1 }); } catch (e) {} }
+      return;   // do NOT setPhase — the world carries on
+    }
+    // No other end conditions exist any more (timeout removed).
   }
   function canRestart() { return performance.now() - endedAt > 600; }
+
+  /* --- Save / load: the world persists across sessions --- */
+  var SAVE_KEY = 'drift-town:save:v1';
+  function saveWorld() {
+    try {
+      var s = (typeof localStorage !== 'undefined') ? localStorage : null;
+      if (!s) return;
+      s.setItem(SAVE_KEY, JSON.stringify({
+        survival: survival.slice(),            // ids of built survival gear
+        townSpecs: buildings.map(function (b, i) { return b.userData.specIndex; }).filter(function (x) { return x !== undefined; }),
+        res: res, score: score, pop: pop,
+        recruitedIds: recruited.map(function (r) { return r.id; }).filter(function (x) { return x; })
+      }));
+    } catch (e) { /* sandboxed or full */ }
+  }
+  function loadWorld() {
+    try {
+      var s = (typeof localStorage !== 'undefined') ? localStorage : null;
+      if (!s) return null;
+      var raw = s.getItem(SAVE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+  /** Auto-save whenever something meaningful changes. */
+  var saveTimer = 0;
+  function maybeSave(dt) {
+    saveTimer -= dt;
+    if (saveTimer > 0) return;
+    saveTimer = 5;   // at most once every 5 seconds
+    saveWorld();
+  }
+  /** Restore a saved world into the live game. Called from start(). */
+  function restoreWorld(saved) {
+    if (!saved) return;
+    // Restore resources.
+    if (saved.res) { res.wood = saved.res.wood || 0; res.plastic = saved.res.plastic || 0; res.metal = saved.res.metal || 0; }
+    score = saved.score || 0;
+    // Restore survival gear (workbench, shelter, etc.).
+    if (saved.survival) {
+      for (var i = 0; i < saved.survival.length; i++) {
+        var id = saved.survival[i];
+        if (hasBuilt(id)) continue;
+        var step = stepById(id);
+        if (!step) continue;
+        // Rebuild it without paying again.
+        var model = voxelModel(step.boxes, true);
+        model.position.set(step.at[0], step.at[1], step.at[2]);
+        model.scale.setScalar(step.scale);
+        model.userData.pop = 1;   // skip the pop animation
+        hero.node.userData.body.add(model);
+        model.userData.stepId = step.id;
+        survival.push(step.id);
+        survivalModels.push(model);
+      }
+    }
+    // Restore town buildings.
+    if (saved.townSpecs) {
+      for (var b = 0; b < saved.townSpecs.length; b++) {
+        var specIdx = saved.townSpecs[b];
+        if (specIdx === undefined || specIdx === null || specIdx >= BUILDING_SPECS.length) continue;
+        var spec = BUILDING_SPECS[specIdx];
+        var at = BUILDING_POS[buildings.length % BUILDING_POS.length];
+        if (!at) continue;
+        var bmodel = voxelModel(BUILDING_BOXES[specIdx], true);
+        bmodel.position.set(at[0], at[1], at[2]);
+        bmodel.scale.setScalar(BUILDING_SCALE);
+        bmodel.userData.pop = 1;
+        bmodel.userData.specIndex = specIdx;
+        hero.node.userData.body.add(bmodel);
+        buildings.push(bmodel);
+        // Apply the perk silently.
+        if (spec.perk === 'maxHearts' && baseHearts < 5) { baseHearts += 1; R.hearts = baseHearts; }
+        if (spec.perk === 'speed') baseSpeed += 0.5;
+        if (spec.perk === 'water') maxWater += 25;
+        if (spec.perk === 'magnet') magnet += 0.9;
+        if (spec.perk === 'trade') tradeBonus += 1;
+        if (spec.perk === 'shields') shieldBonus += 2;
+        R.heroSpeed = baseSpeed;
+        pop += spec.pop;
+      }
+    }
+    // Restore recruits.
+    if (saved.recruitedIds) {
+      for (var r = 0; r < saved.recruitedIds.length; r++) {
+        var rid = saved.recruitedIds[r];
+        for (var d = 0; d < CASTAWAY_DEFS.length; d++) {
+          if (CASTAWAY_DEFS[d].id === rid) {
+            var def = CASTAWAY_DEFS[d];
+            if (recruited.indexOf(def) < 0) {
+              recruited.push(def);
+              applyPerk(def);
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
   /** 镇 x/6 counts the town buildings plus the shelter: a home is a home. The
    *  town still cannot win before the survival layer is self-sustaining. */
   function townCount() { return buildings.length + (SURV.shelterCountsAsTown && hasBuilt('shelter') ? 1 : 0); }
@@ -10772,7 +10910,8 @@ var THREE = __wxRoot.THREE || window.THREE;
         }
       }
       while (pickups.length < R.maxPickups) addPickup();
-      if (timeLeft <= 0) finish(townCount() >= 4 ? 'partial' : 'timeout');
+      // No round timer any more: the world persists until the player dies.
+      // (R.duration is 999999 — effectively endless.)
     }
 
     // Animate everything, also behind the cards.
@@ -10878,6 +11017,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     // Endless sea: mesh the chunks around the raft, drop the ones behind, and
     // keep the wave plane and sea floor centred on the camera so there is no edge.
     updateCastaways(dt, t);
+    maybeSave(dt);   // persistent world: autosave every few seconds
     updateFishing(dt);
     /* Achievements: tick once a frame with the live state. Unlocks are queued
      * and drawn as banners by drawHUD, so no DOM is involved. */
@@ -11442,6 +11582,13 @@ var THREE = __wxRoot.THREE || window.THREE;
   window.__debugCast = function () { castLine(); return fishTimer; };
   window.__debugReel = function () { return reelIn(); };
   window.__debugExitDive = function () { exitDive(); return !(dive && dive.active()); };
+  /* Kill the player instantly — used by the persistent-world test to prove
+   * that respawn() keeps buildings and halves resources. */
+  window.__debugKill = function () {
+    hearts = 0;
+    finish('shark');
+    return true;
+  };
   /* Debug hooks for the NPC / sushi panels. */
   window.__debugNpc = function () {
     if (window.NpcDialogue && window.NpcDialogue.availableEvent()) { openNpcPanel(); return true; }
