@@ -8892,25 +8892,38 @@ var THREE = __wxRoot.THREE || window.THREE;
     var hintY = barY + barH + (hasBuilt('fishBasket') ? barH + 14 : 8);
     var step = nextSurvivalStep();
     if (step) {
-      drawPill(m, hintY, [{
-        text: survivalHintText() + '  （按 建 / B）',
-        color: canAffordCost(stepCost(step)) ? '#9ff0b8' : '#ffb4a0'
-      }], font * 0.78);
+      var afford = canAffordCost(stepCost(step));
+      var cst = stepCost(step);
+      var missing = [];
+      if (res.wood < cst.wood) missing.push('木' + (cst.wood - res.wood));
+      if (res.plastic < cst.plastic) missing.push('塑' + (cst.plastic - res.plastic));
+      if (res.metal < cst.metal) missing.push('铁' + (cst.metal - res.metal));
+      var hint = afford
+        ? step.name + ' 材料够了！点「建」按钮造它'
+        : survivalHintText() + '  还差 ' + (missing.join(' ') || '一点');
+      drawPill(m, hintY, [{ text: hint, color: afford ? '#9ff0b8' : '#ffb4a0' }], font * 0.78);
+      if (afford) { // pulse the hint so the eye catches the moment it turns green
+        hudCtx.globalAlpha = 0.35 + Math.sin(performance.now() / 220) * 0.25;
+        hudCtx.strokeStyle = '#9ff0b8'; hudCtx.lineWidth = 2;
+        roundRect(m, hintY, Math.min(w * 0.5, 300), font * 1.3 + 10, 10); hudCtx.stroke();
+        hudCtx.globalAlpha = 1;
+      }
     } else if (!buildOffer) {
       drawPill(m, hintY, [{ text: '生存装备齐备 · 打捞攒材料建镇', color: '#9ff0b8' }], font * 0.78);
     }
-    /* --- Onboarding: a three-line coach on the lower-left, shown until the
-     * player has built the workbench. Text only, no emoji (WeChat Canvas has no
-     * colour-emoji font). Fades out once stage 0 is behind the player. --- */
-    if (!hasBuilt('workbench') && phase === 'playing' && !buildOpen) {
+    /* --- Onboarding: a three-line coach on the lower-left. It disappears for
+     * good once the workbench stands, OR after 90 seconds (so it cannot nag a
+     * player forever), and shows live progress on the wood they need. --- */
+    var coachElapsed = coachT0 ? (performance.now() - coachT0) / 1000 : 0;
+    if (!hasBuilt('workbench') && phase === 'playing' && !buildOpen && coachElapsed < 90) {
       var nowMs = performance.now();
       if (!coachT0) coachT0 = nowMs;
       var coachA = Math.min(1, (nowMs - coachT0) / 400);   // fade in over 0.4s
       hudCtx.globalAlpha = coachA;
       var cLines = [
         '你在邮轮的甲板上。用摇杆靠近漂浮垃圾，自动打捞。',
-        '垃圾会拆成 木 / 塑 / 铁。攒够 木4。',
-        '按右下角圆钮「建」（或键盘 B）造工作台 —— 造完才算真正开始。'
+        '垃圾拆成 木/塑/铁。当前 木' + res.wood + '（工作台要 木4）。',
+        '按「建」或 B 造工作台；有 6 个圆钮：榜/成/潜/船/建/冲刺'
       ];
       hudCtx.font = '700 ' + (font * 0.8) + 'px ' + FONT;
       var cW = Math.min(w * 0.62, 430);
@@ -8928,19 +8941,18 @@ var THREE = __wxRoot.THREE || window.THREE;
       }
       hudCtx.globalAlpha = 1;
     } else coachT0 = 0;
-    /* Self-sustaining: the acceptance gate of stage 1, so it stays on screen as a
-     * standing line under the survival hint (not a 3-second toast that a
-     * screenshot can miss), plus a bright banner on the moment it first triggers. */
+    /* Self-sustaining: one standing line below the build hint. */
     if (townReady) {
       var srText = '口渴与饥饿可自持 —— 可以建立城镇了';
+      var srY = hintY + font * 1.55;
       hudCtx.font = '700 ' + (font * 0.78) + 'px ' + FONT;
       var srW = hudCtx.measureText(srText).width;
-      hudCtx.fillStyle = 'rgba(24,80,60,0.55)';
-      roundRect(m, hintY + font * 1.45, srW + 20, font * 1.45, 8); hudCtx.fill();
+      hudCtx.fillStyle = 'rgba(24,80,60,0.6)';
+      roundRect(m, srY, srW + 20, font * 1.5, 8); hudCtx.fill();
       hudCtx.strokeStyle = 'rgba(160,255,190,0.55)'; hudCtx.lineWidth = 1;
-      roundRect(m, hintY + font * 1.45, srW + 20, font * 1.45, 8); hudCtx.stroke();
+      roundRect(m, srY, srW + 20, font * 1.5, 8); hudCtx.stroke();
       hudCtx.fillStyle = '#c8ffd8';
-      hudCtx.fillText(srText, m + 10, hintY + font * 2.45);
+      hudCtx.fillText(srText, m + 10, srY + font * 1.1);
     }
     if (townReady && townReadyBanner > 0) { // the moment it first unlocks
       hudCtx.globalAlpha = Math.min(1, townReadyBanner);
@@ -8955,14 +8967,8 @@ var THREE = __wxRoot.THREE || window.THREE;
       hudCtx.textAlign = 'left';
       hudCtx.globalAlpha = 1;
     }
-    if (nextBuild < BUILDING_SPECS.length && !buildOffer && townReady) {
-      var spec = BUILDING_SPECS[nextBuild], ok = canAfford(spec);
-      drawPill(m, hintY + font * 1.5, [{
-        text: '造' + spec.name + ' ' + costText(spec),
-        color: ok ? '#9ff0b8' : '#ffb4a0'
-      }], font * 0.78);
-    }
-    // TEMP diagnostics removed.
+    // (The next town blueprint is shown through the build menu itself, so there
+    //  is no second overlapping pill here.)
     // Session clock counts UP (no round timer any more — the world persists).
     var sessionMin = Math.floor(elapsed / 60), sessionSec = Math.floor(elapsed % 60);
     var timerText = sessionMin + ':' + String(sessionSec).padStart(2, '0');
@@ -9794,6 +9800,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     model.position.set(at[0], at[1], at[2]);
     model.scale.setScalar(BUILDING_SCALE);
     model.userData.pop = 0;
+    model.userData.specIndex = specIndex;   // needed by saveWorld() to persist the town
     hero.node.userData.body.add(model);
     buildings.push(model);
     if (spec.perk === 'speed' || specIndex === BUILDING_SPECS.length - 1) {
@@ -9804,7 +9811,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     }
     pop += spec.pop;
     nextBuild = buildings.length;
-    if (spec.perk === 'maxHearts' && baseHearts < 5) { baseHearts += 1; R.hearts = baseHearts; hearts = Math.min(hearts + 1, R.hearts); }
+    if (spec.perk === 'maxHearts' && baseHearts < BASE_HEARTS + 2) { baseHearts += 1; R.hearts = baseHearts; hearts = Math.min(hearts + 1, baseHearts); }
     if (spec.perk === 'speed') baseSpeed += 0.5;
     if (spec.perk === 'water') maxWater += 25;
     if (spec.perk === 'magnet') magnet += 0.9;
@@ -9913,9 +9920,12 @@ var THREE = __wxRoot.THREE || window.THREE;
    *  hop away and the loop keeps its rhythm. The ring clears the hull's own
    *  footprint: a 16-unit liner would otherwise spawn loot inside its decks. */
   function nearSea(minFromHero) {
+    // Garbage drifts right around the hull so a new player is never more than
+    // a nudge away from the next pickup. A few pieces are placed ahead of the
+    // bow (facing) so simply steering forward always yields something.
     for (var tries = 0; tries < 300; tries++) {
       var a = Math.random() * Math.PI * 2;
-      var r = SHIP_HALF_LEN * 0.55 + Math.random() * (SHIP_HALF_LEN * 1.35);
+      var r = SHIP_HALF_LEN * 0.45 + Math.random() * (SHIP_HALF_LEN * 0.85);
       var x = hero.x + Math.cos(a) * r, z = hero.z + Math.sin(a) * r;
       if (groundAt(x, z) > 0) continue;
       return { x: x, z: z };
@@ -10027,28 +10037,19 @@ var THREE = __wxRoot.THREE || window.THREE;
     endedAt = performance.now();
     if (next !== 'playing' && drag) drag = null;
     if (next === 'title') showCard(TITLE,
-      '你的小镇建在一艘邮轮上。\n\n'
+      '你的小镇建在一艘邮轮上。这是一段没有终点的漂流。\n\n'
       + '① 用摇杆贴近漂浮垃圾，会自动打捞\n'
       + '② 垃圾拆成 木 / 塑 / 铁 三种材料\n'
-      + '③ 攒够材料按「建」按钮造东西\n'
-      + '④ 前甲板先立起工作台 → 庇护所 → 四件生存装备，水与食能自持就站住了脚\n'
-      + '⑤ 攒下的建筑会一层层长到主甲板和上层甲板上，成为一座漂在海上的镇子\n\n'
-      + '小心鲨鱼的红圈预警，⚡ 冲刺可以脱身。',
+      + '③ 攒够材料按「建」造工作台 → 庇护所 → 四件生存装备\n'
+      + '④ 下锚停船可以钓鱼；点「潜」可下水采集食材\n'
+      + '⑤ 建筑会一直留在船上。死了只掉一半材料，小镇不消失\n\n'
+      + '右侧 6 个圆钮：榜 / 成 / 潜 / 船 / 建 / 冲刺',
       '点击屏幕 / 按任意键开始');
     else if (next === 'playing') clearCard();
-    else if (next === 'won') {
-      var head = lastReason === 'town' ? '漂流小镇落成！' : '小镇初具规模';
-      showCard(head,
-        townCount() + '/' + townTarget() + ' 座建筑 · ' + pop + ' 位居民 · ' + pieces + ' 件垃圾 · ' + score + ' 分\n' + tallyLine() + '\n最佳: ' + best,
-        '按任意键 / 点击屏幕再来一局');
-    } else if (next === 'lost') {
-      var why = lastReason === 'shark' ? '船体被鲨鱼撞穿了！'
-        : lastReason === 'thirst' ? '水喝完了，船员撑不住了…'
-        : lastReason === 'hunger' ? '食物吃完了，船员饿垮了…' : '天黑了，垃圾漂走了…';
-      showCard(why,
-        townCount() + '/' + townTarget() + ' 座建筑 · ' + pop + ' 位居民 · ' + pieces + ' 件垃圾 · ' + score + ' 分\n' + tallyLine() + '\n最佳: ' + best,
-        '按任意键 / 点击屏幕再试一次');
-    }
+    // In the persistent world there is no won/lost screen; death respawns and
+    // the town milestone just celebrates. These branches are kept only so a
+    // stray setPhase('won'|'lost') never draws a misleading card.
+    else if (next === 'won' || next === 'lost') clearCard();
     post({ type: 'state', phase: phase, score: score });
   }
   function start() {
@@ -10067,7 +10068,8 @@ var THREE = __wxRoot.THREE || window.THREE;
     combo = 0; lastPick = -99; comboShowT = 0; specialTimer = 0; shake = 0; hurtFlash = 0; wakeTimer = 0;
     floatingTexts = []; tally = {}; pieces = 0;
     res = { wood: 0, plastic: 0, metal: 0 }; pop = 0; nextBuild = 0;
-    baseHearts = R.hearts; baseSpeed = R.heroSpeed;
+    baseHearts = BASE_HEARTS; baseSpeed = R.heroSpeed;
+    R.hearts = BASE_HEARTS;
     canteen = 100; maxWater = 100; magnet = 0; tradeBonus = 0; shieldBonus = 0;
     food = 100; maxFood = 100; rainClock = 0; purifyClock = 0; hungerClock = 0;
     starveT = 0; foodDropT = 0; selfSustainT = 0; townReady = false; townReadyBanner = 0;
@@ -10169,13 +10171,15 @@ var THREE = __wxRoot.THREE || window.THREE;
 
   /* --- Save / load: the world persists across sessions --- */
   var SAVE_KEY = 'drift-town:save:v1';
+  var BASE_HEARTS = R.hearts;   // immutable cap for the whole session
   function saveWorld() {
     try {
       var s = (typeof localStorage !== 'undefined') ? localStorage : null;
       if (!s) return;
       s.setItem(SAVE_KEY, JSON.stringify({
         survival: survival.slice(),            // ids of built survival gear
-        townSpecs: buildings.map(function (b, i) { return b.userData.specIndex; }).filter(function (x) { return x !== undefined; }),
+        // Keep the array aligned with buildings[]; null marks an unknown one.
+        townSpecs: buildings.map(function (b) { return b.userData.specIndex === undefined ? null : b.userData.specIndex; }),
         res: res, score: score, pop: pop,
         recruitedIds: recruited.map(function (r) { return r.id; }).filter(function (x) { return x; })
       }));
@@ -10237,7 +10241,7 @@ var THREE = __wxRoot.THREE || window.THREE;
         hero.node.userData.body.add(bmodel);
         buildings.push(bmodel);
         // Apply the perk silently.
-        if (spec.perk === 'maxHearts' && baseHearts < 5) { baseHearts += 1; R.hearts = baseHearts; }
+        if (spec.perk === 'maxHearts' && baseHearts < BASE_HEARTS + 2) { baseHearts += 1; R.hearts = baseHearts; }
         if (spec.perk === 'speed') baseSpeed += 0.5;
         if (spec.perk === 'water') maxWater += 25;
         if (spec.perk === 'magnet') magnet += 0.9;
@@ -10844,7 +10848,7 @@ var THREE = __wxRoot.THREE || window.THREE;
         // piece to sweep it up. The reach is the hull's real ellipse plus the
         // magnet radius, so loot anywhere along a 16-unit deck is pickable.
         // The scoop net widens the base reach by half.
-        var pad = (R.pickupSize * 0.85 + magnet) * (hasBuilt('scoopNet') ? 1.5 : 1);
+        var pad = (R.pickupSize * 1.4 + magnet) * (hasBuilt('scoopNet') ? 1.5 : 1);
         if (hullContains(p.x, p.z, pad)) {
           scene.remove(p.node);
           pickups.splice(k, 1);
