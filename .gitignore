@@ -19,3 +19,6 @@ prototype/dive/shots/
 # 原型的临时自检产物（可重新生成）
 prototype/dive/selftest.json
 prototype/dive/touchtest.json
+
+# 临时脚本与导出文件
+.tmp_*
