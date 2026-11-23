@@ -14221,6 +14221,9 @@ void main() {
     var bx0 = w - m - BR - 10;
     var slotY = [DASH_BOTTOM];                          // dash sits lowest
     for (var sN = 1; sN < SLOT_COUNT + 1; sN++) slotY.push(slotY[sN - 1] - bpitch);
+    /* 圆钮触区：不得大于相邻间距的 0.44 倍，否则压缩布局下相邻热区相切，
+     * 点「建」会命中相邻钮（用户报过「点了没反应」，实际是误触）。 */
+    var hitR = Math.min(BR + 8, Math.round(bpitch * 0.44));
 
     /* --- Dock / cast-off, and the on-deck fishing action ---
      * Placed along the bottom-centre so they read as "things you do with the
@@ -14298,7 +14301,7 @@ void main() {
       var canBuild = false, pool0 = offerableSteps();
       for (var pb = 0; pb < pool0.length; pb++) if (canAffordCost(stepCost(pool0[pb]))) canBuild = true;
       var wbx = bx0, wby = slotY[1];
-      buildBtnRect = { x: wbx, y: wby, r: BR + 8 };
+      buildBtnRect = { x: wbx, y: wby, r: hitR };
       hudCtx.globalAlpha = buildOpen ? 0.55 : 1;
       hudCtx.fillStyle = canBuild ? 'rgba(60,120,70,0.8)' : 'rgba(14,18,40,0.55)';
       hudCtx.beginPath(); hudCtx.arc(wbx, wby, BR, 0, Math.PI * 2); hudCtx.fill();
@@ -14320,7 +14323,7 @@ void main() {
     /* 船 — ship management. Slot 2. */
     if (phase === 'playing' && !buildOffer) {
       var mbx = bx0, mby = slotY[2];
-      manageBtnRect = { x: mbx, y: mby, r: BR + 8 };
+      manageBtnRect = { x: mbx, y: mby, r: hitR };
       var partCount = shipParts().length;
       hudCtx.fillStyle = manageOpen ? 'rgba(90,70,20,0.85)' : 'rgba(14,18,40,0.6)';
       hudCtx.beginPath(); hudCtx.arc(mbx, mby, BR, 0, Math.PI * 2); hudCtx.fill();
@@ -14341,7 +14344,7 @@ void main() {
     /* 潜 — dive entry. Slot 3. Available from the start. */
     if (window.DiveGame && phase === 'playing' && !(dive && dive.active())) {
       var dbx = bx0, dby = slotY[3];
-      diveBtnRect = { x: dbx, y: dby, r: BR + 8 };
+      diveBtnRect = { x: dbx, y: dby, r: hitR };
       hudCtx.globalAlpha = 0.3 + Math.sin(performance.now() / 300) * 0.16;
       hudCtx.strokeStyle = 'rgba(150,235,255,0.95)'; hudCtx.lineWidth = 3;
       hudCtx.beginPath(); hudCtx.arc(dbx, dby, BR + 5, 0, Math.PI * 2); hudCtx.stroke();
@@ -14362,7 +14365,7 @@ void main() {
     /* 成 — the achievements panel. Slot 4. Only when the module is inlined. */
     if (window.Achievements && phase === 'playing' && !buildOffer) {
       var abx = bx0, aby = slotY[4];
-      achBtnRect = { x: abx, y: aby, r: BR + 8 };
+      achBtnRect = { x: abx, y: aby, r: hitR };
       var achOn = panelOpen === 'ach';
       var achPct = 0;
       try { achPct = window.Achievements.overallProgress(); } catch (e) { achPct = 0; }
@@ -14383,7 +14386,7 @@ void main() {
     /* 榜 — the leaderboard panel. Slot 5. */
     if (window.Leaderboard && phase === 'playing' && !buildOffer) {
       var lbx = bx0, lby = slotY[5];
-      lbBtnRect = { x: lbx, y: lby, r: BR + 8 };
+      lbBtnRect = { x: lbx, y: lby, r: hitR };
       var lbOn = panelOpen === 'lb';
       hudCtx.fillStyle = lbOn ? 'rgba(24,56,80,0.9)' : 'rgba(14,18,40,0.6)';
       hudCtx.beginPath(); hudCtx.arc(lbx, lby, BR, 0, Math.PI * 2); hudCtx.fill();
