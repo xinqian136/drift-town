@@ -244,6 +244,21 @@
     return bill;
   }
 
+  /* ==== 市集材料兑换（木↔塑↔铁，4:1） ====
+   * 登船后走到市集互动时的真实动作。materials 是 game.js 的 res 引用，
+   * 由调用方传入（本模块不持有主游戏状态），例如 { wood, plastic, metal }。 */
+  var EXCHANGE_RATE = 4;   // 4 个换 1 个
+  function exchange(materials, from, to, n) {
+    n = Math.max(1, Math.floor(n || 1));
+    if (!materials || !materials[from] === undefined) return { ok: false, reason: 'bad-args' };
+    if (materials[from] === undefined || materials[to] === undefined) return { ok: false, reason: 'bad-material' };
+    var cost = n * EXCHANGE_RATE;
+    if (materials[from] < cost) return { ok: false, reason: 'not-enough', need: cost, have: materials[from] };
+    materials[from] -= cost;
+    materials[to] += n;
+    return { ok: true, spent: cost, gained: n, from: from, to: to };
+  }
+
   /* ==== 汇总 ==== */
   function summary() {
     return {
@@ -403,7 +418,7 @@
     addFromDive: addFromDive, stockOf: stockOf, stockList: stockList, buyRice: buyRice,
     recipeById: recipeById, canCook: canCook,
     toggleMenu: toggleMenu, setPrice: setPrice, priceOf: priceOf, marginOf: marginOf,
-    settleDay: settleDay,
+    settleDay: settleDay, exchange: exchange, EXCHANGE_RATE: EXCHANGE_RATE,
     summary: summary,
     drawPanel: drawPanel,
     selfTest: selfTest

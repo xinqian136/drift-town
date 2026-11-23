@@ -476,6 +476,86 @@
     return { x: bx, y: by, w: bw, h: bh };
   }
 
+  /* ==== R3：船员踱步闲聊气泡 ====
+   * 好感度事件是「大段对话」，闲聊是「头顶一句台词」：船员在甲板上踱步时
+   * 随时间冒出一句符合岗位与好感档次的短话，几秒后飘走。纯状态+绘制，
+   * 由 game.js 决定哪名船员的气泡画在哪个屏幕坐标。 */
+
+  /* 闲聊台词池：按船员 id 分池，最后一条是兜底（好感戒备时也说得出口）。 */
+  var CHATTER = {
+    laochen: ['这堆木料成色不错。', '海流向西北，跟着漂。', '别浪费时间，东西不会自己上船。', '潮水要变了。'],
+    ahai: ['水下十米还有光。', '绳子，检查过了。', '今天中层的水色发绿。', '下去之前多看一眼天。'],
+    xiaoman: ['今天的鱼很新鲜。', '米还够做两锅。', '刀要磨了。', '闻到海藻的味道了吗？'],
+    bo: ['炉火不能熄。', '锤子又松了。', '甲板的钉子该换一批。', '手上的活，别催。'],
+    lili: ['定价再涨一成试试？', '账本又快写满了。', '摊位还得往人多的地方挪。', '今天的流水不错。']
+  };
+  var CHATTER_FALLBACK = ['海上的日子，就这样。', '今天风平浪静。'];
+  var CHATTER_CD = 26000;      // 同一名船员两次闲聊的间隔（毫秒）
+  var CHATTER_SHOW = 4200;     // 一句台词停留多久（毫秒）
+
+  var chatterState = {};       // id -> { text, until, nextOk }
+  /** 取某名船员此刻的闲聊台词；没有就返回 null。
+   *  hour（可选）：0-23 的游戏内时刻，夜里说「困」类的短句。
+   *  tier：好感档 id（cold/new/warm/friend/close），戒备时语气最短。 */
+  function chatterFor(id, tier, now, hour) {
+    now = now || Date.now();
+    var st = chatterState[id];
+    if (st && now < st.until) return { text: st.text, remain: (st.until - now) / 1000 };
+    if (st && now < st.nextOk) return null;
+    var pool = CHATTER[id];
+    if (!pool || !pool.length) return null;
+    // 好感戒备：只说最短的一句（第一句通常是「干活话」，合适）
+    if (tier === 'cold') pool = [pool[0]];
+    // 夜里（22 点-5 点）加一句困意
+    if (typeof hour === 'number' && (hour >= 22 || hour < 5)) pool = pool.concat(['困了，想去睡。']);
+    var line = pool[Math.floor(Math.random() * pool.length)];
+    chatterState[id] = {
+      text: line,
+      until: now + CHATTER_SHOW,
+      nextOk: now + CHATTER_CD + Math.random() * 14000
+    };
+    return { text: line, remain: CHATTER_SHOW / 1000 };
+  }
+  /** 立刻清掉一名船员的气泡（进入对话面板 / 换船时调用）。 */
+  function clearChatter(id) { if (id) delete chatterState[id]; else chatterState = {}; }
+  function chatterList() {
+    var out = [], now = Date.now();
+    for (var k in chatterState) if (chatterState[k] && now < chatterState[k].until) {
+      out.push({ id: k, text: chatterState[k].text, remain: (chatterState[k].until - now) / 1000 });
+    }
+    return out;
+  }
+  /** 在世界点投影出的屏幕坐标上画一个小气泡。返回热区（可点则开对话）。 */
+  function drawChatter(ctx, x, y, text, opts) {
+    opts = opts || {};
+    var font = opts.font || 14;
+    if (!text) return null;
+    ctx.font = '600 ' + (font * 0.78) + 'px ' + FONT_STACK;
+    var tw = ctx.measureText(text).width;
+    var bw = Math.min(tw + 20, 260), bh = font * 1.6;
+    // 气泡中心取在头顶上方；屏幕太靠上时挪到头像下方，别被裁掉
+    var bx = x - bw / 2, by = y - bh - (opts.offset || 6);
+    if (by < 4) by = y + (opts.offset || 6);
+    if (bx < 4) bx = 4;
+    if (bx + bw > (opts.maxW || 4000) - 4) bx = (opts.maxW || 4000) - 4 - bw;
+    ctx.fillStyle = 'rgba(246,246,238,0.94)';
+    rr(ctx, bx, by, bw, bh, bh / 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(90,110,130,0.75)'; ctx.lineWidth = 1.5;
+    rr(ctx, bx, by, bw, bh, bh / 2); ctx.stroke();
+    // 小尾巴
+    ctx.fillStyle = 'rgba(246,246,238,0.94)';
+    ctx.beginPath();
+    ctx.moveTo(x - 5, by + bh - 1);
+    ctx.lineTo(x + 5, by + bh - 1);
+    ctx.lineTo(x, by + bh + 6);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#2a3440';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, bx + bw / 2, by + bh * 0.66);
+    ctx.textAlign = 'left';
+    return { x: bx, y: by, w: bw, h: bh + 6 };
+  }
+
   function wrap(ctx, text, maxW) {
     var lines = [], line = '', chars = String(text || '').split('');
     for (var i = 0; i < chars.length; i++) {
@@ -510,6 +590,20 @@
     // 非法选择
     var r = choose(0);
     if (r.ok !== false) problems.push('无 pending 时 choose 应返回 ok:false');
+    // R3：闲聊气泡
+    try {
+      var c1 = chatterFor('laochen', 'new', 1000, 12);
+      if (!c1 || !c1.text) problems.push('chatterFor 应返回一句台词');
+      var again = chatterFor('laochen', 'new', 2000, 12);
+      if (!again || again.text !== c1.text) problems.push('冷却期内应返回同一条台词');
+      var during = chatterFor('laochen', 'new', 1500, 12);
+      if (!during || during.text !== c1.text) problems.push('显示期内应返回同一句台词');
+      var cooled = chatterFor('laochen', 'new', 6000, 12);   // 已过显示期(5200)、仍在冷却
+      if (cooled !== null) problems.push('冷却期内不该新开一句');
+      clearChatter('laochen');
+      if (chatterList().some(function (x) { return x.id === 'laochen'; })) problems.push('clearChatter 后不应还有该船员气泡');
+      if (chatterFor('nobody', 'new', 1000, 12) !== null) problems.push('未知船员应返回 null');
+    } catch (err) { problems.push('闲聊抛异常: ' + err.message); }
     return { passed: problems.length === 0, problems: problems, npcCount: NPCS.length, version: MODULE_VERSION };
   }
 
@@ -522,6 +616,7 @@
     availableEvent: availableEvent, choose: choose,
     summary: summary,
     drawDialogue: drawDialogue, drawHint: drawHint, drawPortrait: drawPortrait,
+    chatterFor: chatterFor, clearChatter: clearChatter, chatterList: chatterList, drawChatter: drawChatter,
     selfTest: selfTest
   };
 });

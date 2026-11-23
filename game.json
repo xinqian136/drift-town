@@ -59,6 +59,14 @@
       "time": 0.4
     },
     "comboWindow": 5,
+    "comboRewardEvery": 5,
+    "comboMultStep": 0.1,
+    "comboMultCap": 4,
+    "surgeFirst": 90,
+    "surgeEvery": 24,
+    "hammerAt": 240,
+    "deepZone": { "mult": 1.6, "share": 0.3 },
+    "tierReward": { "hearts": 1, "shield": 8 },
     "specialEvery": 10,
     "autoBuild": false,
     "survival": {

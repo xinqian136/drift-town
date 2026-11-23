@@ -6288,6 +6288,86 @@ var THREE = __wxRoot.THREE || window.THREE;
     return { x: bx, y: by, w: bw, h: bh };
   }
 
+  /* ==== R3：船员踱步闲聊气泡 ====
+   * 好感度事件是「大段对话」，闲聊是「头顶一句台词」：船员在甲板上踱步时
+   * 随时间冒出一句符合岗位与好感档次的短话，几秒后飘走。纯状态+绘制，
+   * 由 game.js 决定哪名船员的气泡画在哪个屏幕坐标。 */
+
+  /* 闲聊台词池：按船员 id 分池，最后一条是兜底（好感戒备时也说得出口）。 */
+  var CHATTER = {
+    laochen: ['这堆木料成色不错。', '海流向西北，跟着漂。', '别浪费时间，东西不会自己上船。', '潮水要变了。'],
+    ahai: ['水下十米还有光。', '绳子，检查过了。', '今天中层的水色发绿。', '下去之前多看一眼天。'],
+    xiaoman: ['今天的鱼很新鲜。', '米还够做两锅。', '刀要磨了。', '闻到海藻的味道了吗？'],
+    bo: ['炉火不能熄。', '锤子又松了。', '甲板的钉子该换一批。', '手上的活，别催。'],
+    lili: ['定价再涨一成试试？', '账本又快写满了。', '摊位还得往人多的地方挪。', '今天的流水不错。']
+  };
+  var CHATTER_FALLBACK = ['海上的日子，就这样。', '今天风平浪静。'];
+  var CHATTER_CD = 26000;      // 同一名船员两次闲聊的间隔（毫秒）
+  var CHATTER_SHOW = 4200;     // 一句台词停留多久（毫秒）
+
+  var chatterState = {};       // id -> { text, until, nextOk }
+  /** 取某名船员此刻的闲聊台词；没有就返回 null。
+   *  hour（可选）：0-23 的游戏内时刻，夜里说「困」类的短句。
+   *  tier：好感档 id（cold/new/warm/friend/close），戒备时语气最短。 */
+  function chatterFor(id, tier, now, hour) {
+    now = now || Date.now();
+    var st = chatterState[id];
+    if (st && now < st.until) return { text: st.text, remain: (st.until - now) / 1000 };
+    if (st && now < st.nextOk) return null;
+    var pool = CHATTER[id];
+    if (!pool || !pool.length) return null;
+    // 好感戒备：只说最短的一句（第一句通常是「干活话」，合适）
+    if (tier === 'cold') pool = [pool[0]];
+    // 夜里（22 点-5 点）加一句困意
+    if (typeof hour === 'number' && (hour >= 22 || hour < 5)) pool = pool.concat(['困了，想去睡。']);
+    var line = pool[Math.floor(Math.random() * pool.length)];
+    chatterState[id] = {
+      text: line,
+      until: now + CHATTER_SHOW,
+      nextOk: now + CHATTER_CD + Math.random() * 14000
+    };
+    return { text: line, remain: CHATTER_SHOW / 1000 };
+  }
+  /** 立刻清掉一名船员的气泡（进入对话面板 / 换船时调用）。 */
+  function clearChatter(id) { if (id) delete chatterState[id]; else chatterState = {}; }
+  function chatterList() {
+    var out = [], now = Date.now();
+    for (var k in chatterState) if (chatterState[k] && now < chatterState[k].until) {
+      out.push({ id: k, text: chatterState[k].text, remain: (chatterState[k].until - now) / 1000 });
+    }
+    return out;
+  }
+  /** 在世界点投影出的屏幕坐标上画一个小气泡。返回热区（可点则开对话）。 */
+  function drawChatter(ctx, x, y, text, opts) {
+    opts = opts || {};
+    var font = opts.font || 14;
+    if (!text) return null;
+    ctx.font = '600 ' + (font * 0.78) + 'px ' + FONT_STACK;
+    var tw = ctx.measureText(text).width;
+    var bw = Math.min(tw + 20, 260), bh = font * 1.6;
+    // 气泡中心取在头顶上方；屏幕太靠上时挪到头像下方，别被裁掉
+    var bx = x - bw / 2, by = y - bh - (opts.offset || 6);
+    if (by < 4) by = y + (opts.offset || 6);
+    if (bx < 4) bx = 4;
+    if (bx + bw > (opts.maxW || 4000) - 4) bx = (opts.maxW || 4000) - 4 - bw;
+    ctx.fillStyle = 'rgba(246,246,238,0.94)';
+    rr(ctx, bx, by, bw, bh, bh / 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(90,110,130,0.75)'; ctx.lineWidth = 1.5;
+    rr(ctx, bx, by, bw, bh, bh / 2); ctx.stroke();
+    // 小尾巴
+    ctx.fillStyle = 'rgba(246,246,238,0.94)';
+    ctx.beginPath();
+    ctx.moveTo(x - 5, by + bh - 1);
+    ctx.lineTo(x + 5, by + bh - 1);
+    ctx.lineTo(x, by + bh + 6);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#2a3440';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, bx + bw / 2, by + bh * 0.66);
+    ctx.textAlign = 'left';
+    return { x: bx, y: by, w: bw, h: bh + 6 };
+  }
+
   function wrap(ctx, text, maxW) {
     var lines = [], line = '', chars = String(text || '').split('');
     for (var i = 0; i < chars.length; i++) {
@@ -6322,6 +6402,20 @@ var THREE = __wxRoot.THREE || window.THREE;
     // 非法选择
     var r = choose(0);
     if (r.ok !== false) problems.push('无 pending 时 choose 应返回 ok:false');
+    // R3：闲聊气泡
+    try {
+      var c1 = chatterFor('laochen', 'new', 1000, 12);
+      if (!c1 || !c1.text) problems.push('chatterFor 应返回一句台词');
+      var again = chatterFor('laochen', 'new', 2000, 12);
+      if (!again || again.text !== c1.text) problems.push('冷却期内应返回同一条台词');
+      var during = chatterFor('laochen', 'new', 1500, 12);
+      if (!during || during.text !== c1.text) problems.push('显示期内应返回同一句台词');
+      var cooled = chatterFor('laochen', 'new', 6000, 12);   // 已过显示期(5200)、仍在冷却
+      if (cooled !== null) problems.push('冷却期内不该新开一句');
+      clearChatter('laochen');
+      if (chatterList().some(function (x) { return x.id === 'laochen'; })) problems.push('clearChatter 后不应还有该船员气泡');
+      if (chatterFor('nobody', 'new', 1000, 12) !== null) problems.push('未知船员应返回 null');
+    } catch (err) { problems.push('闲聊抛异常: ' + err.message); }
     return { passed: problems.length === 0, problems: problems, npcCount: NPCS.length, version: MODULE_VERSION };
   }
 
@@ -6334,6 +6428,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     availableEvent: availableEvent, choose: choose,
     summary: summary,
     drawDialogue: drawDialogue, drawHint: drawHint, drawPortrait: drawPortrait,
+    chatterFor: chatterFor, clearChatter: clearChatter, chatterList: chatterList, drawChatter: drawChatter,
     selfTest: selfTest
   };
 });
@@ -6588,6 +6683,21 @@ var THREE = __wxRoot.THREE || window.THREE;
     return bill;
   }
 
+  /* ==== 市集材料兑换（木↔塑↔铁，4:1） ====
+   * 登船后走到市集互动时的真实动作。materials 是 game.js 的 res 引用，
+   * 由调用方传入（本模块不持有主游戏状态），例如 { wood, plastic, metal }。 */
+  var EXCHANGE_RATE = 4;   // 4 个换 1 个
+  function exchange(materials, from, to, n) {
+    n = Math.max(1, Math.floor(n || 1));
+    if (!materials || !materials[from] === undefined) return { ok: false, reason: 'bad-args' };
+    if (materials[from] === undefined || materials[to] === undefined) return { ok: false, reason: 'bad-material' };
+    var cost = n * EXCHANGE_RATE;
+    if (materials[from] < cost) return { ok: false, reason: 'not-enough', need: cost, have: materials[from] };
+    materials[from] -= cost;
+    materials[to] += n;
+    return { ok: true, spent: cost, gained: n, from: from, to: to };
+  }
+
   /* ==== 汇总 ==== */
   function summary() {
     return {
@@ -6747,7 +6857,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     addFromDive: addFromDive, stockOf: stockOf, stockList: stockList, buyRice: buyRice,
     recipeById: recipeById, canCook: canCook,
     toggleMenu: toggleMenu, setPrice: setPrice, priceOf: priceOf, marginOf: marginOf,
-    settleDay: settleDay,
+    settleDay: settleDay, exchange: exchange, EXCHANGE_RATE: EXCHANGE_RATE,
     summary: summary,
     drawPanel: drawPanel,
     selfTest: selfTest
@@ -6769,6 +6879,8 @@ var THREE = __wxRoot.THREE || window.THREE;
  *   - 甲板上的可交互点（寿司店 / 工作台 / 水塔 / 庇护所 / 招募的 NPC）
  *   - 第三人称相机参数（给 game.js 的 placeCamera 用）
  *   - 靠近交互点时的提示文字与按键语义
+ *   - 船员踱步巡逻（每人有岗位 + 巡航点，甲板上是活人不是雕塑）
+ *   - 交互动作的回执状态（过夜睡多久、寿司店兑换账本 —— game.js 落地动作）
  *
  * 渲染由 game.js 用 three.js 画（体素小人 + 建筑模型），本模块只给数据。
  * 零 DOM / 零网络 / 零 require，window.ShipCrew + module.exports。
@@ -6781,33 +6893,40 @@ var THREE = __wxRoot.THREE || window.THREE;
 })(typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  var VERSION = '1.0.0';
+  var VERSION = '1.1.0';
 
   /* 甲板上的交互点。坐标是船体局部坐标（与 BUILDING_POS 同一套基准），
    * y 是甲板高度。radius 是可互动距离。 */
   var SPOTS = [
     { id: 'workbench', name: '工作台',   x: 2.6,  z: 6.0,  y: 1.8, radius: 1.6, action: 'build',   hint: '打开建造菜单' },
-    { id: 'shelter',   name: '庇护所',   x: -2.6, z: 6.0,  y: 1.8, radius: 1.6, action: 'rest',    hint: '休息 / 存档' },
+    { id: 'shelter',   name: '庇护所',   x: -2.6, z: 6.0,  y: 1.8, radius: 1.6, action: 'rest',    hint: '休息存档 · 过夜' },
     { id: 'sushi',     name: '寿司店',   x: 2.2,  z: -1.0, y: 1.8, radius: 1.8, action: 'sushi',   hint: '经营寿司店', needs: 'sushiOpen' },
-    { id: 'tower',     name: '水塔',     x: -2.4, z: -2.0, y: 1.8, radius: 1.5, action: 'tower',   hint: '查看供水' },
-    { id: 'market',    name: '市集',     x: 2.2,  z: -5.0, y: 1.8, radius: 1.6, action: 'market',  hint: '买卖材料' },
+    { id: 'tower',     name: '水塔',     x: -2.4, z: -2.0, y: 1.8, radius: 1.5, action: 'tower',   hint: '接水 · 供水结算' },
+    { id: 'market',    name: '市集',     x: 2.2,  z: -5.0, y: 1.8, radius: 1.6, action: 'market',  hint: '材料兑换' },
     { id: 'dock',      name: '舷梯',     x: 0,    z: 11.0, y: 1.8, radius: 1.8, action: 'dive',    hint: '下潜 / 钓鱼' },
     { id: 'bridge',    name: '船桥',     x: 0,    z: 8.5,  y: 3.6, radius: 1.8, action: 'sail',    hint: '回到航行' }
   ];
 
   /* 可招募的船员：登船后他们会在甲板上站着/走动，让船上有「人」。
-   * 每条带完整外观配色，供程序化角色拼装使用（无外部资产模式）。 */
+   * 每条带完整外观配色，供程序化角色拼装使用（无外部资产模式）。
+   * home：岗位（站在哪）；patrol：踱步巡航点（局部坐标，按甲板缩放）。
+   * 不招募时不出现在甲板上；招募后在自己的岗位与巡航点之间踱步。 */
   var CREW_DEFS = [
     { id: 'laochen',   name: '老陈',   color: '#8fb8d8', job: '打捞', x: -1.8, z: 3.2,
-      skin: '#d9a97c', hair: '#c8c8c8', hat: '#5a6a78', pants: '#4a5560', shoe: '#3a3a3a' },
+      skin: '#d9a97c', hair: '#c8c8c8', hat: '#5a6a78', pants: '#4a5560', shoe: '#3a3a3a',
+      patrol: [[-1.8, 3.2], [-2.4, 0.4], [-1.0, 5.2]] },
     { id: 'ahai',      name: '阿海',   color: '#7fd8e8', job: '潜水', x: 1.9,  z: 4.0,
-      skin: '#e8c39a', hair: '#2a3a4a', hat: null,      pants: '#3a5a6a', shoe: '#2a3a3a' },
+      skin: '#e8c39a', hair: '#2a3a4a', hat: null,      pants: '#3a5a6a', shoe: '#2a3a3a',
+      patrol: [[1.9, 4.0], [1.2, 8.2], [2.6, 2.0]] },
     { id: 'xiaoman',   name: '小满',   color: '#e8b87f', job: '寿司', x: 2.2,  z: -1.4,
-      skin: '#f0d0aa', hair: '#4a3020', hat: '#e8e0d0', pants: '#7a5a40', shoe: '#5a4030' },
+      skin: '#f0d0aa', hair: '#4a3020', hat: '#e8e0d0', pants: '#7a5a40', shoe: '#5a4030',
+      patrol: [[2.2, -1.4], [3.0, -1.8]] },
     { id: 'bo',        name: '铁匠波', color: '#b8a090', job: '建造', x: -2.0, z: -3.4,
-      skin: '#c89878', hair: null,      hat: '#6a4a3a', pants: '#5a4a40', shoe: '#3a302a' },
+      skin: '#c89878', hair: null,      hat: '#6a4a3a', pants: '#5a4a40', shoe: '#3a302a',
+      patrol: [[-2.0, -3.4], [-2.6, -6.0], [-1.4, -4.6]] },
     { id: 'lili',      name: '莉莉',   color: '#d8a0c8', job: '买卖', x: 2.4,  z: -5.2,
-      skin: '#f5dcc0', hair: '#7a3a5a', hat: null,      pants: '#8a5a7a', shoe: '#6a4050' }
+      skin: '#f5dcc0', hair: '#7a3a5a', hat: null,      pants: '#8a5a7a', shoe: '#6a4050',
+      patrol: [[2.4, -5.2], [3.0, -6.4], [1.6, -4.2]] }
   ];
 
   var state = {
@@ -6822,7 +6941,13 @@ var THREE = __wxRoot.THREE || window.THREE;
     lastAction: null,        // { spot, at }
     deckLen: 13, deckBeam: 4.2,
     deckY: 1.8,              // 甲板局部高度（木筏 0.55 / 大船 1.8）
-    scale: 1                 // 坐标缩放 = deckLen / 13，小木筏上所有点收缩到筏面
+    scale: 1,                // 坐标缩放 = deckLen / 13，小木筏上所有点收缩到筏面
+    /* ---- R3：船员踱步巡逻 ---- */
+    patrol: true,            // 船员是否在岗位上踱步
+    /* ---- R3：交互动作回执（game.js 消费） ---- */
+    sleepUntil: 0,           // 过夜：到这个游戏时刻才醒（由 game.js 推进并读取）
+    exchangeLog: [],         // 市集兑换流水（最近 10 条，供 HUD / 测试读取）
+    lastSettle: null         // 最近一次水塔供水结算（game.js 填，供 HUD 读）
   };
 
   /** 把基准坐标（邮轮 13 长 / 4.2 宽）缩放到当前甲板尺寸。 */
@@ -6875,7 +7000,7 @@ var THREE = __wxRoot.THREE || window.THREE;
   function setObstacles(list) { obstacles = list || []; }
   var PERSON_RADIUS = 0.34;
   /** 把角色推出所有重叠的圆柱体——用「沿最近方向推出」而不是阻挡，
-   *  这样贴着建筑走不会卡死，只会被滑开。 */
+   *  这样贴着建筑走不会卡死，只会被滑开。船员的踱步也走同一套避让。 */
   function resolveObstacles() {
     for (var iter = 0; iter < 2; iter++) {
       for (var i = 0; i < obstacles.length; i++) {
@@ -6919,17 +7044,107 @@ var THREE = __wxRoot.THREE || window.THREE;
     return { ok: true, spot: s, action: s.action, hint: s.hint };
   }
 
+  /* ==== 船员踱步巡逻（R3） ====
+   * 每名船员有自己的运行时状态：位置、朝向、步态相位、巡航索引、
+   * 「站一会儿再走」的停顿计时。game.js 每帧调 tickCrew(dt, t) 推进，
+   * 再用 crewList() 拿到实时位置去摆 three.js 的小人。 */
+  var crewRun = {};   // id -> { x, z, facing, walkT, pi, wait, px, pz }
+  function crewRuntime(id, def) {
+    var r = crewRun[id];
+    if (!r) {
+      r = crewRun[id] = {
+        x: sx(def.x), z: sz(def.z),
+        facing: 0, walkT: 0,
+        pi: 0,        // 当前巡航点索引
+        wait: 1 + (def.x % 1 + 1) % 1,   // 每人错开，别齐步走
+        px: sx(def.x), pz: sz(def.z)
+      };
+    }
+    return r;
+  }
+  /** 推进所有已招募船员的踱步。t 是游戏内秒（给呼吸浮动用）。
+   *  睡觉的船员（sleep 集合内）站着不动，醒来继续巡逻。 */
+  function tickCrew(dt, t) {
+    if (!state.active || !state.patrol) return;
+    for (var i = 0; i < CREW_DEFS.length; i++) {
+      var c = CREW_DEFS[i];
+      if (state.recruited.indexOf(c.id) < 0) continue;
+      var r = crewRuntime(c.id, c);
+      // 睡觉（过夜后仍在补眠的船员）：站着，偶尔转身
+      if (state.sleepers && state.sleepers[c.id]) {
+        r.walkT = 0;
+        r.facing += Math.sin((t || 0) * 0.6 + i * 2.1) * 0.002;
+        r.px = r.x; r.pz = r.z;
+        continue;
+      }
+      var route = c.patrol || [[c.x, c.z]];
+      var target = route[r.pi % route.length];
+      var tx = sx(target[0]), tz = sz(target[1]);
+      var dx = tx - r.x, dz = tz - r.z;
+      var d = Math.hypot(dx, dz);
+      var SPEED = 0.75;   // 踱步速度，比玩家慢，只是「活着」
+      r.spd = 0;          // 本帧默认没在走（给 game.js 摆腿幅度用）
+      if (d < 0.14) {
+        // 到点了：站一会儿，下次换一个巡航点
+        r.wait -= dt;
+        r.px = r.x; r.pz = r.z;
+        if (r.wait <= 0) { r.pi = (r.pi + 1) % route.length; r.wait = 1.2 + (i * 0.7); }
+      } else {
+        r.wait = Math.min(r.wait, 1.2 + (i * 0.7));   // 被打断就重新计时
+        var vx = dx / d * SPEED, vz = dz / d * SPEED;
+        r.x += vx * dt; r.z += vz * dt;
+        r.facing = Math.atan2(vx, vz);
+        r.walkT += dt * 7;
+        r.spd = SPEED;
+        r.px = r.x; r.pz = r.z;
+      }
+      // 避让障碍与彼此（复用玩家的推出逻辑，借一个临时 state 快照）
+      dodgeFor(r, i);
+    }
+  }
+  /** 给单个船员做圆避让：推离障碍物和其他船员。不改玩家自己的 state。 */
+  function dodgeFor(r, selfIdx) {
+    for (var iter = 0; iter < 2; iter++) {
+      for (var i = 0; i < obstacles.length; i++) {
+        var o = obstacles[i];
+        var dx = r.x - o.x, dz = r.z - o.z;
+        var d = Math.hypot(dx, dz);
+        var minD = (o.r || 0.5) + PERSON_RADIUS;
+        if (d < minD && d > 0.0001) { var push = minD - d; r.x += dx / d * push; r.z += dz / d * push; }
+        else if (d <= 0.0001) { r.x += minD; }
+      }
+      // 别叠在其他船员身上
+      for (var j = 0; j < CREW_DEFS.length; j++) {
+        if (j === selfIdx || state.recruited.indexOf(CREW_DEFS[j].id) < 0) continue;
+        var o2 = crewRuntime(CREW_DEFS[j].id, CREW_DEFS[j]);
+        if (o2 === r) continue;
+        var dx2 = r.x - o2.x, dz2 = r.z - o2.z;
+        var d2 = Math.hypot(dx2, dz2), minD2 = PERSON_RADIUS * 2.1;
+        if (d2 < minD2 && d2 > 0.0001) { var push2 = (minD2 - d2) * 0.5; r.x += dx2 / d2 * push2; r.z += dz2 / d2 * push2; }
+        else if (d2 <= 0.0001) { r.x += PERSON_RADIUS; }
+      }
+      // 别走出甲板
+      var halfL = state.deckLen * 0.86, halfB = state.deckBeam * 0.78;
+      r.x = Math.max(-halfB, Math.min(halfB, r.x));
+      r.z = Math.max(-halfL, Math.min(halfL, r.z));
+    }
+  }
+  function setPatrol(on) { state.patrol = !!on; }
+
   /* ==== 船员（让船上有人） ==== */
   function crewList() {
     var out = [];
     for (var i = 0; i < CREW_DEFS.length; i++) {
       var c = CREW_DEFS[i];
       if (state.recruited.indexOf(c.id) < 0) continue;
+      var r = crewRuntime(c.id, c);
+      var asleep = !!(state.sleepers && state.sleepers[c.id]);
       out.push({
         id: c.id, name: c.name, color: c.color, job: c.job,
         skin: c.skin, hair: c.hair, hat: c.hat, pants: c.pants, shoe: c.shoe,
-        x: sx(c.x), z: sz(c.z),
-        // 轻微待机摆动，让甲板不是死的
+        x: r.x, z: r.z,
+        facing: r.facing, walkT: r.walkT,
+        moving: (r.spd || 0) > 0, asleep: asleep,
         bob: Math.sin(state.walkT * 0.5 + i) * 0.06
       });
     }
@@ -6937,6 +7152,67 @@ var THREE = __wxRoot.THREE || window.THREE;
   }
   function setRecruited(ids) { state.recruited = (ids || []).slice(); }
   function setSushiOpen(v) { state.sushiOpen = !!v; }
+
+  /* ==== R3：过夜（庇护所） ====
+   * game.js 在 doCrewInteract('rest') 时调用 beginSleep(wakeAt)：随机 1-2 名
+   * 船员回去补眠；游戏时间推进过 wakeAt 后调 wakeUp() 让他们回岗。
+   * 这些只是状态标记，渲染（闭眼/弯腰）由 game.js 决定怎么画。 */
+  function beginSleep(wakeAt) {
+    state.sleepers = {};
+    var ids = state.recruited.slice();
+    // 打乱后取 1-2 名去补眠
+    for (var i = ids.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var tmp = ids[i]; ids[i] = ids[j]; ids[j] = tmp;
+    }
+    var n = Math.min(ids.length, 1 + Math.floor(Math.random() * 2));
+    for (var k = 0; k < n; k++) state.sleepers[ids[k]] = true;
+    state.sleepWakeAt = wakeAt || 0;
+    return Object.keys(state.sleepers);
+  }
+  /** 到点叫醒所有补眠船员。返回本此叫醒的 id 数组（空的表示都醒着）。 */
+  function wakeUp() {
+    if (!state.sleepers) return [];
+    var woken = Object.keys(state.sleepers);
+    state.sleepers = null;
+    state.sleepWakeAt = 0;
+    return woken;
+  }
+  function sleepers() { return state.sleepers ? Object.keys(state.sleepers) : []; }
+  /** 游戏时间是否已过叫醒点（game.js 每帧问一次）。 */
+  function sleepDue(now) {
+    return !!(state.sleepers && state.sleepWakeAt && now >= state.sleepWakeAt);
+  }
+
+  /* ==== R3：市集材料兑换（账本记在船员侧，成交由 game.js 落地） ====
+   * EXCHANGES 的 cost/yield 键与游戏资源一致（wood/plastic/metal）。
+   * rate 由市集建筑等级（tradeBonus）提升：rate = 1 + 0.25 * bonus。 */
+  var EXCHANGES = [
+    { id: 'wood2plastic', name: '木板换塑板', cost: { wood: 4 },      yield: { plastic: 3 }, trade: 'lili' },
+    { id: 'plastic2wood',  name: '塑板换木板', cost: { plastic: 3 },   yield: { wood: 3 },    trade: 'lili' },
+    { id: 'wood2metal',    name: '木板换铁料', cost: { wood: 6 },      yield: { metal: 2 },   trade: 'bo' },
+    { id: 'metal2wood',    name: '铁料换木板', cost: { metal: 1 },     yield: { wood: 2 },    trade: 'bo' }
+  ];
+  /** 市集可用的兑换单（含按 tradeBonus 折算后的数量）。bonus 是市集建筑加成。 */
+  function exchangeOffers(tradeBonus) {
+    var b = Math.max(0, tradeBonus | 0);
+    return EXCHANGES.map(function (e) {
+      function grow(n) { return Math.max(1, Math.round(n * (1 + 0.25 * b))); }
+      var y = {};
+      for (var k in e.yield) y[k] = grow(e.yield[k]);
+      return { id: e.id, name: e.name, cost: cloneObj(e.cost), yield: y, trade: e.trade };
+    });
+  }
+  /** 记一笔兑换流水（game.js 扣材料成功后调用，供 HUD / 测试核对）。 */
+  function logExchange(id, ok, detail) {
+    state.exchangeLog.unshift({ id: id, ok: !!ok, detail: detail || '', at: Date.now() });
+    if (state.exchangeLog.length > 10) state.exchangeLog.pop();
+  }
+  function cloneObj(o) {
+    var out = {};
+    for (var k in o) out[k] = o[k];
+    return out;
+  }
 
   /* ==== 第三人称相机 ==== */
   /** 返回第三人称相机相对角色的偏移（世界/船体局部一致）。 */
@@ -6962,7 +7238,10 @@ var THREE = __wxRoot.THREE || window.THREE;
       facing: Math.round(state.facing * 100) / 100,
       nearSpot: state.nearSpot ? state.nearSpot.id : null,
       crew: crewList().map(function (c) { return c.id; }),
-      sushiOpen: state.sushiOpen
+      sushiOpen: state.sushiOpen,
+      patrolling: !!state.patrol && state.active,
+      sleepers: sleepers(),
+      lastExchange: state.exchangeLog.length ? state.exchangeLog[0] : null
     };
   }
 
@@ -6987,6 +7266,26 @@ var THREE = __wxRoot.THREE || window.THREE;
       if (!r.ok || r.action !== 'sushi') problems.push('寿司店互动应返回 action=sushi');
       if (crewList().length !== 2) problems.push('应返回 2 名已招募船员');
       if (cameraRig().y <= 0) problems.push('相机高度应为正');
+      // R3：巡逻
+      tickCrew(0.5, 1.0);
+      var cl = crewList();
+      if (!cl[0] || typeof cl[0].x !== 'number') problems.push('crewList 应带实时坐标');
+      setPatrol(false);
+      tickCrew(0.5, 2.0);
+      setPatrol(true);
+      // R3：过夜状态
+      var slept = beginSleep(100);
+      if (!slept.length || slept.length > 2) problems.push('过夜应安排 1-2 名船员补眠');
+      if (state.sleepWakeAt !== 100) problems.push('beginSleep 应记录叫醒时刻');
+      if (!sleepDue(101)) problems.push('过 wakeAt 后 sleepDue 应为 true');
+      var woken = wakeUp();
+      if (woken.length !== slept.length) problems.push('叫醒人数应与补眠人数一致');
+      if (sleepers().length) problems.push('叫醒后不应还有人睡着');
+      // R3：兑换单
+      var offers = exchangeOffers(0);
+      if (offers.length !== 4) problems.push('市集默认应有 4 张兑换单');
+      var up = exchangeOffers(2);
+      if (up[0].yield.plastic !== Math.round(3 * 1.5)) problems.push('tradeBonus 应提升兑换产出');
       exit();
       if (isActive()) problems.push('exit 后 active 应为 false');
       // 越界钳制
@@ -7006,7 +7305,11 @@ var THREE = __wxRoot.THREE || window.THREE;
     move: move, setDeck: setDeck, setObstacles: setObstacles,
     nearestSpot: nearestSpot, interact: interact,
     crewList: crewList, setRecruited: setRecruited, setSushiOpen: setSushiOpen,
-    cameraRig: cameraRig, snapshot: snapshot, selfTest: selfTest
+    cameraRig: cameraRig, snapshot: snapshot, selfTest: selfTest,
+    /* R3 新增 */
+    tickCrew: tickCrew, setPatrol: setPatrol,
+    beginSleep: beginSleep, wakeUp: wakeUp, sleepers: sleepers, sleepDue: sleepDue,
+    exchangeOffers: exchangeOffers, logExchange: logExchange, EXCHANGES: EXCHANGES
   };
 });
 
@@ -7046,6 +7349,16 @@ var THREE = __wxRoot.THREE || window.THREE;
     enemySize: 1.7,
     pickupSize: 1.3,
     shield: { enabled: true, every: 5, seconds: 4 }, // every N pickups, N seconds of safety
+    /* R2 core loop: pressure-reward-failure-retry tuning. All keys mirror
+     * game.json rules, so a designer can retune the loop without a rebuild. */
+    surgeFirst: 90,          // seconds before the first shark surge (calm early minutes)
+    surgeEvery: 24,          // seconds between shark surges after that
+    hammerAt: 240,           // hammerheads start showing after this much elapsed time
+    comboRewardEvery: 5,     // every N combo steps drops a material cache
+    comboMultStep: 0.1,      // score multiplier gained per combo step
+    comboMultCap: 4,         // multiplier ceiling
+    deepZone: { mult: 1.6, share: 0.3 },  // deep-water loot multiplier / share of spawns
+    tierReward: { hearts: 1, shield: 8 }, // what a ship upgrade hands back
     target: 24,              // garbage pieces that finish the floating town
     buildEvery: 6,           // garbage pieces between two buildings on the raft
     autoBuild: true,         // build automatically so the run keeps its rhythm
@@ -8158,8 +8471,16 @@ var THREE = __wxRoot.THREE || window.THREE;
     res.wood -= t.upgradeCost.wood; res.plastic -= t.upgradeCost.plastic; res.metal -= t.upgradeCost.metal;
     applyTier(shipTier + 1);
     tierPopT = 0.01;   // 新船从几乎为 0 弹到目标尺寸（帧循环里推进）
-    addFT('船升级了：' + SHIP_TIERS[shipTier].name + '！', hero.x, hero.z, '#ffe2a8', 3);
+    /* R2 升级奖励：升级不只是换个模型 —— 立刻返还 1 颗心 + 8 秒护盾，
+     * 让「每 2-3 分钟一次的可感知成长」同时是一次安全垫。 */
+    var tr = R.tierReward || { hearts: 1, shield: 8 };
+    hearts = Math.min(R.hearts, hearts + (tr.hearts || 0));
+    shield = Math.max(shield, tr.shield || 0);
+    addFT('船升级了：' + SHIP_TIERS[shipTier].name + '！'
+      + (tr.hearts ? ' +' + tr.hearts + '♥' : '') + (tr.shield ? ' 护盾' + tr.shield + 's' : ''),
+      hero.x, hero.z, '#ffe2a8', 3);
     fanfare([523, 659, 784, 1047], 0.11, 'triangle', 0.075);
+    burst(hero.x, floatY(hero.x, hero.z) + 1.5, hero.z);
     saveWorld();
     return true;
   }
@@ -9532,6 +9853,10 @@ var THREE = __wxRoot.THREE || window.THREE;
   /* NPC 对话面板 / 寿司店面板：各自的命中区与滚动量。 */
   var npcPanelOpen = false, npcUI = null, npcHintRect = null;
   var sushiPanelOpen = false, sushiUI = null, sushiTab = 'menu';
+  /* 市集兑换面板（登船走到市集互动时打开）。 */
+  var marketPanelOpen = false, marketUI = null;
+  /* 庇护所过夜：黑场计时（>0 时画黑幕渐入渐出）+ 累计休息夜数。 */
+  var restNightT = 0, restCount = 0;
   function openNpcPanel() { npcPanelOpen = true; npcUI = null; blip(560, 0.1, 'sine', 0.04, 700); }
   function closeNpcPanel() { npcPanelOpen = false; npcUI = null; }
   function openSushiPanel() { sushiPanelOpen = true; sushiUI = null; blip(620, 0.1, 'sine', 0.04, 800); }
@@ -9547,6 +9872,68 @@ var THREE = __wxRoot.THREE || window.THREE;
       fanfare([523, 659, 784, 1047], 0.11, 'triangle', 0.07);
     }
     return r.ok;
+  }
+  /* --- 市集兑换面板：木↔塑↔铁 4:1，三对双向兑换按钮网格 --- */
+  var MARKET_PAIRS = [
+    { from: 'wood', to: 'plastic', label: '木→塑' },
+    { from: 'plastic', to: 'wood', label: '塑→木' },
+    { from: 'plastic', to: 'metal', label: '塑→铁' },
+    { from: 'metal', to: 'plastic', label: '铁→塑' },
+    { from: 'metal', to: 'wood', label: '铁→木' },
+    { from: 'wood', to: 'metal', label: '木→铁' }
+  ];
+  function openMarketPanel() { marketPanelOpen = true; marketUI = null; blip(640, 0.1, 'sine', 0.04, 800); }
+  function closeMarketPanel() { marketPanelOpen = false; marketUI = null; }
+  function drawMarketPanel(c, w, h, font) {
+    var pw = Math.min(w * 0.82, 520), ph = Math.min(h * 0.62, 380);
+    var px = (w - pw) / 2, py = (h - ph) / 2;
+    c.fillStyle = 'rgba(6,12,22,0.6)'; c.fillRect(0, 0, w, h);
+    c.fillStyle = 'rgba(24,28,40,0.97)';
+    roundRect(px, py, pw, ph, 18); c.fill();
+    c.strokeStyle = 'rgba(180,220,255,0.4)'; c.lineWidth = 2;
+    roundRect(px, py, pw, ph, 18); c.stroke();
+    c.textAlign = 'left';
+    c.fillStyle = '#bfe8ff';
+    c.font = '800 ' + (font * 1.3) + 'px ' + FONT;
+    c.fillText('市集 · 材料兑换', px + 24, py + font * 2.0);
+    c.fillStyle = 'rgba(220,235,255,0.8)';
+    c.font = '600 ' + (font * 0.8) + 'px ' + FONT;
+    c.fillText('4 换 1 · 木 ' + res.wood + ' 塑 ' + res.plastic + ' 铁 ' + res.metal, px + 24, py + font * 3.1);
+    // 关闭按钮
+    var cb = font * 1.7, cbx = px + pw - cb - 14, cby = py + 14;
+    var out = { close: { x: cbx, y: cby, w: cb, h: cb }, rows: [] };
+    c.fillStyle = 'rgba(255,255,255,0.1)';
+    roundRect(cbx, cby, cb, cb, cb / 2); c.fill();
+    c.fillStyle = 'rgba(255,255,255,0.85)';
+    c.font = '700 ' + (font * 1.0) + 'px ' + FONT;
+    c.textAlign = 'center';
+    c.fillText('×', cbx + cb / 2, cby + cb * 0.72);
+    c.textAlign = 'left';
+    // 兑换按钮网格 3 列 × 2 行
+    var bw = (pw - 60) / 3, bh = font * 2.2;
+    for (var i = 0; i < MARKET_PAIRS.length; i++) {
+      var pr = MARKET_PAIRS[i];
+      var col = i % 3, row = Math.floor(i / 3);
+      var bx = px + 24 + col * (bw + 8), by = py + font * 4.0 + row * (bh + 10);
+      var can = res[pr.from] >= window.SushiShop.EXCHANGE_RATE;
+      c.fillStyle = can ? 'rgba(50,90,130,0.85)' : 'rgba(50,55,65,0.6)';
+      roundRect(bx, by, bw, bh, 10); c.fill();
+      c.strokeStyle = can ? 'rgba(160,220,255,0.6)' : 'rgba(255,255,255,0.15)';
+      c.lineWidth = 1.5;
+      roundRect(bx, by, bw, bh, 10); c.stroke();
+      c.fillStyle = can ? '#eaf6ff' : 'rgba(200,210,220,0.5)';
+      c.font = '800 ' + (font * 0.8) + 'px ' + FONT;
+      c.textAlign = 'center';
+      c.fillText(pr.label, bx + bw / 2, by + bh * 0.42);
+      c.font = '600 ' + (font * 0.62) + 'px ' + FONT;
+      c.fillText('4' + pr.from.charAt(0) + ' → 1' + pr.to.charAt(0), bx + bw / 2, by + bh * 0.78);
+      c.textAlign = 'left';
+      out.rows.push({ x: bx, y: by, w: bw, h: bh, pair: pr, can: can });
+    }
+    c.fillStyle = 'rgba(220,235,255,0.6)';
+    c.font = '600 ' + (font * 0.7) + 'px ' + FONT;
+    c.fillText('点击兑换 · 点面板外关闭', px + 24, py + ph - font * 0.9);
+    return out;
   }
   var panelTab = 'local', panelData = null, panelDrag = null, panelWheelT = 0;
   var achBtnRect = null, lbBtnRect = null;
@@ -10005,6 +10392,9 @@ var THREE = __wxRoot.THREE || window.THREE;
     var bx0 = w - m - BR - 10;
     var slotY = [DASH_BOTTOM];                          // dash sits lowest
     for (var sN = 1; sN < SLOT_COUNT + 1; sN++) slotY.push(slotY[sN - 1] - bpitch);
+    /* 圆钮触区：不得大于相邻间距的 0.44 倍，否则压缩布局下相邻热区相切，
+     * 点「建」会命中相邻钮（用户报过「点了没反应」，实际是误触）。 */
+    var hitR = Math.min(BR + 8, Math.round(bpitch * 0.44));
 
     /* --- Dock / cast-off, and the on-deck fishing action ---
      * Placed along the bottom-centre so they read as "things you do with the
@@ -10082,7 +10472,7 @@ var THREE = __wxRoot.THREE || window.THREE;
       var canBuild = false, pool0 = offerableSteps();
       for (var pb = 0; pb < pool0.length; pb++) if (canAffordCost(stepCost(pool0[pb]))) canBuild = true;
       var wbx = bx0, wby = slotY[1];
-      buildBtnRect = { x: wbx, y: wby, r: BR + 8 };
+      buildBtnRect = { x: wbx, y: wby, r: hitR };
       hudCtx.globalAlpha = buildOpen ? 0.55 : 1;
       hudCtx.fillStyle = canBuild ? 'rgba(60,120,70,0.8)' : 'rgba(14,18,40,0.55)';
       hudCtx.beginPath(); hudCtx.arc(wbx, wby, BR, 0, Math.PI * 2); hudCtx.fill();
@@ -10104,7 +10494,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     /* 船 — ship management. Slot 2. */
     if (phase === 'playing' && !buildOffer) {
       var mbx = bx0, mby = slotY[2];
-      manageBtnRect = { x: mbx, y: mby, r: BR + 8 };
+      manageBtnRect = { x: mbx, y: mby, r: hitR };
       var partCount = shipParts().length;
       hudCtx.fillStyle = manageOpen ? 'rgba(90,70,20,0.85)' : 'rgba(14,18,40,0.6)';
       hudCtx.beginPath(); hudCtx.arc(mbx, mby, BR, 0, Math.PI * 2); hudCtx.fill();
@@ -10125,7 +10515,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     /* 潜 — dive entry. Slot 3. Available from the start. */
     if (window.DiveGame && phase === 'playing' && !(dive && dive.active())) {
       var dbx = bx0, dby = slotY[3];
-      diveBtnRect = { x: dbx, y: dby, r: BR + 8 };
+      diveBtnRect = { x: dbx, y: dby, r: hitR };
       hudCtx.globalAlpha = 0.3 + Math.sin(performance.now() / 300) * 0.16;
       hudCtx.strokeStyle = 'rgba(150,235,255,0.95)'; hudCtx.lineWidth = 3;
       hudCtx.beginPath(); hudCtx.arc(dbx, dby, BR + 5, 0, Math.PI * 2); hudCtx.stroke();
@@ -10146,7 +10536,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     /* 成 — the achievements panel. Slot 4. Only when the module is inlined. */
     if (window.Achievements && phase === 'playing' && !buildOffer) {
       var abx = bx0, aby = slotY[4];
-      achBtnRect = { x: abx, y: aby, r: BR + 8 };
+      achBtnRect = { x: abx, y: aby, r: hitR };
       var achOn = panelOpen === 'ach';
       var achPct = 0;
       try { achPct = window.Achievements.overallProgress(); } catch (e) { achPct = 0; }
@@ -10167,7 +10557,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     /* 榜 — the leaderboard panel. Slot 5. */
     if (window.Leaderboard && phase === 'playing' && !buildOffer) {
       var lbx = bx0, lby = slotY[5];
-      lbBtnRect = { x: lbx, y: lby, r: BR + 8 };
+      lbBtnRect = { x: lbx, y: lby, r: hitR };
       var lbOn = panelOpen === 'lb';
       hudCtx.fillStyle = lbOn ? 'rgba(24,56,80,0.9)' : 'rgba(14,18,40,0.6)';
       hudCtx.beginPath(); hudCtx.arc(lbx, lby, BR, 0, Math.PI * 2); hudCtx.fill();
@@ -10478,6 +10868,16 @@ var THREE = __wxRoot.THREE || window.THREE;
             hudCtx.fillStyle = '#eaf6ff';
             hudCtx.fillText(pc.name, sxp, syp + pr2 + 2 + font * 0.66);
             hudCtx.textAlign = 'left';
+            /* R3：踱步闲聊气泡 —— 好感越高聊得越热络；睡着的不说话。
+             * 头顶坐标上移一点画小气泡；台词每名船员几秒一换。 */
+            if (!pc.asleep && window.NpcDialogue.chatterFor && window.NpcDialogue.drawChatter) {
+              var _tier = window.NpcDialogue.tierOf ? window.NpcDialogue.tierOf(window.NpcDialogue.affinityOf(pc.id)).id : 'new';
+              var _hr = (typeof timeLeft === 'number' && R.duration) ? Math.floor(((R.duration - timeLeft) / R.duration) * 24 + 8) % 24 : 12;
+              var _chat = window.NpcDialogue.chatterFor(pc.id, _tier, performance.now(), _hr);
+              if (_chat && _chat.text) {
+                window.NpcDialogue.drawChatter(hudCtx, sxp, syp - pr2 - 2, _chat.text, { font: Math.max(12, font * 0.9), offset: 4, maxW: w });
+              }
+            }
           } catch (e) { /* 单个头像画失败不中断 */ }
         }
       }
@@ -10501,6 +10901,27 @@ var THREE = __wxRoot.THREE || window.THREE;
       try { sushiUI = window.SushiShop.drawPanel(hudCtx, w, h, { font: Math.max(15, font), tab: sushiTab }); }
       catch (e) { sushiUI = null; }
     }
+    /* 市集兑换面板（登船走到市集互动时打开）。 */
+    if (marketPanelOpen) {
+      try { marketUI = drawMarketPanel(hudCtx, w, h, Math.max(15, font)); }
+      catch (e) { marketUI = null; }
+    }
+    /* 庇护所过夜黑场：前 0.5s 渐入、中间全黑、后 0.5s 渐出（restNightT 1.5s）。 */
+    if (restNightT > 0) {
+      var rnA;
+      if (restNightT > 1.0) rnA = (1.5 - restNightT) / 0.5;        // 渐入
+      else if (restNightT < 0.5) rnA = restNightT / 0.5;           // 渐出
+      else rnA = 1;                                                 // 全黑
+      hudCtx.fillStyle = 'rgba(4,8,20,' + (rnA * 0.92).toFixed(3) + ')';
+      hudCtx.fillRect(0, 0, w, h);
+      if (restNightT > 0.6 && restNightT < 1.0) {
+        hudCtx.fillStyle = '#cfe6ff';
+        hudCtx.font = '800 ' + (font * 1.2) + 'px ' + FONT;
+        hudCtx.textAlign = 'center';
+        hudCtx.fillText('第 ' + restCount + ' 夜 …', w / 2, h / 2);
+        hudCtx.textAlign = 'left';
+      }
+    }
     /* Debug only: show the tier-cycle migration result on screen so an
      * unattended playtest screenshot verifies buildings survive every tier. */
     if (R.debugBuildAll && window.__debugTierCycle) {
@@ -10521,6 +10942,7 @@ var THREE = __wxRoot.THREE || window.THREE;
   var elapsed = 0, spawnTimer = 0, invulnerable = 0, shield = 0, sinceShield = 0, endedAt = 0, fps = 60;
   var buildings = [], lastReason = 'town';
   var combo = 0, lastPick = -99, comboShowT = 0, specialTimer = 0, shake = 0, hurtFlash = 0, wakeTimer = 0;
+  var scoreMult = 1;         // combo-driven score multiplier (R2 reward layer)
   var floatingTexts = [];
   var tally = {}, pieces = 0; // what was collected this round, per kind
   /** The town's stockpile: garbage turns into these three building materials. */
@@ -10752,7 +11174,8 @@ var THREE = __wxRoot.THREE || window.THREE;
   /* The build choice: two blueprints on offer, the player picks one. */
   var buildOffer = null, buildOfferT = 0, offerCooldown = 6, buildSel = 0, buildCardRects = null;
   var townCardRects = null;   // 城镇图纸卡片的独立命中区（勿与 buildCardRects 共用）
-  var surgeT = 0, surgeShowT = 0, waterDry = 0, waterDropT = 0, guardT = 0;
+  var surgeT = 0, surgedOnce = false, surgeShowT = 0, waterDry = 0, waterDropT = 0, guardT = 0;
+  var lastHammerNotice = -999;
   function canAfford(spec) {
     return res.wood >= spec.cost.wood && res.plastic >= spec.cost.plastic && res.metal >= spec.cost.metal;
   }
@@ -11007,8 +11430,9 @@ var THREE = __wxRoot.THREE || window.THREE;
     return randomSeaSafe(minFromHero);
   }
   function addPickup() {
-    // A third of the loot drifts in the deep-water zone: better material, more risk.
-    var deep = Math.random() < 0.3;
+    // A share of the loot drifts in the deep-water zone: better material, more
+    // risk. The share and the payout multiplier come from rules (deepZone).
+    var deep = Math.random() < R.deepZone.share;
     var p = deep ? zonePoint() : nearSea(3);
     if (!p) { p = randomSeaSafe(3); deep = false; }
     if (!p) return;
@@ -11079,8 +11503,10 @@ var THREE = __wxRoot.THREE || window.THREE;
     addEnemyAt(p.x, p.z);
   }
   function addEnemyAt(x, z) {
-    // From the halfway point some sharks are hammerheads: wider, faster, harder to dodge.
-    var hammer = elapsed > R.duration * 0.5 && Math.random() < 0.3;
+    // From R.hammerAt (240s) some sharks are hammerheads: wider, faster, harder
+    // to dodge. R.duration is 999999 in the endless world, so the old
+    // duration-based gate could never fire — hammerheads simply never came.
+    var hammer = elapsed > R.hammerAt && Math.random() < 0.3;
     var ring = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.85, 26), new THREE.MeshBasicMaterial({ color: '#ff4d4d', transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false }));
     ring.rotation.x = -Math.PI / 2;
     ring.visible = false;
@@ -11091,6 +11517,11 @@ var THREE = __wxRoot.THREE || window.THREE;
       state: 'cruise', st: 0, nextLunge: 2.5 + Math.random() * 4, lx: 0, lz: 0, ring: ring,
       hammer: hammer, speedMul: hammer ? 1.25 : 1, lungeMul: hammer ? 2.55 : 2.3
     });
+    if (hammer && elapsed - (lastHammerNotice || -999) > 60) {
+      lastHammerNotice = elapsed;
+      addFT('锤头鲨出没 · 更快更凶', hero.x, hero.z - 3, '#ffb4a0', 2.4);
+      blip(120, 0.3, 'square', 0.05, 80);
+    }
   }
   function clearEntities() {
     enemies.forEach(function (e) { scene.remove(e.node); scene.remove(e.ring); });
@@ -11155,7 +11586,8 @@ var THREE = __wxRoot.THREE || window.THREE;
     castaways.forEach(function (c) { scene.remove(c.node); scene.remove(c.ring); });
     castaways = []; recruited = [];
     castawayTimer = 26; buildDiscount = 0; foodPerk = 0; scorePerk = 0; oxygenPerk = 0;
-    surgeT = 0; surgeShowT = 0; waterDry = 0; waterDropT = 0; guardT = 0;
+    surgeT = 0; surgedOnce = false; surgeShowT = 0; waterDry = 0; waterDropT = 0; guardT = 0;
+    spawnTimer = -12;   // R2 retry pacing: the first minute holds one shark, not a pack
     var zAng = Math.random() * Math.PI * 2, zDist = 14 + Math.random() * 6;
     zone.x = Math.cos(zAng) * zDist; zone.z = Math.sin(zAng) * zDist;
     hero.x = 0; hero.z = 0; hero.vx = hero.vz = 0; hero.dashT = 0; hero.dashCd = 0;
@@ -11237,7 +11669,9 @@ var THREE = __wxRoot.THREE || window.THREE;
     res.wood = Math.floor(res.wood * 0.5);
     res.plastic = Math.floor(res.plastic * 0.5);
     res.metal = Math.floor(res.metal * 0.5);
-    combo = 0; lastPick = -99; comboShowT = 0;
+    combo = 0; lastPick = -99; comboShowT = 0; scoreMult = 1;
+    // R2 retry pacing: no shark surge stacked on top of a fresh respawn.
+    surgeT = 0; surgedOnce = false;
     // What you keep: buildings, survivalModels, survival[], recruited[],
     // castaways, SushiShop state, NpcDialogue state, pop, perks.
     // What resets: your body.
@@ -11248,7 +11682,16 @@ var THREE = __wxRoot.THREE || window.THREE;
     hero.x = 0; hero.z = 0; hero.vx = hero.vz = 0; hero.dashT = 0; hero.dashCd = 0;
     docked = false;
     for (var i = 0; i < R.maxPickups; i++) addPickup();
-    addFT('你被救回船上 · 损失一半材料', hero.x, hero.z, '#ffb4a0', 3.2);
+    /* 死亡教学：按死因给一条可执行的建议（失败要能教人）。 */
+    var tips = {
+      shark:  '看到红色预警圈就按冲刺（⚡），能拉开距离躲开扑咬',
+      thirst: '造集雨器/净水器，水变黄就优先补水',
+      hunger: '造鱼篓 + 下锚钓鱼，食物见底先回船'
+    };
+    var tip = tips[lastReason] || '贴着甲板边缘打捞最安全，深水区有鲨鱼巡逻';
+    /* R2 失败文案：损失讲清楚 + 下一步怎么走（打捞 → 建造 → 升船）。 */
+    addFT('损失一半材料 · 小镇还在', hero.x, hero.z, '#ffb4a0', 3.4);
+    addFT('打捞 → 建造 → 升船 · ' + tip, hero.x, hero.z, '#ffe2a8', 5);
     blip(220, 0.3, 'sine', 0.05, 440);
     setPhase('playing');
     for (var e = 0; e < 2; e++) addEnemy();  // some danger, not a wall
@@ -11559,6 +12002,33 @@ var THREE = __wxRoot.THREE || window.THREE;
       closeNpcPanel();
       return;
     }
+    /* --- 市集兑换面板：点兑换按钮 / 点关闭 / 点外关 --- */
+    if (marketPanelOpen) {
+      if (marketUI) {
+        if (marketUI.close && event.clientX >= marketUI.close.x && event.clientX <= marketUI.close.x + marketUI.close.w
+            && event.clientY >= marketUI.close.y && event.clientY <= marketUI.close.y + marketUI.close.h) {
+          closeMarketPanel(); return;
+        }
+        for (var mxi = 0; mxi < marketUI.rows.length; mxi++) {
+          var mxr = marketUI.rows[mxi];
+          if (mxr.can
+              && event.clientX >= mxr.x && event.clientX <= mxr.x + mxr.w
+              && event.clientY >= mxr.y && event.clientY <= mxr.y + mxr.h) {
+            var xr = window.SushiShop.exchange(res, mxr.pair.from, mxr.pair.to, 1);
+            if (xr && xr.ok) {
+              addFT('兑换成功 · ' + mxr.pair.label + '（花 4 得 1）', hero.x, hero.z, '#9ff0b8', 1.6);
+              blip(700, 0.1, 'triangle', 0.05, 900);
+              marketUI = null;   // 下一帧重画，刷新材料数
+            } else {
+              addFT('材料不够（要 4 个 ' + mxr.pair.from + '）', hero.x, hero.z, '#ffb4a0', 1.6);
+            }
+            return;
+          }
+        }
+      }
+      closeMarketPanel();
+      return;
+    }
     /* --- 寿司店面板：点菜品上架/下架，点关闭 --- */
     if (sushiPanelOpen) {
       if (sushiUI) {
@@ -11772,17 +12242,33 @@ var THREE = __wxRoot.THREE || window.THREE;
     return magnitude > 0 ? { x: x / magnitude, z: z / magnitude } : { x: 0, z: 0 };
   }
 
-  /** The raft's burst of speed: keyboard Space/J, or the on-screen ⚡ button. */
+  /** The raft's burst of speed: keyboard Space/J, or the on-screen ⚡ button.
+   *  R2 escape tool: dashing while a shark is winding up or lunging right next
+   *  to the hull turns the tap into a longer, faster-recharging escape — the
+   *  read-and-react answer to the telegraphed lunge. */
   function triggerDash() {
     if (phase !== 'playing' || paused || hero.dashCd > 0) return;
     var dir = inputDirection();
     if (!dir.x && !dir.z) dir = { x: Math.sin(hero.facing), z: Math.cos(hero.facing) };
-    hero.dashT = R.dash.time;
-    hero.dashCd = R.dash.cooldown;
+    var escaping = 0, e2 = null;
+    for (var di = 0; di < enemies.length; di++) {
+      var se = enemies[di];
+      if (se.state !== 'windup' && se.state !== 'lunge') continue;
+      if (Math.hypot(se.x - hero.x, se.z - hero.z) < R.heroSize + 5) { escaping++; e2 = se; }
+    }
+    hero.dashT = R.dash.time + (escaping ? 0.25 : 0);
+    hero.dashCd = R.dash.cooldown * (escaping ? 0.55 : 1);
     hero.dashX = dir.x; hero.dashZ = dir.z;
     spawnFoam(hero.x - Math.sin(hero.facing) * shipHalfLen() * 0.6,
               hero.z - Math.cos(hero.facing) * shipHalfLen() * 0.6, 14, 3.4);
-    blip(300, 0.18, 'triangle', 0.05, 700);
+    if (escaping) {
+      addFT('逃逸冲刺！', hero.x, hero.z, '#9fe0ff', 1.4);
+      blip(520, 0.2, 'triangle', 0.06, 1250);
+      burst(hero.x, WATER_Y + 1, hero.z);
+    } else {
+      blip(300, 0.18, 'triangle', 0.05, 700);
+    }
+    if (e2 && e2.ring) e2.ring.material.color.set('#ffe066');
   }
 
   /** Move with sliding: try each axis on its own, and keep a body radius clear of blocked cells. */
@@ -11884,6 +12370,7 @@ var THREE = __wxRoot.THREE || window.THREE;
       /* --- 登船模式：WASD 控制的是船员，不是船 ---
        * 第三人称在甲板上走动；靠近交互点按 F。船体保持停泊不动。 */
       if (townView && window.ShipCrew && window.ShipCrew.isActive()) {
+        window.ShipCrew.tickCrew(dt, t);   // R3：船员踱步巡逻（站位/避让都在模块里）
         window.ShipCrew.move({ x: dir.x, z: -dir.z }, dt, !!keys.boost);
         var snap = window.ShipCrew.snapshot();
         var deckY = deckYForTier();
@@ -11900,17 +12387,8 @@ var THREE = __wxRoot.THREE || window.THREE;
         if (avatarArmL) avatarArmL.rotation.x = -Math.sin(walkPhase) * swing * 0.75;
         if (avatarArmR) avatarArmR.rotation.x = Math.sin(walkPhase) * swing * 0.75;
         if (avatarHead) avatarHead.rotation.x = Math.sin(walkPhase * 2) * 0.03 * Math.min(spd, 1);
-        // 船员待机：轻微摆臂 + 呼吸浮动
-        ensureCrewNodes();
-        var crewNow = window.ShipCrew.crewList();
-        for (var cn = 0; cn < crewNow.length; cn++) {
-          var cnode = crewNodes[crewNow[cn].id];
-          if (cnode) {
-            cnode.node.position.y = deckY + (crewNow[cn].bob || 0);
-            if (cnode.armL) cnode.armL.rotation.x = Math.sin(t * 1.4 + cn * 1.7) * 0.05;
-            if (cnode.armR) cnode.armR.rotation.x = -Math.sin(t * 1.4 + cn * 1.7) * 0.05;
-          }
-        }
+        /* R3 船员踱步：tickCrew 已在 update() 的登船同步段统一推进并摆小人
+         * （见「登船时同步船上的居民与寿司店状态」块），这里不再重复推进。 */
       }
       if (keys.boost && !townView) triggerDash();
       if (townView && crewInteractPressed) { crewInteractPressed = false; doCrewInteract(); }
@@ -11955,10 +12433,12 @@ var THREE = __wxRoot.THREE || window.THREE;
 
       spawnTimer += dt;
       if (spawnTimer >= R.enemySpawnEvery && enemies.length < R.maxEnemies) { spawnTimer = 0; addEnemy(); }
-      // Shark surge: every so often a small pack arrives at once. Keep moving.
+      // Shark surge: every so often a small pack arrives at once. The FIRST one
+      // waits for surgeFirst seconds (a calm first minute to learn the loop),
+      // then packs return every surgeEvery seconds. Keep moving.
       surgeT += dt;
-      if (surgeT >= 22) {
-        surgeT = 0;
+      if (surgeT >= (surgedOnce ? R.surgeEvery : R.surgeFirst)) {
+        surgeT = 0; surgedOnce = true;
         var packSize = 1 + (Math.random() < 0.35 ? 1 : 0);
         for (var sp2 = 0; sp2 < packSize && enemies.length < R.maxEnemies + 2; sp2++) addEnemy();
         surgeShowT = 2.2;
@@ -12023,7 +12503,10 @@ var THREE = __wxRoot.THREE || window.THREE;
           else if (invulnerable <= 0) {
             hearts -= 1;
             invulnerable = 2.2;   // generous mercy window: enough to escape a pack
-            hurtFlash = 1; shake = 0.5; combo = 0;
+            hurtFlash = 1; shake = 0.5;
+            // Failure must teach: say what was lost, not just that it hurt.
+            if (combo >= 2) addFT('连击中断 x' + combo, hero.x, hero.z + 2, '#ff9a96', 1.6);
+            combo = 0; scoreMult = 1;
             moveOnIsland(hero, -tx / dist * 2.6, -tz / dist * 2.6, 0.3);
             blip(180, 0.25, 'square', 0.05, 90);
             if (hearts <= 0) { finish('shark'); return; }
@@ -12064,8 +12547,12 @@ var THREE = __wxRoot.THREE || window.THREE;
           } else {
             combo = (elapsed - lastPick <= R.comboWindow) ? combo + 1 : 1;
             comboShowT = 2;
-            if (combo >= 2) addFT('连击 x' + combo, p.x, p.z, '#ffc463');
+            if (combo >= 2) addFT('连击 x' + combo + ' · ' + (1 + Math.min(R.comboMultCap - 1, (combo - 1) * R.comboMultStep)).toFixed(1) + '倍分', p.x, p.z, '#ffc463');
             blip(760 + Math.min(8, combo) * 55, 0.1, 'triangle', 0.06, 1100 + combo * 80);
+            /* 连击≥5 的实际奖励：本次打捞的材料翻倍 —— 让「保持连击」有真实的
+             * 收益，而不是只涨一个数字。 */
+            var comboMult = combo >= 5 ? 2 : 1;
+            if (comboMult > 1) addFT('连击奖励 x2 材料！', p.x, p.z, '#ffe2a8', 1.6);
             // Ledger for the end-of-round breakdown, and the materials it yields.
             if (tally[p.name] === undefined) tally[p.name] = 0;
             tally[p.name] += 1;
@@ -12073,19 +12560,26 @@ var THREE = __wxRoot.THREE || window.THREE;
             // Precise salvage count for achievements (the module otherwise has to
             // infer pickups from score jumps, which undercounts multi-pickups).
             if (window.Achievements) window.Achievements.note({ picked: 1 });
+            /* R2 深水区结算：深水打捞在「极品 x2」的基础上再乘 deepZone.mult，
+             * 材料与得分一起放大 —— 冒险的收益必须真的兑现。 */
+            var zoneMult = p.deep ? R.deepZone.mult : 1;
             if (p.res) {
-              for (var rk in p.res) res[rk] += p.res[rk] * (p.mult || 1);
+              for (var rk in p.res) res[rk] += Math.round(p.res[rk] * (p.mult || 1) * comboMult * zoneMult);
             }
             var resTag = [];
             if (p.res) {
-              if (p.res.wood) resTag.push('木+' + p.res.wood * (p.mult || 1));
-              if (p.res.plastic) resTag.push('塑+' + p.res.plastic * (p.mult || 1));
-              if (p.res.metal) resTag.push('铁+' + p.res.metal * (p.mult || 1));
+              if (p.res.wood) resTag.push('木+' + Math.round(p.res.wood * (p.mult || 1) * comboMult * zoneMult));
+              if (p.res.plastic) resTag.push('塑+' + Math.round(p.res.plastic * (p.mult || 1) * comboMult * zoneMult));
+              if (p.res.metal) resTag.push('铁+' + Math.round(p.res.metal * (p.mult || 1) * comboMult * zoneMult));
             }
             addFT(p.name + ' ' + (resTag.join(' ') || ''), p.x, p.z, p.glowColor, 1.1);
           }
           lastPick = elapsed;
-          score += gained + (p.special ? 0 : tradeBonus) + (p.special ? 0 : scorePerk);
+          /* R2 分数结算：普通打捞乘连击倍率（scoreMult，上限 comboMultCap），
+           * 深水打捞再乘 deepZone.mult —— 两者都让「贪一手」看得见回报。 */
+          score += Math.round((gained + (p.special ? 0 : tradeBonus) + (p.special ? 0 : scorePerk))
+            * (p.special ? 1 : scoreMult)
+            * (p.special ? 1 : zoneMult));
           if (gained === 1) addFT('+1', p.x, p.z, '#bff0ff', 0.8);
           burst(p.x, floatY(p.x, p.z) + R.pickupSize * 0.6, p.z);
           post({ type: 'state', phase: phase, score: score });
@@ -12229,8 +12723,40 @@ var THREE = __wxRoot.THREE || window.THREE;
     refreshSushiStall();
     /* 登船时同步船上的居民与寿司店状态。 */
     if (townView && window.ShipCrew && window.ShipCrew.isActive()) {
+      /* R3 睡眠唤醒：过夜补眠的船员到点起床。唤醒检查独立跑——黑场只有
+       * 1.5s，wakeAt 在 +6s，只靠黑场窗口检查会让补眠船员永远睡着。 */
+      if (window.ShipCrew.sleepDue && window.ShipCrew.sleepDue(performance.now())) {
+        try { window.ShipCrew.wakeUp(); } catch (e) { /* ignore */ }
+      }
       window.ShipCrew.setRecruited(recruited.map(function (r) { return r.id; }).filter(function (x) { return x; }));
       window.ShipCrew.setSushiOpen(window.SushiShop ? window.SushiShop.isOpen() : false);
+      /* 庇护所过夜黑场计时（restNightT 在 doCrewInteract 的 rest 分支置 1.5）。 */
+      if (restNightT > 0) {
+        restNightT = Math.max(0, restNightT - dt);
+        /* 黑场结束的瞬间也补一次唤醒（玩家已看到夜幕落下）。 */
+        if (restNightT === 0 && window.ShipCrew.sleepDue &&
+            window.ShipCrew.sleepDue(performance.now())) {
+          try { window.ShipCrew.wakeUp(); } catch (e) { /* ignore */ }
+        }
+      }
+      /* 船员踱步：R3 的 tickCrew 每帧推进巡逻，然后按实时位置摆小人。
+       * 摆腿/摆臂幅度随移动速度（cc.moving），站着只呼吸，不再「原地跑步」。 */
+      if (window.ShipCrew && window.ShipCrew.tickCrew) {
+        window.ShipCrew.tickCrew(dt, elapsed);
+        var crewLive = window.ShipCrew.crewList();
+        for (var ci2 = 0; ci2 < crewLive.length; ci2++) {
+          var cc = crewLive[ci2], cn2 = crewNodes[cc.id];
+          if (!cn2) continue;
+          cn2.node.position.x = cc.x; cn2.node.position.z = cc.z;
+          cn2.node.position.y = deckYForTier() + (cc.bob || 0);
+          cn2.node.rotation.y = cc.facing;
+          var cSw = cc.moving ? 0.5 : 0;
+          if (cn2.legL && cc.walkT !== undefined) {
+            cn2.legL.rotation.x = Math.sin(cc.walkT) * cSw;
+            if (cn2.legR) cn2.legR.rotation.x = -Math.sin(cc.walkT) * cSw;
+          }
+        }
+      }
       /* 把甲板上的实体（建筑/装备/寿司店）同步成障碍圆，让角色不会再走进
        * 建筑里卡住 —— 这是「上船后人物穿模、卡在里面」的根因。 */
       if (!window._obstacleTick || (performance.now() - window._obstacleTick) > 120) {
@@ -12328,9 +12854,18 @@ var THREE = __wxRoot.THREE || window.THREE;
     switch (r.action) {
       case 'build':   openBuildMenu(); break;
       case 'sushi':   if (window.SushiShop && window.SushiShop.isOpen()) openSushiPanel(); else addFT('寿司店还没开张（需招募小满）', hero.x, hero.z, '#ffb4a0', 2); break;
-      case 'tower':   addFT('供水正常 · 水 ' + Math.round(canteen) + '/' + Math.round(maxWater), hero.x, hero.z, '#9fe0ff', 2); break;
-      case 'rest':    canteen = maxWater; food = maxFood; addFT('休息好了 · 水食回满', hero.x, hero.z, '#9ff0b8', 2); saveWorld(); break;
-      case 'market':  addFT('木 ' + res.wood + ' / 塑 ' + res.plastic + ' / 铁 ' + res.metal, hero.x, hero.z, '#dff2ff', 2); break;
+      case 'tower':   canteen = Math.min(maxWater, canteen + 15); addFT('接了淡水 · 水 +' + Math.min(15, Math.round(maxWater - canteen + 15)), hero.x, hero.z, '#9fe0ff', 2); break;
+      case 'rest':    /* 真过夜：天色切夜 + 黑场，醒来水食回满并计数。 */
+                      restNightT = 1.5;
+                      restCount += 1;
+                      canteen = maxWater; food = maxFood;
+                      /* 船员也跟着睡：进睡眠系统，醒来由 sleepDue 唤醒继续巡逻。 */
+                      if (window.ShipCrew && window.ShipCrew.beginSleep) {
+                        try { window.ShipCrew.beginSleep(performance.now() + 6000); } catch (e) {}
+                      }
+                      addFT('睡了 · 第 ' + restCount + ' 夜 · 水食回满', hero.x, hero.z, '#9ff0b8', 3);
+                      saveWorld(); break;
+      case 'market':  openMarketPanel(); break;
       case 'dive':    if (!dive || !dive.active()) startDive(); break;
       case 'sail':    toggleTownView(); setDocked(false); break;
     }
