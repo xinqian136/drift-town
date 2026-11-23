@@ -35,13 +35,19 @@
     { id: 'bridge',    name: '船桥',     x: 0,    z: 8.5,  y: 3.6, radius: 1.8, action: 'sail',    hint: '回到航行' }
   ];
 
-  /* 可招募的船员：登船后他们会在甲板上站着/走动，让船上有「人」。 */
+  /* 可招募的船员：登船后他们会在甲板上站着/走动，让船上有「人」。
+   * 每条带完整外观配色，供程序化角色拼装使用（无外部资产模式）。 */
   var CREW_DEFS = [
-    { id: 'laochen',   name: '老陈',   color: '#8fb8d8', job: '打捞', x: -1.8, z: 3.2 },
-    { id: 'ahai',      name: '阿海',   color: '#7fd8e8', job: '潜水', x: 1.9,  z: 4.0 },
-    { id: 'xiaoman',   name: '小满',   color: '#e8b87f', job: '寿司', x: 2.2,  z: -1.4 },
-    { id: 'bo',        name: '铁匠波', color: '#b8a090', job: '建造', x: -2.0, z: -3.4 },
-    { id: 'lili',      name: '莉莉',   color: '#d8a0c8', job: '买卖', x: 2.4,  z: -5.2 }
+    { id: 'laochen',   name: '老陈',   color: '#8fb8d8', job: '打捞', x: -1.8, z: 3.2,
+      skin: '#d9a97c', hair: '#c8c8c8', hat: '#5a6a78', pants: '#4a5560', shoe: '#3a3a3a' },
+    { id: 'ahai',      name: '阿海',   color: '#7fd8e8', job: '潜水', x: 1.9,  z: 4.0,
+      skin: '#e8c39a', hair: '#2a3a4a', hat: null,      pants: '#3a5a6a', shoe: '#2a3a3a' },
+    { id: 'xiaoman',   name: '小满',   color: '#e8b87f', job: '寿司', x: 2.2,  z: -1.4,
+      skin: '#f0d0aa', hair: '#4a3020', hat: '#e8e0d0', pants: '#7a5a40', shoe: '#5a4030' },
+    { id: 'bo',        name: '铁匠波', color: '#b8a090', job: '建造', x: -2.0, z: -3.4,
+      skin: '#c89878', hair: null,      hat: '#6a4a3a', pants: '#5a4a40', shoe: '#3a302a' },
+    { id: 'lili',      name: '莉莉',   color: '#d8a0c8', job: '买卖', x: 2.4,  z: -5.2,
+      skin: '#f5dcc0', hair: '#7a3a5a', hat: null,      pants: '#8a5a7a', shoe: '#6a4050' }
   ];
 
   var state = {
@@ -135,6 +141,7 @@
       if (state.recruited.indexOf(c.id) < 0) continue;
       out.push({
         id: c.id, name: c.name, color: c.color, job: c.job,
+        skin: c.skin, hair: c.hair, hat: c.hat, pants: c.pants, shoe: c.shoe,
         x: sx(c.x), z: sz(c.z),
         // 轻微待机摆动，让甲板不是死的
         bob: Math.sin(state.walkT * 0.5 + i) * 0.06

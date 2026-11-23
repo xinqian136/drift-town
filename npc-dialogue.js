@@ -31,6 +31,7 @@
     {
       id: 'laochen', name: '老陈', title: '捞了四十年的老手', specialty: 'salvage',
       perk: '打捞范围 +40%', color: '#8fb8d8',
+      look: { skin: '#d9a97c', hair: '#c8c8c8', hat: '#5a6a78', cloth: '#5a6a78' },
       bio: '大潮前是渔船上的水手，大潮后是海上最会看垃圾往哪漂的人。话少，手快，说「这玩意儿有用」的时候基本都对。',
       legacy: '他原来的船叫「陈记二号」，沉在离这里两天航程的地方。他从不提船，只提船上那口锅。',
       events: [
@@ -51,6 +52,7 @@
     {
       id: 'ahai', name: '阿海', title: '第一个戴上面罩的人', specialty: 'dive',
       perk: '潜水氧气 +20 秒', color: '#7fd8e8',
+      look: { skin: '#e8c39a', hair: '#2a3a4a', hat: null, cloth: '#3a6a7a' },
       bio: '在别的聚落做过潜水员，是唯一一个见过海面之下的人。说话时眼睛总往水下看，像在数还有多少没捞上来。',
       legacy: '他上一任搭档没上来。这件事他没跟任何人讲，但每次下水他都会多带一根绳子。',
       events: [
@@ -71,6 +73,7 @@
     {
       id: 'xiaoman', name: '小满', title: '把海的馈赠做成一餐的人', specialty: 'cook',
       perk: '寿司店图纸 · 食物 +50%', color: '#e8b87f',
+      look: { skin: '#f0d0aa', hair: '#4a3020', hat: '#e8e0d0', cloth: '#c88a5a' },
       bio: '大潮前在陆地上的一家小店里切鱼，大潮后一直在找一个能重新开火的地方。她是解锁寿司店的关键。',
       legacy: '她的刀是父亲留下的，刀柄缠过三次布。她说刀还在，店就还没关。',
       events: [
@@ -89,18 +92,19 @@
       ]
     },
     {
-      id: 'tiejiangbo', name: '铁匠波', title: '只会往硬里做的匠人', specialty: 'build',
+      id: 'bo', name: '铁匠波', title: '只会往硬里做的匠人', specialty: 'build',
       perk: '建造材料 -20%', color: '#b8a090',
+      look: { skin: '#c89878', hair: null, hat: '#6a4a3a', cloth: '#7a5a48' },
       bio: '手上有旧伤，握锤的姿势不对但打得比谁都稳。大潮时失去了一条腿（他给自己做了条木腿）。说话直接，讨厌废话。',
       legacy: '他的工坊本来在沉城的第三层，现在那里是 Tier 3 海域。他说过想再回去看一眼。',
       events: [
-        { id: 'tiejiangbo-1', type: 'trade', title: '木腿',
+        { id: 'bo-1', type: 'trade', title: '木腿',
           desc: '他的木腿裂了，想换一条。「但我不会求人。」',
           choices: [
             { text: '给他材料', affinity: 12, message: '他收了，第二天给你打了一副更结实的工具。' },
             { text: '帮他一起做', affinity: 20, message: '你们花了一整晚。他最后说：「这条腿比上一条好。」' }
           ] },
-        { id: 'tiejiangbo-2', type: 'story', title: '第三层',
+        { id: 'bo-2', type: 'story', title: '第三层',
           desc: '他提起沉城里的工坊，声音低了下去。',
           choices: [
             { text: '承诺带他回去', affinity: 15, message: '「不用。你下去的时候帮我看看，那炉火是不是还亮着。」' },
@@ -111,6 +115,7 @@
     {
       id: 'lili', name: '莉莉', title: '会在定价上跟你较劲的人', specialty: 'run',
       perk: '售价 +10%', color: '#d8a0c8',
+      look: { skin: '#f5dcc0', hair: '#7a3a5a', hat: null, cloth: '#a86a9a' },
       bio: '大潮前在岸上做买卖，算账比谁都快。来了就重新规划摊位位置，说「东西好吃不重要，要让人以为它好」。',
       legacy: '她有一本记满了价格的旧账本，最后一页没写完。她说那天她正在算最后一笔。',
       events: [
@@ -303,6 +308,66 @@
   }
 
   /**
+   * 程序化立绘：用 Canvas 拼装一张卡通头像（脸/发/帽/眼/眉/嘴/腮红/衣领）。
+   * npc.look = { skin, hair, hat, cloth }；缺省给安全值。cx,cy 圆心，r 半径。
+   */
+  function drawPortrait(ctx, npc, cx, cy, r) {
+    var look = npc.look || {};
+    var skin = look.skin || '#e8c39a', hair = look.hair,
+        hat = look.hat, cloth = look.cloth || npc.color || '#6a7a8a';
+    // 底圆（衣领色）+ 内脸（肤色，略小、偏上，露出下巴外圈当衣领）
+    ctx.fillStyle = cloth;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, r * 0.98, 0, Math.PI * 2); ctx.clip();
+    // 肩（底部两个圆角块）
+    ctx.fillStyle = cloth;
+    ctx.beginPath(); ctx.arc(cx - r * 0.42, cy + r * 1.05, r * 0.42, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx + r * 0.42, cy + r * 1.05, r * 0.42, 0, Math.PI * 2); ctx.fill();
+    // 脖子
+    ctx.fillStyle = skin;
+    ctx.fillRect(cx - r * 0.16, cy + r * 0.42, r * 0.32, r * 0.3);
+    // 脸
+    ctx.beginPath(); ctx.arc(cx, cy - r * 0.06, r * 0.68, 0, Math.PI * 2); ctx.fill();
+    // 腮红
+    ctx.fillStyle = 'rgba(230,130,110,0.35)';
+    ctx.beginPath(); ctx.arc(cx - r * 0.4, cy + r * 0.14, r * 0.11, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx + r * 0.4, cy + r * 0.14, r * 0.11, 0, Math.PI * 2); ctx.fill();
+    // 发：头顶大圆弧 + 两侧垂发
+    if (hair) {
+      ctx.fillStyle = hair;
+      ctx.beginPath(); ctx.arc(cx, cy - r * 0.24, r * 0.66, Math.PI * 1.02, Math.PI * 1.98); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx - r * 0.56, cy - r * 0.02, r * 0.18, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx + r * 0.56, cy - r * 0.02, r * 0.18, 0, Math.PI * 2); ctx.fill();
+    }
+    // 帽：檐 + 顶（盖在发上）
+    if (hat) {
+      ctx.fillStyle = hat;
+      ctx.fillRect(cx - r * 0.62, cy - r * 0.52, r * 1.24, r * 0.14);
+      ctx.beginPath(); ctx.arc(cx, cy - r * 0.5, r * 0.46, Math.PI, 0); ctx.fill();
+      ctx.fillRect(cx - r * 0.46, cy - r * 0.85, r * 0.92, r * 0.4);
+    }
+    // 眼（白底+黑瞳）+ 眉
+    var ey = cy - r * 0.08;
+    [-1, 1].forEach(function (s) {
+      var ex = cx + s * r * 0.27;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.ellipse(ex, ey, r * 0.11, r * 0.13, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#1a2430';
+      ctx.beginPath(); ctx.arc(ex, ey + r * 0.02, r * 0.055, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = hair || '#3a4a5a';
+      ctx.fillRect(ex - r * 0.11, ey - r * 0.22, r * 0.22, r * 0.05);
+    });
+    // 嘴（微笑弧）
+    ctx.strokeStyle = 'rgba(90,40,30,0.85)'; ctx.lineWidth = Math.max(1.5, r * 0.05);
+    ctx.beginPath(); ctx.arc(cx, cy + r * 0.16, r * 0.18, Math.PI * 0.15, Math.PI * 0.85); ctx.stroke();
+    ctx.restore();
+    // 外圈
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  /**
    * 画对话面板。opts: { font, scroll }
    * 返回 { close: {x,y,w,h}, choices: [{x,y,w,h,index}], maxScroll }
    */
@@ -327,16 +392,11 @@
     ctx.strokeStyle = 'rgba(150,220,255,0.4)'; ctx.lineWidth = 2;
     rr(ctx, px, py, pw, ph, 18); ctx.stroke();
 
-    // Portrait placeholder: a coloured disc with the NPC's first character.
+    // 程序化立绘（threejs-image-generator 降级模式：无 GEMINI_API_KEY，
+    // 用 Canvas 拼装头像：底圆+发/帽+眼+眉+嘴+腮红+衣领），比色盘首字精致。
     var pr = font * 1.9;
     var pcx = px + pr + 22, pcy = py + pr + 20;
-    ctx.fillStyle = cur.npc.color || '#8fb8d8';
-    ctx.beginPath(); ctx.arc(pcx, pcy, pr, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.font = '700 ' + (pr * 1.1) + 'px ' + FONT_STACK;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(cur.npc.name.charAt(0), pcx, pcy + 1);
-    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    drawPortrait(ctx, cur.npc, pcx, pcy, pr);
 
     // Name + title + affinity.
     var tx = pcx + pr + 16;
@@ -461,7 +521,7 @@
     affinityOf: affinityOf, tierOf: tierOf,
     availableEvent: availableEvent, choose: choose,
     summary: summary,
-    drawDialogue: drawDialogue, drawHint: drawHint,
+    drawDialogue: drawDialogue, drawHint: drawHint, drawPortrait: drawPortrait,
     selfTest: selfTest
   };
 });

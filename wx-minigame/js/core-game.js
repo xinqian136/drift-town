@@ -5843,6 +5843,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     {
       id: 'laochen', name: '老陈', title: '捞了四十年的老手', specialty: 'salvage',
       perk: '打捞范围 +40%', color: '#8fb8d8',
+      look: { skin: '#d9a97c', hair: '#c8c8c8', hat: '#5a6a78', cloth: '#5a6a78' },
       bio: '大潮前是渔船上的水手，大潮后是海上最会看垃圾往哪漂的人。话少，手快，说「这玩意儿有用」的时候基本都对。',
       legacy: '他原来的船叫「陈记二号」，沉在离这里两天航程的地方。他从不提船，只提船上那口锅。',
       events: [
@@ -5863,6 +5864,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     {
       id: 'ahai', name: '阿海', title: '第一个戴上面罩的人', specialty: 'dive',
       perk: '潜水氧气 +20 秒', color: '#7fd8e8',
+      look: { skin: '#e8c39a', hair: '#2a3a4a', hat: null, cloth: '#3a6a7a' },
       bio: '在别的聚落做过潜水员，是唯一一个见过海面之下的人。说话时眼睛总往水下看，像在数还有多少没捞上来。',
       legacy: '他上一任搭档没上来。这件事他没跟任何人讲，但每次下水他都会多带一根绳子。',
       events: [
@@ -5883,6 +5885,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     {
       id: 'xiaoman', name: '小满', title: '把海的馈赠做成一餐的人', specialty: 'cook',
       perk: '寿司店图纸 · 食物 +50%', color: '#e8b87f',
+      look: { skin: '#f0d0aa', hair: '#4a3020', hat: '#e8e0d0', cloth: '#c88a5a' },
       bio: '大潮前在陆地上的一家小店里切鱼，大潮后一直在找一个能重新开火的地方。她是解锁寿司店的关键。',
       legacy: '她的刀是父亲留下的，刀柄缠过三次布。她说刀还在，店就还没关。',
       events: [
@@ -5901,18 +5904,19 @@ var THREE = __wxRoot.THREE || window.THREE;
       ]
     },
     {
-      id: 'tiejiangbo', name: '铁匠波', title: '只会往硬里做的匠人', specialty: 'build',
+      id: 'bo', name: '铁匠波', title: '只会往硬里做的匠人', specialty: 'build',
       perk: '建造材料 -20%', color: '#b8a090',
+      look: { skin: '#c89878', hair: null, hat: '#6a4a3a', cloth: '#7a5a48' },
       bio: '手上有旧伤，握锤的姿势不对但打得比谁都稳。大潮时失去了一条腿（他给自己做了条木腿）。说话直接，讨厌废话。',
       legacy: '他的工坊本来在沉城的第三层，现在那里是 Tier 3 海域。他说过想再回去看一眼。',
       events: [
-        { id: 'tiejiangbo-1', type: 'trade', title: '木腿',
+        { id: 'bo-1', type: 'trade', title: '木腿',
           desc: '他的木腿裂了，想换一条。「但我不会求人。」',
           choices: [
             { text: '给他材料', affinity: 12, message: '他收了，第二天给你打了一副更结实的工具。' },
             { text: '帮他一起做', affinity: 20, message: '你们花了一整晚。他最后说：「这条腿比上一条好。」' }
           ] },
-        { id: 'tiejiangbo-2', type: 'story', title: '第三层',
+        { id: 'bo-2', type: 'story', title: '第三层',
           desc: '他提起沉城里的工坊，声音低了下去。',
           choices: [
             { text: '承诺带他回去', affinity: 15, message: '「不用。你下去的时候帮我看看，那炉火是不是还亮着。」' },
@@ -5923,6 +5927,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     {
       id: 'lili', name: '莉莉', title: '会在定价上跟你较劲的人', specialty: 'run',
       perk: '售价 +10%', color: '#d8a0c8',
+      look: { skin: '#f5dcc0', hair: '#7a3a5a', hat: null, cloth: '#a86a9a' },
       bio: '大潮前在岸上做买卖，算账比谁都快。来了就重新规划摊位位置，说「东西好吃不重要，要让人以为它好」。',
       legacy: '她有一本记满了价格的旧账本，最后一页没写完。她说那天她正在算最后一笔。',
       events: [
@@ -6115,6 +6120,66 @@ var THREE = __wxRoot.THREE || window.THREE;
   }
 
   /**
+   * 程序化立绘：用 Canvas 拼装一张卡通头像（脸/发/帽/眼/眉/嘴/腮红/衣领）。
+   * npc.look = { skin, hair, hat, cloth }；缺省给安全值。cx,cy 圆心，r 半径。
+   */
+  function drawPortrait(ctx, npc, cx, cy, r) {
+    var look = npc.look || {};
+    var skin = look.skin || '#e8c39a', hair = look.hair,
+        hat = look.hat, cloth = look.cloth || npc.color || '#6a7a8a';
+    // 底圆（衣领色）+ 内脸（肤色，略小、偏上，露出下巴外圈当衣领）
+    ctx.fillStyle = cloth;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, r * 0.98, 0, Math.PI * 2); ctx.clip();
+    // 肩（底部两个圆角块）
+    ctx.fillStyle = cloth;
+    ctx.beginPath(); ctx.arc(cx - r * 0.42, cy + r * 1.05, r * 0.42, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx + r * 0.42, cy + r * 1.05, r * 0.42, 0, Math.PI * 2); ctx.fill();
+    // 脖子
+    ctx.fillStyle = skin;
+    ctx.fillRect(cx - r * 0.16, cy + r * 0.42, r * 0.32, r * 0.3);
+    // 脸
+    ctx.beginPath(); ctx.arc(cx, cy - r * 0.06, r * 0.68, 0, Math.PI * 2); ctx.fill();
+    // 腮红
+    ctx.fillStyle = 'rgba(230,130,110,0.35)';
+    ctx.beginPath(); ctx.arc(cx - r * 0.4, cy + r * 0.14, r * 0.11, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx + r * 0.4, cy + r * 0.14, r * 0.11, 0, Math.PI * 2); ctx.fill();
+    // 发：头顶大圆弧 + 两侧垂发
+    if (hair) {
+      ctx.fillStyle = hair;
+      ctx.beginPath(); ctx.arc(cx, cy - r * 0.24, r * 0.66, Math.PI * 1.02, Math.PI * 1.98); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx - r * 0.56, cy - r * 0.02, r * 0.18, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx + r * 0.56, cy - r * 0.02, r * 0.18, 0, Math.PI * 2); ctx.fill();
+    }
+    // 帽：檐 + 顶（盖在发上）
+    if (hat) {
+      ctx.fillStyle = hat;
+      ctx.fillRect(cx - r * 0.62, cy - r * 0.52, r * 1.24, r * 0.14);
+      ctx.beginPath(); ctx.arc(cx, cy - r * 0.5, r * 0.46, Math.PI, 0); ctx.fill();
+      ctx.fillRect(cx - r * 0.46, cy - r * 0.85, r * 0.92, r * 0.4);
+    }
+    // 眼（白底+黑瞳）+ 眉
+    var ey = cy - r * 0.08;
+    [-1, 1].forEach(function (s) {
+      var ex = cx + s * r * 0.27;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.ellipse(ex, ey, r * 0.11, r * 0.13, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#1a2430';
+      ctx.beginPath(); ctx.arc(ex, ey + r * 0.02, r * 0.055, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = hair || '#3a4a5a';
+      ctx.fillRect(ex - r * 0.11, ey - r * 0.22, r * 0.22, r * 0.05);
+    });
+    // 嘴（微笑弧）
+    ctx.strokeStyle = 'rgba(90,40,30,0.85)'; ctx.lineWidth = Math.max(1.5, r * 0.05);
+    ctx.beginPath(); ctx.arc(cx, cy + r * 0.16, r * 0.18, Math.PI * 0.15, Math.PI * 0.85); ctx.stroke();
+    ctx.restore();
+    // 外圈
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  /**
    * 画对话面板。opts: { font, scroll }
    * 返回 { close: {x,y,w,h}, choices: [{x,y,w,h,index}], maxScroll }
    */
@@ -6139,16 +6204,11 @@ var THREE = __wxRoot.THREE || window.THREE;
     ctx.strokeStyle = 'rgba(150,220,255,0.4)'; ctx.lineWidth = 2;
     rr(ctx, px, py, pw, ph, 18); ctx.stroke();
 
-    // Portrait placeholder: a coloured disc with the NPC's first character.
+    // 程序化立绘（threejs-image-generator 降级模式：无 GEMINI_API_KEY，
+    // 用 Canvas 拼装头像：底圆+发/帽+眼+眉+嘴+腮红+衣领），比色盘首字精致。
     var pr = font * 1.9;
     var pcx = px + pr + 22, pcy = py + pr + 20;
-    ctx.fillStyle = cur.npc.color || '#8fb8d8';
-    ctx.beginPath(); ctx.arc(pcx, pcy, pr, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.font = '700 ' + (pr * 1.1) + 'px ' + FONT_STACK;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(cur.npc.name.charAt(0), pcx, pcy + 1);
-    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    drawPortrait(ctx, cur.npc, pcx, pcy, pr);
 
     // Name + title + affinity.
     var tx = pcx + pr + 16;
@@ -6273,7 +6333,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     affinityOf: affinityOf, tierOf: tierOf,
     availableEvent: availableEvent, choose: choose,
     summary: summary,
-    drawDialogue: drawDialogue, drawHint: drawHint,
+    drawDialogue: drawDialogue, drawHint: drawHint, drawPortrait: drawPortrait,
     selfTest: selfTest
   };
 });
@@ -6735,13 +6795,19 @@ var THREE = __wxRoot.THREE || window.THREE;
     { id: 'bridge',    name: '船桥',     x: 0,    z: 8.5,  y: 3.6, radius: 1.8, action: 'sail',    hint: '回到航行' }
   ];
 
-  /* 可招募的船员：登船后他们会在甲板上站着/走动，让船上有「人」。 */
+  /* 可招募的船员：登船后他们会在甲板上站着/走动，让船上有「人」。
+   * 每条带完整外观配色，供程序化角色拼装使用（无外部资产模式）。 */
   var CREW_DEFS = [
-    { id: 'laochen',   name: '老陈',   color: '#8fb8d8', job: '打捞', x: -1.8, z: 3.2 },
-    { id: 'ahai',      name: '阿海',   color: '#7fd8e8', job: '潜水', x: 1.9,  z: 4.0 },
-    { id: 'xiaoman',   name: '小满',   color: '#e8b87f', job: '寿司', x: 2.2,  z: -1.4 },
-    { id: 'bo',        name: '铁匠波', color: '#b8a090', job: '建造', x: -2.0, z: -3.4 },
-    { id: 'lili',      name: '莉莉',   color: '#d8a0c8', job: '买卖', x: 2.4,  z: -5.2 }
+    { id: 'laochen',   name: '老陈',   color: '#8fb8d8', job: '打捞', x: -1.8, z: 3.2,
+      skin: '#d9a97c', hair: '#c8c8c8', hat: '#5a6a78', pants: '#4a5560', shoe: '#3a3a3a' },
+    { id: 'ahai',      name: '阿海',   color: '#7fd8e8', job: '潜水', x: 1.9,  z: 4.0,
+      skin: '#e8c39a', hair: '#2a3a4a', hat: null,      pants: '#3a5a6a', shoe: '#2a3a3a' },
+    { id: 'xiaoman',   name: '小满',   color: '#e8b87f', job: '寿司', x: 2.2,  z: -1.4,
+      skin: '#f0d0aa', hair: '#4a3020', hat: '#e8e0d0', pants: '#7a5a40', shoe: '#5a4030' },
+    { id: 'bo',        name: '铁匠波', color: '#b8a090', job: '建造', x: -2.0, z: -3.4,
+      skin: '#c89878', hair: null,      hat: '#6a4a3a', pants: '#5a4a40', shoe: '#3a302a' },
+    { id: 'lili',      name: '莉莉',   color: '#d8a0c8', job: '买卖', x: 2.4,  z: -5.2,
+      skin: '#f5dcc0', hair: '#7a3a5a', hat: null,      pants: '#8a5a7a', shoe: '#6a4050' }
   ];
 
   var state = {
@@ -6835,6 +6901,7 @@ var THREE = __wxRoot.THREE || window.THREE;
       if (state.recruited.indexOf(c.id) < 0) continue;
       out.push({
         id: c.id, name: c.name, color: c.color, job: c.job,
+        skin: c.skin, hair: c.hair, hat: c.hat, pants: c.pants, shoe: c.shoe,
         x: sx(c.x), z: sz(c.z),
         // 轻微待机摆动，让甲板不是死的
         bob: Math.sin(state.walkT * 0.5 + i) * 0.06
@@ -9049,40 +9116,116 @@ var THREE = __wxRoot.THREE || window.THREE;
    * 用户从最开始就要的是「进入城镇 = 操控人物在船上活动」，不是拉近镜头。
    * 这里画一个体素小人（头/身/双臂/双腿），以及已招募的船员。
    * 它们挂在 hero.node.userData.body（船体局部坐标），会随船一起移动/缩放。 */
-  /* 一个更精致的体素小人，且腿是独立子节点能前后摆（走路不再像滑行的砖）。
-   * personBoxes() 只画「站着不动」的部分（躯干/头/臂/帽/背包），
-   * 两条腿单独作为 leftLeg/rightLeg 返回，挂在一个 legRoot 下绕髋部摆动。 */
-  function personTorso(skin, shirt, pants, hat) {
-    // 躯干/头/臂/帽：底(躯干下沿)对齐腿顶 y≈0.52，顶(帽顶)约 1.74，比例接近真人。
-    return [
-      [0, 0.82, 0, 0.44, 0.6, 0.26, shirt],            // 躯干（底0.52 顶1.12）
-      [-0.31, 0.82, 0, 0.14, 0.52, 0.18, skin],        // 左臂
-      [0.31, 0.82, 0, 0.14, 0.52, 0.18, skin],         // 右臂
-      [0, 1.3, 0, 0.3, 0.3, 0.3, skin],                // 头
-      [0, 1.46, 0, 0.32, 0.08, 0.32, hat || '#3a4a5a'],// 帽檐
-      [0, 1.52, 0, 0.26, 0.1, 0.26, hat || '#3a4a5a'], // 帽顶
-      [0, 0.84, -0.19, 0.3, 0.36, 0.12, '#8a6a4a']     // 小背包
-    ];
+  /* ========================================================================
+   * 程序化角色拼装（threejs-3d-generator 降级模式：无 TRIPO_API_KEY，
+   * 用 Three.js 基础几何体拼装精致 low-poly 角色）。
+   * 结构兼容旧 makePerson：返回 { group, legL, legR }，group 原点=脚底，
+   * legL/legR 绕髋部 rotation.x 摆动；附带 armL/armR/head 可动部件。
+   * 比例：总高约 1.62，头 0.42 / 躯干 0.52 / 腿 0.78。
+   * ==================================================================== */
+  function pmat(hex, rough) {
+    return new THREE.MeshStandardMaterial({ color: hex, roughness: rough !== undefined ? rough : 0.75, metalness: 0.04, flatShading: true });
   }
-  function personLegs(pants) {
-    // 腿以髋部为旋转原点：mesh 中心放在半高处，legGroup.position.y 即髋高。
-    return [
-      [-0.12, 0.26, 0, 0.17, 0.52, 0.2, pants],        // 左腿（中心0.26，底0，顶0.52）
-      [0.12, 0.26, 0, 0.17, 0.52, 0.2, pants]          // 右腿
-    ];
-  }
-  /** 造一个带可摆双腿的小人，返回 { group, legL, legR }。 */
-  function makePerson(skin, shirt, pants, hat) {
+  function makeDetailedPerson(o) {
+    o = o || {};
+    var skin = o.skin || '#f0c9a0', shirt = o.shirt || '#e2574c',
+        pants = o.pants || '#37506b', hat = o.hat || null,
+        hair = o.hair || '#3a4a5a', shoe = o.shoe || '#4a3828';
     var g = new THREE.Group();
-    var torso = voxelModel(personTorso(skin, shirt, pants, hat));
-    g.add(torso);
-    var legL = voxelModel(personLegs(pants).slice(0, 1));
-    var legR = voxelModel(personLegs(pants).slice(1));
-    // 髋部在 y≈0.55；腿 mesh 中心 0.26，抬到髋部让 group 原点=脚底(甲板面)。
-    legL.position.set(0, 0.55, 0);
-    legR.position.set(0, 0.55, 0);
+
+    /* --- 腿（髋部 pivot，capsule 向下垂） --- */
+    function makeLeg(side) {
+      var pivot = new THREE.Group();
+      pivot.position.set(0.11 * side, 0.78, 0);
+      var legGeo = new THREE.CapsuleGeometry(0.082, 0.56, 3, 8);
+      legGeo.translate(0, -0.36, 0);
+      var leg = new THREE.Mesh(legGeo, pmat(pants));
+      pivot.add(leg);
+      // 鞋：圆头方块
+      var shoeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.1, 0.26), pmat(shoe, 0.6));
+      shoeMesh.position.set(0, -0.74, 0.04);
+      pivot.add(shoeMesh);
+      return pivot;
+    }
+    var legL = makeLeg(-1), legR = makeLeg(1);
     g.add(legL); g.add(legR);
-    return { group: g, legL: legL, legR: legR };
+
+    /* --- 躯干（圆台 capsule 形） --- */
+    var torsoGeo = new THREE.CapsuleGeometry(0.185, 0.3, 4, 10);
+    var torso = new THREE.Mesh(torsoGeo, pmat(shirt));
+    torso.position.y = 1.04;
+    torso.scale.set(1, 1, 0.78);
+    g.add(torso);
+    // 腰带
+    var belt = new THREE.Mesh(new THREE.CylinderGeometry(0.175, 0.175, 0.06, 10), pmat('#5a4632', 0.6));
+    belt.position.y = 0.82;
+    belt.scale.set(1, 1, 0.8);
+    g.add(belt);
+    // 背包
+    if (o.backpack !== false) {
+      var pack = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.36, 0.14), pmat('#8a6a4a'));
+      pack.position.set(0, 1.06, -0.2);
+      g.add(pack);
+    }
+
+    /* --- 手臂（肩部 pivot） --- */
+    function makeArm(side) {
+      var pivot = new THREE.Group();
+      pivot.position.set(0.235 * side, 1.2, 0);
+      var armGeo = new THREE.CapsuleGeometry(0.06, 0.4, 3, 8);
+      armGeo.translate(0, -0.26, 0);
+      var arm = new THREE.Mesh(armGeo, pmat(shirt));
+      pivot.add(arm);
+      var handGeo = new THREE.SphereGeometry(0.062, 8, 6);
+      var hand = new THREE.Mesh(handGeo, pmat(skin));
+      hand.position.set(0, -0.5, 0);
+      pivot.add(hand);
+      return pivot;
+    }
+    var armL = makeArm(-1), armR = makeArm(1);
+    g.add(armL); g.add(armR);
+
+    /* --- 头（skull + 发/帽 + 眼 + 眉） --- */
+    var head = new THREE.Group();
+    head.position.y = 1.44;
+    var skull = new THREE.Mesh(new THREE.SphereGeometry(0.205, 12, 10), pmat(skin));
+    skull.scale.set(0.95, 1, 0.92);
+    head.add(skull);
+    // 眼睛（朝 -z 脸方向… 角色 facing=atan2(dx,dz)，脸朝 +z 向？用前方 +z）
+    var eyeGeo = new THREE.SphereGeometry(0.028, 6, 5);
+    var eyeMat = new THREE.MeshBasicMaterial({ color: '#1a2430' });
+    var eyeL = new THREE.Mesh(eyeGeo, eyeMat); eyeL.position.set(-0.072, 0.02, 0.172);
+    var eyeR = new THREE.Mesh(eyeGeo, eyeMat); eyeR.position.set(0.072, 0.02, 0.172);
+    head.add(eyeL); head.add(eyeR);
+    // 眉
+    var browGeo = new THREE.BoxGeometry(0.07, 0.016, 0.02);
+    var browMat = pmat(hair);
+    var browL = new THREE.Mesh(browGeo, browMat); browL.position.set(-0.072, 0.082, 0.175);
+    var browR = new THREE.Mesh(browGeo, browMat); browR.position.set(0.072, 0.082, 0.175);
+    head.add(browL); head.add(browR);
+    // 发：半球壳 + 后脑垂发
+    if (hair) {
+      var hairGeo = new THREE.SphereGeometry(0.218, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55);
+      var hairMesh = new THREE.Mesh(hairGeo, pmat(hair, 0.85));
+      hairMesh.position.y = 0.018;
+      head.add(hairMesh);
+      var backGeo = new THREE.SphereGeometry(0.19, 10, 8);
+      var back = new THREE.Mesh(backGeo, pmat(hair, 0.85));
+      back.position.set(0, -0.03, -0.055);
+      back.scale.set(1.02, 0.9, 0.85);
+      head.add(back);
+    }
+    // 帽：檐 + 顶
+    if (hat) {
+      var brim = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.028, 12), pmat(hat, 0.7));
+      brim.position.y = 0.105;
+      head.add(brim);
+      var top = new THREE.Mesh(new THREE.CylinderGeometry(0.145, 0.158, 0.13, 12), pmat(hat, 0.7));
+      top.position.y = 0.185;
+      head.add(top);
+    }
+    g.add(head);
+    return { group: g, legL: legL, legR: legR, armL: armL, armR: armR, head: head };
   }
   /** 按当前船型取甲板局部高度：木筏 0.55 / 木船·小船 1.2 / 邮轮·远洋 1.8。 */
   function deckYForTier() {
@@ -9098,9 +9241,9 @@ var THREE = __wxRoot.THREE || window.THREE;
     return { x: 0, z: 9.0 };
   }
   var crewRoot = new THREE.Group();
-  var _av = makePerson('#f0c9a0', '#e2574c', '#37506b');
+  var _av = makeDetailedPerson({ skin: '#f0c9a0', shirt: '#e2574c', pants: '#37506b', hat: '#3a4a5a', hair: '#4a3828', shoe: '#4a3828' });
   var avatar = _av.group;
-  var avatarLegL = _av.legL, avatarLegR = _av.legR;
+  var avatarLegL = _av.legL, avatarLegR = _av.legR, avatarArmL = _av.armL, avatarArmR = _av.armR, avatarHead = _av.head;
   avatar.visible = false;
   crewRoot.add(avatar);
   /* 寿司店实体：招募小满并开店后，甲板上真的立起一间店（不只是面板）。 */
@@ -9134,11 +9277,11 @@ var THREE = __wxRoot.THREE || window.THREE;
     for (var i = 0; i < list.length; i++) {
       var c = list[i];
       if (crewNodes[c.id]) { crewNodes[c.id].node.visible = true; continue; }
-      var p = makePerson('#e8bd92', c.color, '#4a5a68');
+      var p = makeDetailedPerson({ skin: c.skin || '#e8bd92', shirt: c.color, pants: c.pants || '#4a5a68', hat: c.hat, hair: c.hair || '#3a4a5a', shoe: c.shoe || '#4a3828' });
       p.group.position.set(c.x, deckYForTier(), c.z);
-      p.group.scale.setScalar(0.92);
+      p.group.scale.setScalar(0.95);
       crewRoot.add(p.group);
-      crewNodes[c.id] = { node: p.group, legL: p.legL, legR: p.legR, def: c };
+      crewNodes[c.id] = { node: p.group, legL: p.legL, legR: p.legR, armL: p.armL, armR: p.armR, def: c };
     }
     // 隐藏还没招募的
     Object.keys(crewNodes).forEach(function (id) {
@@ -10237,8 +10380,36 @@ var THREE = __wxRoot.THREE || window.THREE;
         hudCtx.fillText('走近工作台 / 寿司店 / 水塔 / 舷梯 试试', w / 2, boardY + font * 2.55);
       }
       hudCtx.textAlign = 'left';
+      /* 船员头顶：程序化立绘小头像 + 名字，让「船上有活生生的人」一眼可见。
+       * 世界坐标投影到屏幕；离相机太远/太偏就跳过。 */
+      if (window.NpcDialogue && window.NpcDialogue.drawPortrait) {
+        var _cw = window.ShipCrew.crewList();
+        var _body = hero.node.userData.body;
+        var _v = new THREE.Vector3();
+        for (var pi = 0; pi < _cw.length; pi++) {
+          var pc = _cw[pi], node = crewNodes[pc.id];
+          if (!node || !node.node.visible) continue;
+          _v.set(node.node.position.x, node.node.position.y + 2.0, node.node.position.z);
+          _body.localToWorld(_v);
+          _v.project(camera);
+          if (_v.z > 1) continue;
+          var sxp = (_v.x * 0.5 + 0.5) * w, syp = (-_v.y * 0.5 + 0.5) * h;
+          if (sxp < -40 || sxp > w + 40 || syp < -40 || syp > h + 40) continue;
+          var pr2 = Math.max(13, font * 0.85);
+          try {
+            window.NpcDialogue.drawPortrait(hudCtx, { look: { skin: pc.skin, hair: pc.hair, hat: pc.hat, cloth: pc.color }, color: pc.color, name: pc.name }, sxp, syp, pr2);
+            hudCtx.font = '700 ' + (font * 0.6) + 'px ' + FONT;
+            hudCtx.textAlign = 'center';
+            hudCtx.fillStyle = 'rgba(8,18,30,0.7)';
+            var nw2 = hudCtx.measureText(pc.name).width + 10;
+            hudCtx.fillRect(sxp - nw2 / 2, syp + pr2 + 2, nw2, font * 0.85);
+            hudCtx.fillStyle = '#eaf6ff';
+            hudCtx.fillText(pc.name, sxp, syp + pr2 + 2 + font * 0.66);
+            hudCtx.textAlign = 'left';
+          } catch (e) { /* 单个头像画失败不中断 */ }
+        }
+      }
     }
-    /* Achievement unlock banner, drawn last so it floats above everything. */
     if (window.Achievements) {
       try {
         window.Achievements.drawToast(hudCtx, w, h, { font: font, fontFamily: FONT });
@@ -11645,12 +11816,20 @@ var THREE = __wxRoot.THREE || window.THREE;
         var swing = Math.min(spd / 3, 1) * 0.6;
         if (avatarLegL) avatarLegL.rotation.x = Math.sin(walkPhase) * swing;
         if (avatarLegR) avatarLegR.rotation.x = -Math.sin(walkPhase) * swing;
-        // 船员待机
+        /* 手臂反相摆动 + 头部轻微俯仰，走路更像人 */
+        if (avatarArmL) avatarArmL.rotation.x = -Math.sin(walkPhase) * swing * 0.75;
+        if (avatarArmR) avatarArmR.rotation.x = Math.sin(walkPhase) * swing * 0.75;
+        if (avatarHead) avatarHead.rotation.x = Math.sin(walkPhase * 2) * 0.03 * Math.min(spd, 1);
+        // 船员待机：轻微摆臂 + 呼吸浮动
         ensureCrewNodes();
         var crewNow = window.ShipCrew.crewList();
         for (var cn = 0; cn < crewNow.length; cn++) {
           var cnode = crewNodes[crewNow[cn].id];
-          if (cnode) cnode.node.position.y = deckY + (crewNow[cn].bob || 0);
+          if (cnode) {
+            cnode.node.position.y = deckY + (crewNow[cn].bob || 0);
+            if (cnode.armL) cnode.armL.rotation.x = Math.sin(t * 1.4 + cn * 1.7) * 0.05;
+            if (cnode.armR) cnode.armR.rotation.x = -Math.sin(t * 1.4 + cn * 1.7) * 0.05;
+          }
         }
       }
       if (keys.boost && !townView) triggerDash();
