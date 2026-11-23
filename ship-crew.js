@@ -54,13 +54,20 @@
     sushiOpen: false,
     nearSpot: null,          // 当前靠近的交互点
     lastAction: null,        // { spot, at }
-    deckLen: 13, deckBeam: 4.2
+    deckLen: 13, deckBeam: 4.2,
+    deckY: 1.8,              // 甲板局部高度（木筏 0.55 / 大船 1.8）
+    scale: 1                 // 坐标缩放 = deckLen / 13，小木筏上所有点收缩到筏面
   };
+
+  /** 把基准坐标（邮轮 13 长 / 4.2 宽）缩放到当前甲板尺寸。 */
+  function sx(x) { return x * (state.deckBeam / 4.2); }
+  function sz(z) { return z * (state.deckLen / 13); }
+  function sy(y) { return state.deckY + (y - 1.8); }   // 保留点间相对高差，整体抬到当前甲板
 
   /* ==== 开关 ==== */
   function enter(recruitedIds, sushiOpen) {
     state.active = true;
-    state.x = 0; state.z = 9.0; state.facing = Math.PI;
+    state.x = 0; state.z = sz(9.0); state.facing = Math.PI;
     state.vx = state.vz = 0; state.walkT = 0;
     state.recruited = (recruitedIds || []).slice();
     state.sushiOpen = !!sushiOpen;
@@ -94,9 +101,10 @@
     // 更新靠近的交互点
     state.nearSpot = nearestSpot();
   }
-  function setDeck(deckLen, deckBeam) {
+  function setDeck(deckLen, deckBeam, deckY) {
     state.deckLen = deckLen || state.deckLen;
     state.deckBeam = deckBeam || state.deckBeam;
+    if (deckY !== undefined) state.deckY = deckY;
   }
 
   function nearestSpot() {
@@ -104,7 +112,7 @@
     for (var i = 0; i < SPOTS.length; i++) {
       var s = SPOTS[i];
       if (s.needs === 'sushiOpen' && !state.sushiOpen) continue;
-      var d = Math.hypot(state.x - s.x, state.z - s.z);
+      var d = Math.hypot(state.x - sx(s.x), state.z - sz(s.z));
       if (d < s.radius && d < bestD) { best = s; bestD = d; }
     }
     return best;
@@ -127,7 +135,7 @@
       if (state.recruited.indexOf(c.id) < 0) continue;
       out.push({
         id: c.id, name: c.name, color: c.color, job: c.job,
-        x: c.x, z: c.z,
+        x: sx(c.x), z: sz(c.z),
         // 轻微待机摆动，让甲板不是死的
         bob: Math.sin(state.walkT * 0.5 + i) * 0.06
       });
@@ -140,15 +148,16 @@
   /* ==== 第三人称相机 ==== */
   /** 返回第三人称相机相对角色的偏移（世界/船体局部一致）。 */
   function cameraRig() {
-    // 相机在角色身后、略高，看向角色前方一点。
-    var back = 6.2, up = 3.1;
+    // 相机距离随甲板缩放，小木筏上不会拉太远。
+    var back = 6.2 * (state.deckLen / 13) + 2.0;
+    var up = 3.1 * (state.deckLen / 13) + 1.0;
     var fx = Math.sin(state.facing), fz = Math.cos(state.facing);
     return {
       x: state.x - fx * back,
       y: up,
       z: state.z - fz * back,
       lookX: state.x + fx * 1.4,
-      lookY: 1.4,
+      lookY: state.deckY + 0.2,
       lookZ: state.z + fz * 1.4
     };
   }

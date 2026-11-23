@@ -10970,13 +10970,20 @@ void main() {
     sushiOpen: false,
     nearSpot: null,          // 当前靠近的交互点
     lastAction: null,        // { spot, at }
-    deckLen: 13, deckBeam: 4.2
+    deckLen: 13, deckBeam: 4.2,
+    deckY: 1.8,              // 甲板局部高度（木筏 0.55 / 大船 1.8）
+    scale: 1                 // 坐标缩放 = deckLen / 13，小木筏上所有点收缩到筏面
   };
+
+  /** 把基准坐标（邮轮 13 长 / 4.2 宽）缩放到当前甲板尺寸。 */
+  function sx(x) { return x * (state.deckBeam / 4.2); }
+  function sz(z) { return z * (state.deckLen / 13); }
+  function sy(y) { return state.deckY + (y - 1.8); }   // 保留点间相对高差，整体抬到当前甲板
 
   /* ==== 开关 ==== */
   function enter(recruitedIds, sushiOpen) {
     state.active = true;
-    state.x = 0; state.z = 9.0; state.facing = Math.PI;
+    state.x = 0; state.z = sz(9.0); state.facing = Math.PI;
     state.vx = state.vz = 0; state.walkT = 0;
     state.recruited = (recruitedIds || []).slice();
     state.sushiOpen = !!sushiOpen;
@@ -11010,9 +11017,10 @@ void main() {
     // 更新靠近的交互点
     state.nearSpot = nearestSpot();
   }
-  function setDeck(deckLen, deckBeam) {
+  function setDeck(deckLen, deckBeam, deckY) {
     state.deckLen = deckLen || state.deckLen;
     state.deckBeam = deckBeam || state.deckBeam;
+    if (deckY !== undefined) state.deckY = deckY;
   }
 
   function nearestSpot() {
@@ -11020,7 +11028,7 @@ void main() {
     for (var i = 0; i < SPOTS.length; i++) {
       var s = SPOTS[i];
       if (s.needs === 'sushiOpen' && !state.sushiOpen) continue;
-      var d = Math.hypot(state.x - s.x, state.z - s.z);
+      var d = Math.hypot(state.x - sx(s.x), state.z - sz(s.z));
       if (d < s.radius && d < bestD) { best = s; bestD = d; }
     }
     return best;
@@ -11043,7 +11051,7 @@ void main() {
       if (state.recruited.indexOf(c.id) < 0) continue;
       out.push({
         id: c.id, name: c.name, color: c.color, job: c.job,
-        x: c.x, z: c.z,
+        x: sx(c.x), z: sz(c.z),
         // 轻微待机摆动，让甲板不是死的
         bob: Math.sin(state.walkT * 0.5 + i) * 0.06
       });
@@ -11056,15 +11064,16 @@ void main() {
   /* ==== 第三人称相机 ==== */
   /** 返回第三人称相机相对角色的偏移（世界/船体局部一致）。 */
   function cameraRig() {
-    // 相机在角色身后、略高，看向角色前方一点。
-    var back = 6.2, up = 3.1;
+    // 相机距离随甲板缩放，小木筏上不会拉太远。
+    var back = 6.2 * (state.deckLen / 13) + 2.0;
+    var up = 3.1 * (state.deckLen / 13) + 1.0;
     var fx = Math.sin(state.facing), fz = Math.cos(state.facing);
     return {
       x: state.x - fx * back,
       y: up,
       z: state.z - fz * back,
       lookX: state.x + fx * 1.4,
-      lookY: 1.4,
+      lookY: state.deckY + 0.2,
       lookZ: state.z + fz * 1.4
     };
   }
@@ -13256,19 +13265,58 @@ void main() {
    * 用户从最开始就要的是「进入城镇 = 操控人物在船上活动」，不是拉近镜头。
    * 这里画一个体素小人（头/身/双臂/双腿），以及已招募的船员。
    * 它们挂在 hero.node.userData.body（船体局部坐标），会随船一起移动/缩放。 */
-  function personBoxes(skin, shirt, pants) {
+  /* 一个更精致的体素小人，且腿是独立子节点能前后摆（走路不再像滑行的砖）。
+   * personBoxes() 只画「站着不动」的部分（躯干/头/臂/帽/背包），
+   * 两条腿单独作为 leftLeg/rightLeg 返回，挂在一个 legRoot 下绕髋部摆动。 */
+  function personTorso(skin, shirt, pants, hat) {
+    // 躯干/头/臂/帽：底(躯干下沿)对齐腿顶 y≈0.52，顶(帽顶)约 1.74，比例接近真人。
     return [
-      [0, 1.42, 0, 0.34, 0.34, 0.34, skin],           // 头
-      [0, 1.0, 0, 0.46, 0.56, 0.28, shirt],           // 躯干
-      [-0.32, 1.0, 0, 0.16, 0.5, 0.2, skin],          // 左臂
-      [0.32, 1.0, 0, 0.16, 0.5, 0.2, skin],           // 右臂
-      [-0.13, 0.42, 0, 0.18, 0.5, 0.2, pants],        // 左腿
-      [0.13, 0.42, 0, 0.18, 0.5, 0.2, pants],         // 右腿
-      [0, 1.62, 0, 0.36, 0.1, 0.36, '#3a4a5a']        // 帽子/头发
+      [0, 0.82, 0, 0.44, 0.6, 0.26, shirt],            // 躯干（底0.52 顶1.12）
+      [-0.31, 0.82, 0, 0.14, 0.52, 0.18, skin],        // 左臂
+      [0.31, 0.82, 0, 0.14, 0.52, 0.18, skin],         // 右臂
+      [0, 1.3, 0, 0.3, 0.3, 0.3, skin],                // 头
+      [0, 1.46, 0, 0.32, 0.08, 0.32, hat || '#3a4a5a'],// 帽檐
+      [0, 1.52, 0, 0.26, 0.1, 0.26, hat || '#3a4a5a'], // 帽顶
+      [0, 0.84, -0.19, 0.3, 0.36, 0.12, '#8a6a4a']     // 小背包
     ];
   }
+  function personLegs(pants) {
+    // 腿以髋部为旋转原点：mesh 中心放在半高处，legGroup.position.y 即髋高。
+    return [
+      [-0.12, 0.26, 0, 0.17, 0.52, 0.2, pants],        // 左腿（中心0.26，底0，顶0.52）
+      [0.12, 0.26, 0, 0.17, 0.52, 0.2, pants]          // 右腿
+    ];
+  }
+  /** 造一个带可摆双腿的小人，返回 { group, legL, legR }。 */
+  function makePerson(skin, shirt, pants, hat) {
+    var g = new THREE.Group();
+    var torso = voxelModel(personTorso(skin, shirt, pants, hat));
+    g.add(torso);
+    var legL = voxelModel(personLegs(pants).slice(0, 1));
+    var legR = voxelModel(personLegs(pants).slice(1));
+    // 髋部在 y≈0.55；腿 mesh 中心 0.26，抬到髋部让 group 原点=脚底(甲板面)。
+    legL.position.set(0, 0.55, 0);
+    legR.position.set(0, 0.55, 0);
+    g.add(legL); g.add(legR);
+    return { group: g, legL: legL, legR: legR };
+  }
+  /** 按当前船型取甲板局部高度：木筏 0.55 / 木船·小船 1.2 / 邮轮·远洋 1.8。 */
+  function deckYForTier() {
+    var id = SHIP_TIERS[shipTier].id;
+    return id === 'raft' ? 0.55 : (id === 'cruise' || id === 'oceanLiner' ? 1.8 : 1.2);
+  }
+  /** 船长/玩家的合理站位：小木筏站中央，大船站船尾。 */
+  function captainSpot() {
+    var id = SHIP_TIERS[shipTier].id;
+    if (id === 'raft') return { x: 0, z: 0 };
+    if (id === 'woodBoat') return { x: 0, z: -3 };
+    if (id === 'smallShip') return { x: 0, z: -5 };
+    return { x: 0, z: 9.0 };
+  }
   var crewRoot = new THREE.Group();
-  var avatar = voxelModel(personBoxes('#f0c9a0', '#e2574c', '#37506b'));
+  var _av = makePerson('#f0c9a0', '#e2574c', '#37506b');
+  var avatar = _av.group;
+  var avatarLegL = _av.legL, avatarLegR = _av.legR;
   avatar.visible = false;
   crewRoot.add(avatar);
   /* 寿司店实体：招募小满并开店后，甲板上真的立起一间店（不只是面板）。 */
@@ -13302,11 +13350,11 @@ void main() {
     for (var i = 0; i < list.length; i++) {
       var c = list[i];
       if (crewNodes[c.id]) { crewNodes[c.id].node.visible = true; continue; }
-      var n = voxelModel(personBoxes('#e8bd92', c.color, '#4a5a68'));
-      n.position.set(c.x, 1.8, c.z);
-      n.scale.setScalar(0.92);
-      crewRoot.add(n);
-      crewNodes[c.id] = { node: n, def: c };
+      var p = makePerson('#e8bd92', c.color, '#4a5a68');
+      p.group.position.set(c.x, deckYForTier(), c.z);
+      p.group.scale.setScalar(0.92);
+      crewRoot.add(p.group);
+      crewNodes[c.id] = { node: p.group, legL: p.legL, legR: p.legR, def: c };
     }
     // 隐藏还没招募的
     Object.keys(crewNodes).forEach(function (id) {
@@ -13319,7 +13367,8 @@ void main() {
   // 航行时也站着一个「你」（船长）在船尾，船上不是空的；登船模式才交给玩家操控。
   crewRoot.visible = true;
   avatar.visible = true;
-  avatar.position.set(0, 1.8, 9.0);
+  var _cap0 = captainSpot();
+  avatar.position.set(_cap0.x, deckYForTier(), _cap0.z);
   avatar.rotation.y = Math.PI;
   /* The hull's real footprint on the water, in world units. Everything that has
    * to touch the ship's edges — the wake, the safety bubble, the dash burst,
@@ -15802,16 +15851,22 @@ void main() {
       if (townView && window.ShipCrew && window.ShipCrew.isActive()) {
         window.ShipCrew.move({ x: dir.x, z: -dir.z }, dt, !!keys.boost);
         var snap = window.ShipCrew.snapshot();
-        avatar.position.set(snap.x, 1.8, snap.z);
+        var deckY = deckYForTier();
+        avatar.position.set(snap.x, deckY, snap.z);
         avatar.rotation.y = snap.facing;
-        // 走路时轻微上下摆
-        avatar.position.y += Math.abs(Math.sin(window.ShipCrew.snapshot().x * 3)) * 0.0;
+        /* 走路摆腿：用移动速度驱动两腿前后交替，不再是一块滑行的砖。 */
+        var spd = Math.hypot(snap.x - (avatar.userData.px || 0), snap.z - (avatar.userData.pz || 0)) / Math.max(dt, 0.001);
+        avatar.userData.px = snap.x; avatar.userData.pz = snap.z;
+        var walkPhase = (avatar.userData.walkT = (avatar.userData.walkT || 0) + dt * Math.min(spd, 4) * 3.2);
+        var swing = Math.min(spd / 3, 1) * 0.6;
+        if (avatarLegL) avatarLegL.rotation.x = Math.sin(walkPhase) * swing;
+        if (avatarLegR) avatarLegR.rotation.x = -Math.sin(walkPhase) * swing;
         // 船员待机
         ensureCrewNodes();
         var crewNow = window.ShipCrew.crewList();
         for (var cn = 0; cn < crewNow.length; cn++) {
           var cnode = crewNodes[crewNow[cn].id];
-          if (cnode) cnode.node.position.y = 1.8 + (crewNow[cn].bob || 0);
+          if (cnode) cnode.node.position.y = deckY + (crewNow[cn].bob || 0);
         }
       }
       if (keys.boost && !townView) triggerDash();
@@ -16229,7 +16284,7 @@ void main() {
         // 进入第三人称登船模式：把已招募的人放到甲板上，寿司店状态同步。
         window.ShipCrew.setRecruited(recruited.map(function (r) { return r.id; }).filter(function (x) { return x; }));
         window.ShipCrew.setSushiOpen(window.SushiShop ? window.SushiShop.isOpen() : false);
-        window.ShipCrew.setDeck(SHIP_TIERS[shipTier].hullLen || 8, SHIP_TIERS[shipTier].hullBeam || 3);
+        window.ShipCrew.setDeck(SHIP_TIERS[shipTier].hullLen || 8, SHIP_TIERS[shipTier].hullBeam || 3, deckYForTier());
         window.ShipCrew.enter();
         crewRoot.visible = true; avatar.visible = true;
         ensureCrewNodes();
@@ -16238,7 +16293,8 @@ void main() {
         window.ShipCrew.exit();
         // 回到航行：把「你」放回船尾当船长，已招募的船员继续留在甲板上。
         crewRoot.visible = true; avatar.visible = true;
-        avatar.position.set(0, 1.8, 9.0);
+        var _cap = captainSpot();
+        avatar.position.set(_cap.x, deckYForTier(), _cap.z);
         avatar.rotation.y = Math.PI;
         ensureCrewNodes();
         addFT('回到航行视角', hero.x, hero.z, '#ffe2a8', 2);
