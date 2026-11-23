@@ -1,7 +1,7 @@
 # 项目状态与进度
 
-> 最后更新：2026-11-23 · 代码版本 **v2.2.0**
-> 微信体验版已同步到 **2.2.0**
+> 最后更新：2026-11-23 · 代码版本 **v2.2.1**
+> 微信体验版已同步到 **2.2.1**
 > 仓库：https://github.com/xinqian136/drift-town
 
 ## 一句话现状
@@ -64,6 +64,41 @@ UV 改 8 格、顶点色往白提 0.55 让图案不被压暗。现在甲板能�
 - `test-town-click.js` 5/5、`test-dock.js` 22/22、`achievements-test.js` 226 断言全过
 - 桌面 960×540 / 微信 844×390 双平台 `Errors: none`
 - 微信包 1.45 MB（34.7%），体验版 **v2.2.0** 已上传
+
+---
+
+## v2.2.1 船体进化最终版（子代理补全）
+
+v2.2.0 上传后，并行子代理继续修了一批真 bug（我复核并重新验证后才上传）：
+
+1. **新造建筑飘到海里**：`pickBuildSpec`/`pickSurvival`/`restoreWorld` 仍用邮轮
+   坐标 `BUILDING_POS`/`SURVIVAL_STEPS.at`。新增 `currentBuildingSlot(i)` /
+   `currentSurvivalSlot(i)`，四处落位 + `applyTier` 迁移统一走这套函数。
+2. **碰撞尺寸倒挂**：旧 `shipHalfLen()=SHIP.halfLen*(heroSize/modelHeight)`，
+   小木筏反而得到最大椭圆（11.6 vs 邮轮 8.0）。改为每级显式 `hullLen/hullBeam`
+   （2.4/4.2/6.0/7.1/9.0），护盾 `fitBubble`、接触阴影 `fitShadow` 也随级重算。
+3. **管理面板造价显示错**：UI 用下一级 cost、判定用当前级 cost，改为一致；
+   修面板行距，标题/材料/船型/造价/按钮/列表不再重叠。
+4. **升级无反馈**：新增 `tierPopT` 弹跳动画（帧循环乘到 tierScale 上）。
+5. **文案**：标题改为「你从一只小木筏起漂：木筏→木船→小船→邮轮→远洋邮轮」，
+   加第 ④ 条讲升级；新手教练「邮轮的甲板」→「小木筏」。
+6. **验收规则**：`debugTier` / `debugBuildAll` / `debugManage`，默认全关。
+
+### 我复核时又发现并修的两处回归
+
+- **图纸连续弹窗**：拾取垃圾处的 `offerBuild()` 绕过冷却，选完一张立刻又弹
+  下一张。给该处加 `offerCooldown` 判断，`pickBuild` 选完设 8 秒冷却。
+  `test-town-click.js` 从 4/5 恢复 5/5。
+- **低帧率设备计时变慢**：`dt` 上限 0.05 太紧，20fps 设备所有计时器（钓鱼/
+  口渴/饥饿/氧气）只有真实速度的一半。放宽到 0.1。`test-dock.js` 22/22。
+  副作用：fps 读数从「钳位造成的虚假 20」变成真实的 12~17，不是性能退化。
+
+### 验证（全部重跑）
+`test-tiers.js` 11/11、`test-town-click.js` 5/5、`test-dock.js` 22/22、
+`test-features.js` 10/10、`test-onboarding.js` 5/5、`test-npc.js` 5/5、
+`test-dive-integration.js` 12/12、`test-v19.js` 16/16、`test-data.js` 全过、
+`achievements-test.js` 226 断言全过、`inline-modules --check` OK。
+桌面 + 微信双平台 `Errors: none`。微信体验版 **v2.2.1** 已上传。
 
 ---
 
@@ -160,6 +195,7 @@ GameData.init({ resources: tunedResources });   // 运行期热更新
 | **2.0.1** | **体检修复：引导/提示/垃圾密度/存档 bug/HUD 重叠** |
 | **2.1.0** | **修图纸点击 bug + 上镇视角(G) + 8 格真彩色贴图** |
 | **2.2.0** | **船体进化 5 级（开局小木筏→远洋邮轮）+ 护盾光环** |
+| **2.2.1** | **船体进化最终版**：修新造建筑飘海里、碰撞尺寸倒挂、面板造价错、升级弹跳；修图纸连续弹窗、低帧率计时变慢 |
 
 ---
 
@@ -178,7 +214,7 @@ GameData.init({ resources: tunedResources });   // 运行期热更新
 | NPC 招募 + 好感对话 + 寿司店经济 | ✅ | E / T 键 |
 | 5 座建筑精修（87→507 方块） | ✅ | v1.9.0 |
 | 微信适配（无 DOM / 胶囊避让 / 6 按钮自适应） | ✅ | 双平台 Errors none |
-| 微信体验版上传 | ✅ | **v2.2.0**，1.45 MB（34.7%） |
+| 微信体验版上传 | ✅ | **v2.2.1**，1.46 MB（34.7%） |
 | **真人手感确认** | ⏳ | 自动试玩不能代替 |
 | **正式提审发布** | ❌ 未开始 | 需 mp 后台 |
 

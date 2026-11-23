@@ -96,6 +96,7 @@ window.GAME = Object.assign(window.GAME || {}, {
     "debugGallery": false,
     "debugTier": "",
     "debugBuildAll": false,
+    "debugManage": false,
     "palette": {
       "skyTop": "#79c4ef",
       "skyBottom": "#ffedc4",

@@ -6753,6 +6753,9 @@
     debugTier: '',
     /* Debug only: build every structure and cycle all 5 tiers at start. */
     debugBuildAll: false,
+    /* Debug only: open the ship management panel at start, to screenshot the
+     * hull-upgrade UI in an unattended playtest. */
+    debugManage: false,
     palette: {
       skyTop: '#1d2550', skyBottom: '#e58a6a', fog: '#6f5a7e', grass: '#6bab5c',
       dirt: '#8b6446', sand: '#e6cf96', water: '#3f7fb3', accent: '#ffc463'
@@ -9602,7 +9605,8 @@
       hudCtx.fillStyle = 'rgba(8,14,26,0.5)'; hudCtx.fillRect(0, 0, w, h);
       var pW = Math.min(w * 0.78, 560);
       var rowH = font * 2.1;
-      var pH = Math.min(h * 0.8, 150 + rowH * Math.max(1, Math.min(parts2.length, 6)));
+      /* 顶部要留出：标题 + 材料行 + 船型行 + 造价行 + 升级按钮，共约 9 行字。 */
+      var pH = Math.min(h * 0.86, font * 10.6 + rowH * Math.max(1, Math.min(parts2.length, 6)));
       var pX = (w - pW) / 2, pY = (h - pH) / 2;
       hudCtx.fillStyle = 'rgba(18,26,44,0.96)';
       roundRect(pX, pY, pW, pH, 16); hudCtx.fill();
@@ -9618,7 +9622,7 @@
         + '   ·   建筑 ' + parts2.length + ' 件', w / 2, pY + font * 2.7);
       /* --- 船体进化：当前船型 / 下一级 / 升级按钮 --- */
       var tierNow = SHIP_TIERS[shipTier], tierNext = SHIP_TIERS[shipTier + 1] || null;
-      var upY = pY + font * 3.5;
+      var upY = pY + font * 4.6;   // 与标题(1.7f)/材料行(2.7f)拉开一行
       hudCtx.font = '800 ' + (font * 0.86) + 'px ' + FONT;
       hudCtx.fillStyle = '#bfe8ff';
       hudCtx.fillText('当前船型：' + tierNow.name + '（第 ' + (shipTier + 1) + '/5 级）', w / 2, upY);
@@ -9650,7 +9654,7 @@
       }
       manageRects = [];
       var listY = upY + (tierNext ? font * 4.4 : font * 2.6);
-      var maxRows = Math.floor((pH - font * 5.2) / rowH);
+      var maxRows = Math.floor((pH - (listY - pY) - font * 1.8) / rowH);
       for (var pi = 0; pi < parts2.length && pi < Math.max(1, maxRows); pi++) {
         var p2 = parts2[pi], ry = listY + pi * rowH;
         hudCtx.fillStyle = pi % 2 ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.07)';
@@ -10193,6 +10197,10 @@
     if (!buildOffer) return;
     var specIndex = buildOffer[Math.max(0, Math.min(buildOffer.length - 1, poolIndex))];
     buildOffer = null;
+    // Give the player a breather: without this the frame loop immediately
+    // re-offers the next blueprint (stock is still affordable), so tapping one
+    // card feels like the choice never closed.
+    offerCooldown = 8;
     pickBuildSpec(specIndex);
   }
   function pickBuildSpec(specIndex) {
@@ -10525,6 +10533,7 @@
         applyTier(SHIP_TIERS.length - 1, true);
       } catch (e) { window.__debugTierCycle = { error: String(e && e.message || e) }; }
     }
+    if (R.debugManage) { try { openManage(); } catch (e) { /* debug only */ } }
     for (var i = 0; i < R.maxPickups; i++) addPickup();
     addEnemy();
     blip(520, 0.12, 'triangle', 0.07, 780);
@@ -11359,8 +11368,12 @@
           // Materials in hand: offer a blueprint when the stockpile can cover one.
           // The town only opens up once the survival layer is self-sustaining
           // (design doc: survival gear ships before the town, or the player is
-          // pulled two ways before they can even stand).
-          if (!buildOffer && townReady && nextBuild < BUILDING_SPECS.length && canAfford(BUILDING_SPECS[nextBuild])) offerBuild();
+          // pulled two ways before they can even stand). Respect the cooldown:
+          // otherwise a single pickup right after a choice spawns a new card
+          // instantly and the player can never put the menu down.
+          if (!buildOffer && offerCooldown <= 0 && townReady && nextBuild < BUILDING_SPECS.length && canAfford(BUILDING_SPECS[nextBuild])) {
+            offerBuild(); offerCooldown = 6;
+          }
         }
       }
       while (pickups.length < R.maxPickups) addPickup();
@@ -11376,6 +11389,13 @@
     // 用当前船型的缩放（applyTier 会改它），不要用开局那一次的固定常量，
     // 否则换船后每帧都会被覆盖回木筏尺寸。
     var tierScale = (SHIP_TIERS[shipTier] ? SHIP_TIERS[shipTier].heroSize / SHIP_TIERS[shipTier].modelHeight : BASE_HERO_SCALE);
+    /* 升级弹跳：tierPopT 从 0.01 追到 1，用 back-out 缓动让新船轻微过冲。 */
+    if (tierPopT < 1) {
+      tierPopT = Math.min(1, tierPopT + dt * 1.8);
+      var pp = tierPopT - 1, c1 = 1.70158;
+      var popScale = Math.max(0.01, 1 + (c1 + 1) * pp * pp * pp + c1 * pp * pp);
+      tierScale *= popScale;
+    }
     if (!heroBody.userData.sprite) heroBody.scale.setScalar(tierScale * (hero.dashT > 0 ? 1 + Math.sin(t * 40) * 0.08 : 1));
     hero.node.position.set(hero.x, hero.y + (moving ? Math.abs(Math.sin(t * 12)) * 0.12 : Math.sin(t * 2.4) * 0.03), hero.z);
     if (heroBody.userData.sprite) heroBody.material.rotation = moving ? Math.sin(t * 12) * 0.06 : 0;
@@ -11596,7 +11616,10 @@
   /* 12. LOOP */
   var last = performance.now();
   function frame(now) {
-    var dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+    // 0.05 was too tight: on a 20fps device every timer (fishing, thirst,
+    // hunger, oxygen) ran at half real speed. 0.1 keeps physics stable while
+    // letting game time track wall time on slower phones.
+    var dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
     last = now;
     if (dt > 0) fps = lerp(fps, 1 / dt, 0.05);
     if (diveExitBanner > 0) diveExitBanner = Math.max(0, diveExitBanner - dt);

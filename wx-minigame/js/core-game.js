@@ -6771,6 +6771,9 @@ var THREE = __wxRoot.THREE || window.THREE;
     debugTier: '',
     /* Debug only: build every structure and cycle all 5 tiers at start. */
     debugBuildAll: false,
+    /* Debug only: open the ship management panel at start, to screenshot the
+     * hull-upgrade UI in an unattended playtest. */
+    debugManage: false,
     palette: {
       skyTop: '#1d2550', skyBottom: '#e58a6a', fog: '#6f5a7e', grass: '#6bab5c',
       dirt: '#8b6446', sand: '#e6cf96', water: '#3f7fb3', accent: '#ffc463'
@@ -7693,6 +7696,7 @@ var THREE = __wxRoot.THREE || window.THREE;
       upgradeCost: null, needBuildings: 0 }
   ];
   var shipTier = 0;   // 当前等级；开局是木筏（5 级：raft/woodBoat/smallShip/cruise/oceanLiner）
+  var tierPopT = 1;   // 换船弹跳进度 0→1（帧循环里乘到整船缩放上）
 
   /** 给每一级生成建造位与生存装备位（局部坐标，随该级船体尺寸分布）。
    * 小船的甲板短、邮轮的甲板长，位置必须分级，否则建筑会飘到船外。 */
@@ -7778,6 +7782,14 @@ var THREE = __wxRoot.THREE || window.THREE;
     if (!skipSave) saveWorld();
     if (typeof fitBubble === 'function') fitBubble();
     if (typeof fitShadow === 'function') fitShadow();
+    /* 让 studio 侧栏 / 特写跟着当前船型刷新，而不是永远显示开局那张木筏。
+     * 延后一拍，避开 renderSlots 尚未定义时的冷启动路径，且合并连续切级。 */
+    if (parentWindow && typeof renderSlots === 'function') {
+      if (window.__tierRenderTimer) clearTimeout(window.__tierRenderTimer);
+      window.__tierRenderTimer = setTimeout(function () {
+        try { post({ type: 'renders', renders: renderSlots(256) }); } catch (e) { /* ignore */ }
+      }, 120);
+    }
     if (window.console && window.console.info) console.info('[ship] tier=' + t.name);
   }
   function canUpgrade() {
@@ -7792,6 +7804,7 @@ var THREE = __wxRoot.THREE || window.THREE;
     var t = SHIP_TIERS[shipTier];
     res.wood -= t.upgradeCost.wood; res.plastic -= t.upgradeCost.plastic; res.metal -= t.upgradeCost.metal;
     applyTier(shipTier + 1);
+    tierPopT = 0.01;   // 新船从几乎为 0 弹到目标尺寸（帧循环里推进）
     addFT('船升级了：' + SHIP_TIERS[shipTier].name + '！', hero.x, hero.z, '#ffe2a8', 3);
     fanfare([523, 659, 784, 1047], 0.11, 'triangle', 0.075);
     saveWorld();
@@ -9261,7 +9274,7 @@ var THREE = __wxRoot.THREE || window.THREE;
       var coachA = Math.min(1, (nowMs - coachT0) / 400);   // fade in over 0.4s
       hudCtx.globalAlpha = coachA;
       var cLines = [
-        '你在邮轮的甲板上。用摇杆靠近漂浮垃圾，自动打捞。',
+        '你在一只小木筏上。用摇杆靠近漂浮垃圾，自动打捞。',
         '垃圾拆成 木/塑/铁。当前 木' + res.wood + '（工作台要 木4）。',
         '按「建」或 B 造工作台；有 6 个圆钮：榜/成/潜/船/建/冲刺'
       ];
@@ -9610,7 +9623,8 @@ var THREE = __wxRoot.THREE || window.THREE;
       hudCtx.fillStyle = 'rgba(8,14,26,0.5)'; hudCtx.fillRect(0, 0, w, h);
       var pW = Math.min(w * 0.78, 560);
       var rowH = font * 2.1;
-      var pH = Math.min(h * 0.8, 150 + rowH * Math.max(1, Math.min(parts2.length, 6)));
+      /* 顶部要留出：标题 + 材料行 + 船型行 + 造价行 + 升级按钮，共约 9 行字。 */
+      var pH = Math.min(h * 0.86, font * 10.6 + rowH * Math.max(1, Math.min(parts2.length, 6)));
       var pX = (w - pW) / 2, pY = (h - pH) / 2;
       hudCtx.fillStyle = 'rgba(18,26,44,0.96)';
       roundRect(pX, pY, pW, pH, 16); hudCtx.fill();
@@ -9626,7 +9640,7 @@ var THREE = __wxRoot.THREE || window.THREE;
         + '   ·   建筑 ' + parts2.length + ' 件', w / 2, pY + font * 2.7);
       /* --- 船体进化：当前船型 / 下一级 / 升级按钮 --- */
       var tierNow = SHIP_TIERS[shipTier], tierNext = SHIP_TIERS[shipTier + 1] || null;
-      var upY = pY + font * 3.5;
+      var upY = pY + font * 4.6;   // 与标题(1.7f)/材料行(2.7f)拉开一行
       hudCtx.font = '800 ' + (font * 0.86) + 'px ' + FONT;
       hudCtx.fillStyle = '#bfe8ff';
       hudCtx.fillText('当前船型：' + tierNow.name + '（第 ' + (shipTier + 1) + '/5 级）', w / 2, upY);
@@ -9634,8 +9648,10 @@ var THREE = __wxRoot.THREE || window.THREE;
       if (tierNext) {
         hudCtx.font = '700 ' + (font * 0.72) + 'px ' + FONT;
         hudCtx.fillStyle = 'rgba(223,242,255,0.8)';
-        hudCtx.fillText('升级到 ' + tierNext.name + '：木' + tierNext.upgradeCost.wood
-          + ' 塑' + tierNext.upgradeCost.plastic + ' 铁' + tierNext.upgradeCost.metal
+        /* 造价与门槛都取自「当前级」—— SHIP_TIERS[i].upgradeCost 就是从第 i
+         * 级升到第 i+1 级的价格，canUpgrade()/tryUpgrade() 也是这样读的。 */
+        hudCtx.fillText('升级到 ' + tierNext.name + '：木' + tierNow.upgradeCost.wood
+          + ' 塑' + tierNow.upgradeCost.plastic + ' 铁' + tierNow.upgradeCost.metal
           + ' · 需建筑 ' + tierNow.needBuildings + ' 件', w / 2, upY + font * 1.25);
         var upW = Math.min(pW * 0.5, 190), upH = font * 1.7;
         var upX = (w - upW) / 2, upY2 = upY + font * 1.75;
@@ -9656,7 +9672,7 @@ var THREE = __wxRoot.THREE || window.THREE;
       }
       manageRects = [];
       var listY = upY + (tierNext ? font * 4.4 : font * 2.6);
-      var maxRows = Math.floor((pH - font * 5.2) / rowH);
+      var maxRows = Math.floor((pH - (listY - pY) - font * 1.8) / rowH);
       for (var pi = 0; pi < parts2.length && pi < Math.max(1, maxRows); pi++) {
         var p2 = parts2[pi], ry = listY + pi * rowH;
         hudCtx.fillStyle = pi % 2 ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.07)';
@@ -10199,6 +10215,10 @@ var THREE = __wxRoot.THREE || window.THREE;
     if (!buildOffer) return;
     var specIndex = buildOffer[Math.max(0, Math.min(buildOffer.length - 1, poolIndex))];
     buildOffer = null;
+    // Give the player a breather: without this the frame loop immediately
+    // re-offers the next blueprint (stock is still affordable), so tapping one
+    // card feels like the choice never closed.
+    offerCooldown = 8;
     pickBuildSpec(specIndex);
   }
   function pickBuildSpec(specIndex) {
@@ -10448,12 +10468,13 @@ var THREE = __wxRoot.THREE || window.THREE;
     endedAt = performance.now();
     if (next !== 'playing' && drag) drag = null;
     if (next === 'title') showCard(TITLE,
-      '你的小镇建在一艘邮轮上。这是一段没有终点的漂流。\n\n'
+      '你从一只小木筏起漂：木筏 → 木船 → 小船 → 邮轮 → 远洋邮轮。这是一段没有终点的漂流。\n\n'
       + '① 用摇杆贴近漂浮垃圾，会自动打捞\n'
       + '② 垃圾拆成 木 / 塑 / 铁 三种材料\n'
       + '③ 攒够材料按「建」造工作台 → 庇护所 → 四件生存装备\n'
-      + '④ 下锚停船可以钓鱼；点「潜」可下水采集食材\n'
-      + '⑤ 建筑会一直留在船上。死了只掉一半材料，小镇不消失\n\n'
+      + '④ 点「船」面板攒够材料逐级升级船体，建筑会随船迁移，不会丢\n'
+      + '⑤ 下锚停船可以钓鱼；点「潜」可下水采集食材\n'
+      + '⑥ 建筑会一直留在船上。死了只掉一半材料，小镇不消失\n\n'
       + '右侧 6 个圆钮：榜 / 成 / 潜 / 船 / 建 / 冲刺',
       '点击屏幕 / 按任意键开始');
     else if (next === 'playing') clearCard();
@@ -10530,6 +10551,7 @@ var THREE = __wxRoot.THREE || window.THREE;
         applyTier(SHIP_TIERS.length - 1, true);
       } catch (e) { window.__debugTierCycle = { error: String(e && e.message || e) }; }
     }
+    if (R.debugManage) { try { openManage(); } catch (e) { /* debug only */ } }
     for (var i = 0; i < R.maxPickups; i++) addPickup();
     addEnemy();
     blip(520, 0.12, 'triangle', 0.07, 780);
@@ -11364,8 +11386,12 @@ var THREE = __wxRoot.THREE || window.THREE;
           // Materials in hand: offer a blueprint when the stockpile can cover one.
           // The town only opens up once the survival layer is self-sustaining
           // (design doc: survival gear ships before the town, or the player is
-          // pulled two ways before they can even stand).
-          if (!buildOffer && townReady && nextBuild < BUILDING_SPECS.length && canAfford(BUILDING_SPECS[nextBuild])) offerBuild();
+          // pulled two ways before they can even stand). Respect the cooldown:
+          // otherwise a single pickup right after a choice spawns a new card
+          // instantly and the player can never put the menu down.
+          if (!buildOffer && offerCooldown <= 0 && townReady && nextBuild < BUILDING_SPECS.length && canAfford(BUILDING_SPECS[nextBuild])) {
+            offerBuild(); offerCooldown = 6;
+          }
         }
       }
       while (pickups.length < R.maxPickups) addPickup();
@@ -11381,6 +11407,13 @@ var THREE = __wxRoot.THREE || window.THREE;
     // 用当前船型的缩放（applyTier 会改它），不要用开局那一次的固定常量，
     // 否则换船后每帧都会被覆盖回木筏尺寸。
     var tierScale = (SHIP_TIERS[shipTier] ? SHIP_TIERS[shipTier].heroSize / SHIP_TIERS[shipTier].modelHeight : BASE_HERO_SCALE);
+    /* 升级弹跳：tierPopT 从 0.01 追到 1，用 back-out 缓动让新船轻微过冲。 */
+    if (tierPopT < 1) {
+      tierPopT = Math.min(1, tierPopT + dt * 1.8);
+      var pp = tierPopT - 1, c1 = 1.70158;
+      var popScale = Math.max(0.01, 1 + (c1 + 1) * pp * pp * pp + c1 * pp * pp);
+      tierScale *= popScale;
+    }
     if (!heroBody.userData.sprite) heroBody.scale.setScalar(tierScale * (hero.dashT > 0 ? 1 + Math.sin(t * 40) * 0.08 : 1));
     hero.node.position.set(hero.x, hero.y + (moving ? Math.abs(Math.sin(t * 12)) * 0.12 : Math.sin(t * 2.4) * 0.03), hero.z);
     if (heroBody.userData.sprite) heroBody.material.rotation = moving ? Math.sin(t * 12) * 0.06 : 0;
@@ -11601,7 +11634,10 @@ var THREE = __wxRoot.THREE || window.THREE;
   /* 12. LOOP */
   var last = performance.now();
   function frame(now) {
-    var dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+    // 0.05 was too tight: on a 20fps device every timer (fishing, thirst,
+    // hunger, oxygen) ran at half real speed. 0.1 keeps physics stable while
+    // letting game time track wall time on slower phones.
+    var dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
     last = now;
     if (dt > 0) fps = lerp(fps, 1 / dt, 0.05);
     if (diveExitBanner > 0) diveExitBanner = Math.max(0, diveExitBanner - dt);
