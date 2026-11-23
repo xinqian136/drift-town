@@ -104,8 +104,34 @@
     var halfL = state.deckLen * 0.86, halfB = state.deckBeam * 0.78;
     state.x = Math.max(-halfB, Math.min(halfB, state.x));
     state.z = Math.max(-halfL, Math.min(halfL, state.z));
+    // 建筑/装备避让：不能走进实体里（这是「穿模、卡在里面」的根因）
+    resolveObstacles();
     // 更新靠近的交互点
     state.nearSpot = nearestSpot();
+  }
+
+  /** 甲板上的实体障碍（由 game.js 每帧同步进来）：{x,z,r} 圆形碰撞体。 */
+  var obstacles = [];
+  function setObstacles(list) { obstacles = list || []; }
+  var PERSON_RADIUS = 0.34;
+  /** 把角色推出所有重叠的圆柱体——用「沿最近方向推出」而不是阻挡，
+   *  这样贴着建筑走不会卡死，只会被滑开。 */
+  function resolveObstacles() {
+    for (var iter = 0; iter < 2; iter++) {
+      for (var i = 0; i < obstacles.length; i++) {
+        var o = obstacles[i];
+        var dx = state.x - o.x, dz = state.z - o.z;
+        var d = Math.hypot(dx, dz);
+        var minD = (o.r || 0.5) + PERSON_RADIUS;
+        if (d < minD && d > 0.0001) {
+          var push = (minD - d);
+          state.x += (dx / d) * push;
+          state.z += (dz / d) * push;
+        } else if (d <= 0.0001) {
+          state.x += minD;   // 正好重合，随便推一个方向
+        }
+      }
+    }
   }
   function setDeck(deckLen, deckBeam, deckY) {
     state.deckLen = deckLen || state.deckLen;
@@ -217,7 +243,7 @@
     SPOTS: SPOTS.map(function (s) { return { id: s.id, name: s.name, action: s.action }; }),
     CREW_DEFS: CREW_DEFS.map(function (c) { return { id: c.id, name: c.name, job: c.job }; }),
     enter: enter, exit: exit, isActive: isActive,
-    move: move, setDeck: setDeck,
+    move: move, setDeck: setDeck, setObstacles: setObstacles,
     nearestSpot: nearestSpot, interact: interact,
     crewList: crewList, setRecruited: setRecruited, setSushiOpen: setSushiOpen,
     cameraRig: cameraRig, snapshot: snapshot, selfTest: selfTest

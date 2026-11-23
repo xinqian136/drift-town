@@ -6846,8 +6846,34 @@
     var halfL = state.deckLen * 0.86, halfB = state.deckBeam * 0.78;
     state.x = Math.max(-halfB, Math.min(halfB, state.x));
     state.z = Math.max(-halfL, Math.min(halfL, state.z));
+    // 建筑/装备避让：不能走进实体里（这是「穿模、卡在里面」的根因）
+    resolveObstacles();
     // 更新靠近的交互点
     state.nearSpot = nearestSpot();
+  }
+
+  /** 甲板上的实体障碍（由 game.js 每帧同步进来）：{x,z,r} 圆形碰撞体。 */
+  var obstacles = [];
+  function setObstacles(list) { obstacles = list || []; }
+  var PERSON_RADIUS = 0.34;
+  /** 把角色推出所有重叠的圆柱体——用「沿最近方向推出」而不是阻挡，
+   *  这样贴着建筑走不会卡死，只会被滑开。 */
+  function resolveObstacles() {
+    for (var iter = 0; iter < 2; iter++) {
+      for (var i = 0; i < obstacles.length; i++) {
+        var o = obstacles[i];
+        var dx = state.x - o.x, dz = state.z - o.z;
+        var d = Math.hypot(dx, dz);
+        var minD = (o.r || 0.5) + PERSON_RADIUS;
+        if (d < minD && d > 0.0001) {
+          var push = (minD - d);
+          state.x += (dx / d) * push;
+          state.z += (dz / d) * push;
+        } else if (d <= 0.0001) {
+          state.x += minD;   // 正好重合，随便推一个方向
+        }
+      }
+    }
   }
   function setDeck(deckLen, deckBeam, deckY) {
     state.deckLen = deckLen || state.deckLen;
@@ -6959,7 +6985,7 @@
     SPOTS: SPOTS.map(function (s) { return { id: s.id, name: s.name, action: s.action }; }),
     CREW_DEFS: CREW_DEFS.map(function (c) { return { id: c.id, name: c.name, job: c.job }; }),
     enter: enter, exit: exit, isActive: isActive,
-    move: move, setDeck: setDeck,
+    move: move, setDeck: setDeck, setObstacles: setObstacles,
     nearestSpot: nearestSpot, interact: interact,
     crewList: crewList, setRecruited: setRecruited, setSushiOpen: setSushiOpen,
     cameraRig: cameraRig, snapshot: snapshot, selfTest: selfTest
@@ -7876,19 +7902,35 @@
 
   /** 1 木筏：几根原木 + 绳索 + 一根小桅杆和旗。忽略后半段船体，只占中段。 */
   var RAFT_BOXES = (function () {
+    /* 木筏放大到能真正盖上 4 座建筑：局部 8.4 长 × 6.6 宽（旧版 3.2×2.6，
+     * 人站上去就占了半条筏子）。甲板面在 y≈0.30，四周有矮护栏。 */
     var B = boxList(), i, j;
-    for (i = -4; i <= 4; i++) {
-      B.add(0, 0.28, i * 0.42, 2.6, 0.44, 0.4, i % 2 ? '#9c6d3e' : '#a97845');
+    var LEN = 8.4, HALF = 3.3, PLANK = 0.46;
+    var n = Math.floor(LEN / PLANK);
+    for (i = 0; i < n; i++) {
+      var z = -LEN / 2 + PLANK / 2 + i * PLANK;
+      B.add(0, 0.22, z, HALF * 2, 0.32, PLANK * 0.86, i % 2 ? '#9c6d3e' : '#a97845');
     }
-    // 横向捆绳
-    for (j = -1; j <= 1; j++) B.add(j * 0.9, 0.54, 0, 0.14, 0.08, 3.9, '#6b4a2c');
-    // 简陋护栏（四角）
-    [[-1.2, -1.6], [1.2, -1.6], [-1.2, 1.6], [1.2, 1.6]].forEach(function (p) {
-      B.add(p[0], 0.78, p[1], 0.12, 0.6, 0.12, '#7a5230');
+    // 横向捆绳（3 道）
+    for (j = -1; j <= 1; j++) B.add(0, 0.42, j * 2.6, HALF * 1.98, 0.07, 0.12, '#6b4a2c');
+    // 纵向龙骨梁
+    [-1, 1].forEach(function (s) {
+      B.add(s * HALF * 0.72, 0.10, 0, 0.26, 0.16, LEN * 0.94, '#6b4a2c');
     });
-    B.add(0, 1.05, -1.3, 0.1, 1.5, 0.1, '#7a5230');      // 桅杆
-    B.add(0.26, 1.7, -1.3, 0.5, 0.3, 0.06, '#e2574c');  // 小旗
-    B.add(0, 0.58, 1.2, 0.6, 0.14, 0.6, '#8f6135');     // 木箱
+    // 四角护栏柱 + 横栏
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(function (p) {
+      B.add(p[0] * HALF * 0.92, 0.72, p[1] * LEN * 0.44, 0.13, 0.86, 0.13, '#7a5230');
+    });
+    [-1, 1].forEach(function (s) {
+      B.add(s * HALF * 0.92, 1.06, 0, 0.1, 0.1, LEN * 0.88, '#8a5f38');
+      B.add(0, 1.06, s * LEN * 0.44, HALF * 1.84, 0.1, 0.1, '#8a5f38');
+    });
+    // 桅杆 + 旗
+    B.add(0, 1.7, -LEN * 0.34, 0.13, 3.0, 0.13, '#7a5230');
+    B.add(0.34, 2.9, -LEN * 0.34, 0.66, 0.4, 0.06, '#e2574c');
+    // 甲板杂物：木箱 + 桶
+    B.add(-HALF * 0.6, 0.5, LEN * 0.3, 0.7, 0.44, 0.7, '#8f6135');
+    B.add(HALF * 0.55, 0.52, LEN * 0.28, 0.5, 0.46, 0.5, '#7a5a3a');
     return B;
   })();
 
@@ -7971,8 +8013,8 @@
 
   /** 5 级船型表。slots 沿用统一基准坐标，只按级给不同数量（截取 BUILDING_POS 前 N 个）。 */
   var SHIP_TIERS = [
-    { id: 'raft',       name: '木筏',     boxes: RAFT_BOXES,       modelHeight: 1.9,    heroSize: 1.7, camDistance: 26, slotCount: 4,  pop: 0.62,
-      hullLen: 2.4, hullBeam: 1.6,
+    { id: 'raft',       name: '木筏',     boxes: RAFT_BOXES,       modelHeight: 3.2,    heroSize: 3.0, camDistance: 26, slotCount: 4,  pop: 0.9,
+      hullLen: 3.9, hullBeam: 3.1,
       upgradeCost: { wood: 20, plastic: 8, metal: 0 },  needBuildings: 0 },
     { id: 'woodBoat',   name: '木船',     boxes: WOODBOAT_BOXES,   modelHeight: 3.6,    heroSize: 2.4, camDistance: 30, slotCount: 6,  pop: 0.78,
       hullLen: 4.2, hullBeam: 1.9,
@@ -7993,10 +8035,11 @@
   /** 给每一级生成建造位与生存装备位（局部坐标，随该级船体尺寸分布）。
    * 小船的甲板短、邮轮的甲板长，位置必须分级，否则建筑会飘到船外。 */
   function tierSlots(tier) {
-    var out = [], n = tier.slotCount, spanZ = tier.id === 'raft' ? 2.2
+    // 木筏已放大到 8.4x6.6（局部），槽位随之铺开；其余级沿用各自甲板跨度。
+    var out = [], n = tier.slotCount, spanZ = tier.id === 'raft' ? 2.6
       : tier.id === 'woodBoat' ? 4.2 : tier.id === 'smallShip' ? 6.5 : 10.5;
-    var spanX = tier.id === 'raft' ? 1.1 : tier.id === 'woodBoat' ? 1.5 : 2.4;
-    var deckY = tier.id === 'cruise' || tier.id === 'oceanLiner' ? 1.8 : (tier.id === 'raft' ? 0.55 : 1.2);
+    var spanX = tier.id === 'raft' ? 1.7 : tier.id === 'woodBoat' ? 1.5 : 2.4;
+    var deckY = tier.id === 'cruise' || tier.id === 'oceanLiner' ? 1.8 : (tier.id === 'raft' ? 0.38 : 1.2);
     for (var i = 0; i < n; i++) {
       var row = Math.floor(i / 2), col = i % 2;
       var x = (col ? 1 : -1) * spanX;
@@ -8007,8 +8050,8 @@
     return out;
   }
   function tierSurvivalSlots(tier) {
-    var out = [], s = tier.id === 'raft' ? 1.3 : tier.id === 'woodBoat' ? 2.2 : tier.id === 'smallShip' ? 3.2 : 5.0;
-    var deckY = tier.id === 'cruise' || tier.id === 'oceanLiner' ? 1.8 : (tier.id === 'raft' ? 0.55 : 1.2);
+    var out = [], s = tier.id === 'raft' ? 2.0 : tier.id === 'woodBoat' ? 2.2 : tier.id === 'smallShip' ? 3.2 : 5.0;
+    var deckY = tier.id === 'cruise' || tier.id === 'oceanLiner' ? 1.8 : (tier.id === 'raft' ? 0.38 : 1.2);
     var pts = [[s, s * 0.6], [-s, s * 0.6], [s * 0.7, s], [0, s * 1.15], [-s * 0.7, s], [0, s * 0.4]];
     for (var i = 0; i < pts.length; i++) out.push([pts[i][0], deckY, pts[i][1]]);
     return out;
@@ -9209,10 +9252,20 @@
     g.add(head);
     return { group: g, legL: legL, legR: legR, armL: armL, armR: armR, head: head };
   }
-  /** 按当前船型取甲板局部高度：木筏 0.55 / 木船·小船 1.2 / 邮轮·远洋 1.8。 */
+  /** 按当前船型取甲板局部高度。木筏甲板面 y≈0.38，木船/小船 1.2，邮轮 1.8。 */
   function deckYForTier() {
     var id = SHIP_TIERS[shipTier].id;
-    return id === 'raft' ? 0.55 : (id === 'cruise' || id === 'oceanLiner' ? 1.8 : 1.2);
+    return id === 'raft' ? 0.38 : (id === 'cruise' || id === 'oceanLiner' ? 1.8 : 1.2);
+  }
+  /** 人物补偿系数：让「人」在世界空间保持恒定身高（约 1.1 世界单位），
+   *  不随船型缩放乱变 —— 这是之前木筏上人比筏子还长、
+   *  以及换船后人突然变大变小→穿模的根因。 */
+  function personWorldScale() {
+    var t = SHIP_TIERS[shipTier] || SHIP_TIERS[0];
+    var bodyScale = t.heroSize / t.modelHeight;   // body 的缩放
+    var TARGET_WORLD_HEIGHT = 1.1;                // 人物目标世界高度
+    var LOCAL_HEIGHT = 1.62;                      // makeDetailedPerson 的局部总高
+    return TARGET_WORLD_HEIGHT / (LOCAL_HEIGHT * bodyScale);
   }
   /** 船长/玩家的合理站位：小木筏站中央，大船站船尾。 */
   function captainSpot() {
@@ -9261,7 +9314,7 @@
       if (crewNodes[c.id]) { crewNodes[c.id].node.visible = true; continue; }
       var p = makeDetailedPerson({ skin: c.skin || '#e8bd92', shirt: c.color, pants: c.pants || '#4a5a68', hat: c.hat, hair: c.hair || '#3a4a5a', shoe: c.shoe || '#4a3828' });
       p.group.position.set(c.x, deckYForTier(), c.z);
-      p.group.scale.setScalar(0.95);
+      p.group.scale.setScalar(personWorldScale());
       crewRoot.add(p.group);
       crewNodes[c.id] = { node: p.group, legL: p.legL, legR: p.legR, armL: p.armL, armR: p.armR, def: c };
     }
@@ -9278,6 +9331,7 @@
   avatar.visible = true;
   var _cap0 = captainSpot();
   avatar.position.set(_cap0.x, deckYForTier(), _cap0.z);
+  avatar.scale.setScalar(personWorldScale());
   avatar.rotation.y = Math.PI;
   /* The hull's real footprint on the water, in world units. Everything that has
    * to touch the ship's edges — the wake, the safety bubble, the dash burst,
@@ -9492,6 +9546,8 @@
   var fishTimer = 0, fishReady = false;
   var dockBtnRect = null, fishBtnRect = null, townViewBtnRect = null;
   var buildTownBtnRect = null;   // 「建立城镇 · 选图纸」按钮
+  var crewInteractRect = null;   // 登船模式的「互动」触屏按钮
+  var crewInteractPressed = false;
   function makeDive() {
     if (dive || !window.DiveGame || !window.DiveGame.create) return;
     try {
@@ -10347,7 +10403,7 @@
       hudCtx.textAlign = 'center';
       hudCtx.fillStyle = '#dff6ff';
       hudCtx.font = '800 ' + (font * 0.86) + 'px ' + FONT;
-      hudCtx.fillText('你在船上 · WASD 走动 · Shift 跑 · F 互动 · G/Esc 回航行',
+      hudCtx.fillText('你在船上 · 拖屏走动 · 靠近建筑点「互动」· G 回航行',
         w / 2, boardY + font * 1.35);
       hudCtx.font = '700 ' + (font * 0.8) + 'px ' + FONT;
       if (snap.nearSpot) {
@@ -10356,11 +10412,27 @@
           if (window.ShipCrew.SPOTS[spi].id === snap.nearSpot) sp = window.ShipCrew.SPOTS[spi];
         }
         hudCtx.fillStyle = '#ffe2a8';
-        hudCtx.fillText('按 F：' + (sp ? sp.name : snap.nearSpot) + ' · 互动', w / 2, boardY + font * 2.55);
+        hudCtx.fillText('点「互动」：' + (sp ? sp.name : snap.nearSpot) + ' · ' + (sp ? sp.hint : ''), w / 2, boardY + font * 2.55);
       } else {
         hudCtx.fillStyle = 'rgba(200,230,255,0.7)';
         hudCtx.fillText('走近工作台 / 寿司店 / 水塔 / 舷梯 试试', w / 2, boardY + font * 2.55);
       }
+      hudCtx.textAlign = 'left';
+      /* 「互动」触屏按钮：手机上没有 F 键，靠近交互点时出现并高亮。 */
+      var ibR = Math.max(30, font * 1.7);
+      var ibX = w - m - ibR - 10, ibY = h - m - ibR * 2 - 30;
+      crewInteractRect = { x: ibX, y: ibY, r: ibR + 8, near: !!snap.nearSpot };
+      hudCtx.globalAlpha = snap.nearSpot ? 0.9 + Math.sin(performance.now() / 180) * 0.1 : 0.5;
+      hudCtx.fillStyle = snap.nearSpot ? 'rgba(40,130,80,0.95)' : 'rgba(24,34,50,0.85)';
+      hudCtx.beginPath(); hudCtx.arc(ibX, ibY, ibR, 0, Math.PI * 2); hudCtx.fill();
+      hudCtx.strokeStyle = snap.nearSpot ? 'rgba(180,255,200,1)' : 'rgba(255,255,255,0.3)';
+      hudCtx.lineWidth = snap.nearSpot ? 3 : 2;
+      hudCtx.beginPath(); hudCtx.arc(ibX, ibY, ibR, 0, Math.PI * 2); hudCtx.stroke();
+      hudCtx.globalAlpha = 1;
+      hudCtx.fillStyle = snap.nearSpot ? '#eaffef' : 'rgba(220,230,240,0.8)';
+      hudCtx.font = '800 ' + (font * 0.86) + 'px ' + FONT;
+      hudCtx.textAlign = 'center';
+      hudCtx.fillText('互动', ibX, ibY + font * 0.32);
       hudCtx.textAlign = 'left';
       /* 船员头顶：程序化立绘小头像 + 名字，让「船上有活生生的人」一眼可见。
        * 世界坐标投影到屏幕；离相机太远/太偏就跳过。 */
@@ -11575,6 +11647,14 @@
       }
       return;
     }
+    /* 登船模式「互动」按钮（圆形热区）：靠近交互点时点击执行。 */
+    if (crewInteractRect) {
+      var cix = event.clientX - crewInteractRect.x, ciy = event.clientY - crewInteractRect.y;
+      if (cix * cix + ciy * ciy <= crewInteractRect.r * crewInteractRect.r) {
+        crewInteractPressed = true;
+        return;
+      }
+    }
     // Ship management button.
     if (manageBtnRect) {
       var smx = event.clientX - manageBtnRect.x, smy = event.clientY - manageBtnRect.y;
@@ -11815,6 +11895,7 @@
         }
       }
       if (keys.boost && !townView) triggerDash();
+      if (townView && crewInteractPressed) { crewInteractPressed = false; doCrewInteract(); }
       hero.dashT = Math.max(0, hero.dashT - dt);
       hero.dashCd = Math.max(0, hero.dashCd - dt);
       /* --- Docked: the raft is anchored, so the town on it becomes a place.
@@ -12132,6 +12213,21 @@
     if (townView && window.ShipCrew && window.ShipCrew.isActive()) {
       window.ShipCrew.setRecruited(recruited.map(function (r) { return r.id; }).filter(function (x) { return x; }));
       window.ShipCrew.setSushiOpen(window.SushiShop ? window.SushiShop.isOpen() : false);
+      /* 把甲板上的实体（建筑/装备/寿司店）同步成障碍圆，让角色不会再走进
+       * 建筑里卡住 —— 这是「上船后人物穿模、卡在里面」的根因。 */
+      if (!window._obstacleTick || (performance.now() - window._obstacleTick) > 120) {
+        window._obstacleTick = performance.now();
+        var obs = [];
+        var addObs = function (node) {
+          if (!node || !node.visible) return;
+          // 模型局部坐标 → 甲板局部坐标（body 是同一坐标系，直接取 position）
+          obs.push({ x: node.position.x, z: node.position.z, r: 0.55 });
+        };
+        buildings.forEach(addObs);
+        survivalModels.forEach(addObs);
+        if (sushiStall && sushiStall.visible) addObs(sushiStall);
+        window.ShipCrew.setObstacles(obs);
+      }
     }
     /* Achievements: tick once a frame with the live state. Unlocks are queued
      * and drawn as banners by drawHUD, so no DOM is involved. */
@@ -12240,6 +12336,7 @@
         crewRoot.visible = true; avatar.visible = true;
         var _cap = captainSpot();
         avatar.position.set(_cap.x, deckYForTier(), _cap.z);
+        avatar.scale.setScalar(personWorldScale());
         avatar.rotation.y = Math.PI;
         ensureCrewNodes();
         addFT('回到航行视角', hero.x, hero.z, '#ffe2a8', 2);
