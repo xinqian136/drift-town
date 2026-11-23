@@ -6695,6 +6695,220 @@ var THREE = __wxRoot.THREE || window.THREE;
 });
 
 })();
+
+/* --- inlined from ship-crew.js --- */
+(function () {
+/**
+ * 漂流小镇 · 登船模式（第三人称船上角色）
+ * =============================================================================
+ * 这是用户从最开始就要的核心：「进入城镇 = 可以进入船上操控角色（人物）
+ * 进行活动（第三人称视角）」，而不是把镜头拉近看甲板。
+ *
+ * 本模块负责「状态与规则」，不碰渲染：
+ *   - 一个可操控的船员角色（位置、朝向、行走、跑动）
+ *   - 甲板上的可交互点（寿司店 / 工作台 / 水塔 / 庇护所 / 招募的 NPC）
+ *   - 第三人称相机参数（给 game.js 的 placeCamera 用）
+ *   - 靠近交互点时的提示文字与按键语义
+ *
+ * 渲染由 game.js 用 three.js 画（体素小人 + 建筑模型），本模块只给数据。
+ * 零 DOM / 零网络 / 零 require，window.ShipCrew + module.exports。
+ */
+(function (root, factory) {
+  'use strict';
+  var api = factory();
+  if (root) root.ShipCrew = api;
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+})(typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : this), function () {
+  'use strict';
+
+  var VERSION = '1.0.0';
+
+  /* 甲板上的交互点。坐标是船体局部坐标（与 BUILDING_POS 同一套基准），
+   * y 是甲板高度。radius 是可互动距离。 */
+  var SPOTS = [
+    { id: 'workbench', name: '工作台',   x: 2.6,  z: 6.0,  y: 1.8, radius: 1.6, action: 'build',   hint: '打开建造菜单' },
+    { id: 'shelter',   name: '庇护所',   x: -2.6, z: 6.0,  y: 1.8, radius: 1.6, action: 'rest',    hint: '休息 / 存档' },
+    { id: 'sushi',     name: '寿司店',   x: 2.2,  z: -1.0, y: 1.8, radius: 1.8, action: 'sushi',   hint: '经营寿司店', needs: 'sushiOpen' },
+    { id: 'tower',     name: '水塔',     x: -2.4, z: -2.0, y: 1.8, radius: 1.5, action: 'tower',   hint: '查看供水' },
+    { id: 'market',    name: '市集',     x: 2.2,  z: -5.0, y: 1.8, radius: 1.6, action: 'market',  hint: '买卖材料' },
+    { id: 'dock',      name: '舷梯',     x: 0,    z: 11.0, y: 1.8, radius: 1.8, action: 'dive',    hint: '下潜 / 钓鱼' },
+    { id: 'bridge',    name: '船桥',     x: 0,    z: 8.5,  y: 3.6, radius: 1.8, action: 'sail',    hint: '回到航行' }
+  ];
+
+  /* 可招募的船员：登船后他们会在甲板上站着/走动，让船上有「人」。 */
+  var CREW_DEFS = [
+    { id: 'laochen',   name: '老陈',   color: '#8fb8d8', job: '打捞', x: -1.8, z: 3.2 },
+    { id: 'ahai',      name: '阿海',   color: '#7fd8e8', job: '潜水', x: 1.9,  z: 4.0 },
+    { id: 'xiaoman',   name: '小满',   color: '#e8b87f', job: '寿司', x: 2.2,  z: -1.4 },
+    { id: 'bo',        name: '铁匠波', color: '#b8a090', job: '建造', x: -2.0, z: -3.4 },
+    { id: 'lili',      name: '莉莉',   color: '#d8a0c8', job: '买卖', x: 2.4,  z: -5.2 }
+  ];
+
+  var state = {
+    active: false,           // 是否处于登船模式
+    x: 0, z: 9.0,           // 角色在船体局部坐标中的位置（从船尾上船）
+    facing: Math.PI,         // 朝向（弧度）
+    vx: 0, vz: 0,
+    walkT: 0,                // 步态动画相位
+    recruited: [],           // 已招募船员 id
+    sushiOpen: false,
+    nearSpot: null,          // 当前靠近的交互点
+    lastAction: null,        // { spot, at }
+    deckLen: 13, deckBeam: 4.2
+  };
+
+  /* ==== 开关 ==== */
+  function enter(recruitedIds, sushiOpen) {
+    state.active = true;
+    state.x = 0; state.z = 9.0; state.facing = Math.PI;
+    state.vx = state.vz = 0; state.walkT = 0;
+    state.recruited = (recruitedIds || []).slice();
+    state.sushiOpen = !!sushiOpen;
+    state.nearSpot = null;
+    return true;
+  }
+  function exit() { state.active = false; state.nearSpot = null; state.lastAction = null; return false; }
+  function isActive() { return state.active; }
+
+  /* ==== 移动 ==== */
+  /** dir: {x, z} 归一化的摇杆方向（船体局部坐标）。dt 秒。 */
+  function move(dir, dt, run) {
+    if (!state.active) return;
+    var speed = run ? 3.6 : 2.2;
+    var dx = (dir.x || 0), dz = (dir.z || 0);
+    var len = Math.hypot(dx, dz);
+    if (len > 0.001) {
+      dx /= len; dz /= len;
+      state.vx = dx * speed; state.vz = dz * speed;
+      state.facing = Math.atan2(dx, dz);
+      state.walkT += dt * (run ? 12 : 8);
+    } else {
+      state.vx = 0; state.vz = 0;
+    }
+    state.x += state.vx * dt;
+    state.z += state.vz * dt;
+    // 限制在甲板范围内（船体椭圆的保守矩形）
+    var halfL = state.deckLen * 0.86, halfB = state.deckBeam * 0.78;
+    state.x = Math.max(-halfB, Math.min(halfB, state.x));
+    state.z = Math.max(-halfL, Math.min(halfL, state.z));
+    // 更新靠近的交互点
+    state.nearSpot = nearestSpot();
+  }
+  function setDeck(deckLen, deckBeam) {
+    state.deckLen = deckLen || state.deckLen;
+    state.deckBeam = deckBeam || state.deckBeam;
+  }
+
+  function nearestSpot() {
+    var best = null, bestD = 1e9;
+    for (var i = 0; i < SPOTS.length; i++) {
+      var s = SPOTS[i];
+      if (s.needs === 'sushiOpen' && !state.sushiOpen) continue;
+      var d = Math.hypot(state.x - s.x, state.z - s.z);
+      if (d < s.radius && d < bestD) { best = s; bestD = d; }
+    }
+    return best;
+  }
+
+  /** 按下互动键：返回 { ok, spot, action } 或 { ok:false, reason }。 */
+  function interact() {
+    if (!state.active) return { ok: false, reason: 'not-onboard' };
+    var s = state.nearSpot || nearestSpot();
+    if (!s) return { ok: false, reason: 'nothing-nearby' };
+    state.lastAction = { spot: s.id, action: s.action, at: Date.now() };
+    return { ok: true, spot: s, action: s.action, hint: s.hint };
+  }
+
+  /* ==== 船员（让船上有人） ==== */
+  function crewList() {
+    var out = [];
+    for (var i = 0; i < CREW_DEFS.length; i++) {
+      var c = CREW_DEFS[i];
+      if (state.recruited.indexOf(c.id) < 0) continue;
+      out.push({
+        id: c.id, name: c.name, color: c.color, job: c.job,
+        x: c.x, z: c.z,
+        // 轻微待机摆动，让甲板不是死的
+        bob: Math.sin(state.walkT * 0.5 + i) * 0.06
+      });
+    }
+    return out;
+  }
+  function setRecruited(ids) { state.recruited = (ids || []).slice(); }
+  function setSushiOpen(v) { state.sushiOpen = !!v; }
+
+  /* ==== 第三人称相机 ==== */
+  /** 返回第三人称相机相对角色的偏移（世界/船体局部一致）。 */
+  function cameraRig() {
+    // 相机在角色身后、略高，看向角色前方一点。
+    var back = 6.2, up = 3.1;
+    var fx = Math.sin(state.facing), fz = Math.cos(state.facing);
+    return {
+      x: state.x - fx * back,
+      y: up,
+      z: state.z - fz * back,
+      lookX: state.x + fx * 1.4,
+      lookY: 1.4,
+      lookZ: state.z + fz * 1.4
+    };
+  }
+
+  /* ==== 状态快照（给 HUD / 测试） ==== */
+  function snapshot() {
+    return {
+      active: state.active, x: Math.round(state.x * 100) / 100, z: Math.round(state.z * 100) / 100,
+      facing: Math.round(state.facing * 100) / 100,
+      nearSpot: state.nearSpot ? state.nearSpot.id : null,
+      crew: crewList().map(function (c) { return c.id; }),
+      sushiOpen: state.sushiOpen
+    };
+  }
+
+  function selfTest() {
+    var problems = [];
+    // 结构完整
+    for (var i = 0; i < SPOTS.length; i++) {
+      var s = SPOTS[i];
+      if (!s.id || !s.name || !s.action) problems.push('spot[' + i + '] 字段不全');
+      if (!(s.radius > 0)) problems.push(s.id + ' radius 非法');
+    }
+    // 进入/移动/互动
+    try {
+      enter(['laochen', 'xiaoman'], true);
+      if (!isActive()) problems.push('enter 后 active 应为 true');
+      move({ x: 0, z: 0 }, 0.016);
+      // 走到寿司店附近
+      state.x = 2.2; state.z = -1.0;
+      state.nearSpot = nearestSpot();
+      if (!state.nearSpot) problems.push('站在寿司店前应检测到交互点');
+      var r = interact();
+      if (!r.ok || r.action !== 'sushi') problems.push('寿司店互动应返回 action=sushi');
+      if (crewList().length !== 2) problems.push('应返回 2 名已招募船员');
+      if (cameraRig().y <= 0) problems.push('相机高度应为正');
+      exit();
+      if (isActive()) problems.push('exit 后 active 应为 false');
+      // 越界钳制
+      enter([], false);
+      move({ x: 99, z: 99 }, 1.0);
+      if (Math.abs(state.x) > 10 || Math.abs(state.z) > 20) problems.push('移动应被甲板范围钳制');
+      exit();
+    } catch (e) { problems.push('运行时异常: ' + e.message); }
+    return { passed: problems.length === 0, problems: problems, spots: SPOTS.length, crew: CREW_DEFS.length, version: VERSION };
+  }
+
+  return {
+    VERSION: VERSION,
+    SPOTS: SPOTS.map(function (s) { return { id: s.id, name: s.name, action: s.action }; }),
+    CREW_DEFS: CREW_DEFS.map(function (c) { return { id: c.id, name: c.name, job: c.job }; }),
+    enter: enter, exit: exit, isActive: isActive,
+    move: move, setDeck: setDeck,
+    nearestSpot: nearestSpot, interact: interact,
+    crewList: crewList, setRecruited: setRecruited, setSushiOpen: setSushiOpen,
+    cameraRig: cameraRig, snapshot: snapshot, selfTest: selfTest
+  };
+});
+
+})();
 /* === INLINED-MODULES:END === */
 
 
@@ -6835,6 +7049,26 @@ var THREE = __wxRoot.THREE || window.THREE;
   var scene = new THREE.Scene();
   scene.fog = new THREE.Fog(R.palette.fog, 40, 130);
   var camera = new THREE.PerspectiveCamera(38, 1, 0.1, 600);
+  /* 真实天空穹：上镇视角把俯角压到 20° 时，画面上部会露出水线以上。
+   * 之前那里只靠 CSS 渐变撑着，一旦相机姿态变了就露出透明黑底。
+   * 一个跟随相机的大球（内表面渐变）保证任何角度都有天空。 */
+  var skyDome = (function () {
+    var g = new THREE.SphereGeometry(400, 24, 16);
+    var p = g.attributes.position, cs = [];
+    var cTop = color(R.palette.skyTop), cMid = color(R.palette.skyBottom), cSea = color(R.palette.water), tc = new THREE.Color();
+    for (var i = 0; i < p.count; i++) {
+      var y = p.getY(i) / 400;
+      if (y >= 0) tc.copy(cMid).lerp(cTop, Math.pow(y, 0.55));
+      else tc.copy(cMid).lerp(cSea, Math.min(1, -y * 3.0));
+      cs.push(tc.r, tc.g, tc.b);
+    }
+    g.setAttribute('color', new THREE.Float32BufferAttribute(cs, 3));
+    var m = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false });
+    var mesh = new THREE.Mesh(g, m);
+    mesh.renderOrder = -1000;
+    scene.add(mesh);
+    return mesh;
+  })();
 
   /* --- Environment map ---
    * MeshStandardMaterial needs something to reflect or it looks as flat as
@@ -8801,6 +9035,76 @@ var THREE = __wxRoot.THREE || window.THREE;
   var hero = { x: 0, z: 0, y: floatY(0, 0), vx: 0, vz: 0, facing: 0, dashT: 0, dashCd: 0, dashX: 0, dashZ: 0, node: makeCharacter('hero', R.heroSize, MODELS.hero) };
   var heroMode = customArt('hero') ? 'sprite' : 'voxel';
   var BASE_HERO_SCALE = hero.node.userData.body.scale.x;
+
+  /* --- 登船模式：第三人称可操控船员 + 甲板上的居民 ---
+   * 用户从最开始就要的是「进入城镇 = 操控人物在船上活动」，不是拉近镜头。
+   * 这里画一个体素小人（头/身/双臂/双腿），以及已招募的船员。
+   * 它们挂在 hero.node.userData.body（船体局部坐标），会随船一起移动/缩放。 */
+  function personBoxes(skin, shirt, pants) {
+    return [
+      [0, 1.42, 0, 0.34, 0.34, 0.34, skin],           // 头
+      [0, 1.0, 0, 0.46, 0.56, 0.28, shirt],           // 躯干
+      [-0.32, 1.0, 0, 0.16, 0.5, 0.2, skin],          // 左臂
+      [0.32, 1.0, 0, 0.16, 0.5, 0.2, skin],           // 右臂
+      [-0.13, 0.42, 0, 0.18, 0.5, 0.2, pants],        // 左腿
+      [0.13, 0.42, 0, 0.18, 0.5, 0.2, pants],         // 右腿
+      [0, 1.62, 0, 0.36, 0.1, 0.36, '#3a4a5a']        // 帽子/头发
+    ];
+  }
+  var crewRoot = new THREE.Group();
+  var avatar = voxelModel(personBoxes('#f0c9a0', '#e2574c', '#37506b'));
+  avatar.visible = false;
+  crewRoot.add(avatar);
+  /* 寿司店实体：招募小满并开店后，甲板上真的立起一间店（不只是面板）。 */
+  var sushiStall = (function () {
+    var B = [
+      [0, 0.35, 0, 1.8, 0.7, 1.2, '#8a5a3a'],        // 柜台
+      [0, 0.78, 0, 1.9, 0.12, 1.3, '#c89a5e'],
+      [0, 1.9, 0, 2.1, 0.14, 1.5, '#b8453a'],        // 遮阳棚
+      [-0.85, 1.2, -0.5, 0.1, 1.3, 0.1, '#7a5230'],  // 立柱
+      [0.85, 1.2, -0.5, 0.1, 1.3, 0.1, '#7a5230'],
+      [-0.85, 1.2, 0.5, 0.1, 1.3, 0.1, '#7a5230'],
+      [0.85, 1.2, 0.5, 0.1, 1.3, 0.1, '#7a5230'],
+      [0, 2.1, 0, 1.3, 0.4, 0.08, '#f2e2c0'],        // 招牌
+      [0, 0.88, 0.4, 0.5, 0.1, 0.3, '#e8d8b0'],      // 砧板
+      [0.3, 0.95, 0.4, 0.12, 0.12, 0.12, '#f08060']  // 鱼料
+    ];
+    return voxelModel(B);
+  })();
+  sushiStall.position.set(2.2, 1.8, -1.0);
+  sushiStall.scale.setScalar(0.9);
+  sushiStall.visible = false;
+  hero.node.userData.body.add(sushiStall);   // 挂在船体上，航行时也看得见
+  function refreshSushiStall() {
+    sushiStall.visible = !!(window.SushiShop && window.SushiShop.isOpen());
+  }
+  var crewNodes = {};   // id -> { node, def }
+  function ensureCrewNodes() {
+    if (!window.ShipCrew) return;
+    refreshSushiStall();
+    var list = window.ShipCrew.crewList();
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (crewNodes[c.id]) { crewNodes[c.id].node.visible = true; continue; }
+      var n = voxelModel(personBoxes('#e8bd92', c.color, '#4a5a68'));
+      n.position.set(c.x, 1.8, c.z);
+      n.scale.setScalar(0.92);
+      crewRoot.add(n);
+      crewNodes[c.id] = { node: n, def: c };
+    }
+    // 隐藏还没招募的
+    Object.keys(crewNodes).forEach(function (id) {
+      var found = false;
+      for (var k = 0; k < list.length; k++) if (list[k].id === id) found = true;
+      if (!found) crewNodes[id].node.visible = false;
+    });
+  }
+  hero.node.userData.body.add(crewRoot);
+  // 航行时也站着一个「你」（船长）在船尾，船上不是空的；登船模式才交给玩家操控。
+  crewRoot.visible = true;
+  avatar.visible = true;
+  avatar.position.set(0, 1.8, 9.0);
+  avatar.rotation.y = Math.PI;
   /* The hull's real footprint on the water, in world units. Everything that has
    * to touch the ship's edges — the wake, the safety bubble, the dash burst,
    * the salvage reach, the shark's bite — reads these instead of guessing from
@@ -9013,6 +9317,7 @@ var THREE = __wxRoot.THREE || window.THREE;
   var docked = false, dockX = 0, dockZ = 0, deckBobT = 0;
   var fishTimer = 0, fishReady = false;
   var dockBtnRect = null, fishBtnRect = null, townViewBtnRect = null;
+  var buildTownBtnRect = null;   // 「建立城镇 · 选图纸」按钮
   function makeDive() {
     if (dive || !window.DiveGame || !window.DiveGame.create) return;
     try {
@@ -9306,7 +9611,22 @@ var THREE = __wxRoot.THREE || window.THREE;
       roundRect(m, srY, srW + 20, font * 1.5, 8); hudCtx.stroke();
       hudCtx.fillStyle = '#c8ffd8';
       hudCtx.fillText(srText, m + 10, srY + font * 1.1);
-    }
+      /* 明确的可点按钮：提示有了，入口也得有。点它直接选图纸。 */
+      var tbW = Math.min(w * 0.3, 190), tbH = font * 1.9;
+      var tbX = m, tbY = srY + font * 1.8;
+      buildTownBtnRect = { x: tbX, y: tbY, w: tbW, h: tbH };
+      var canB = !buildOffer && nextBuild < BUILDING_SPECS.length;
+      hudCtx.fillStyle = canB ? 'rgba(40,130,80,0.92)' : 'rgba(50,60,70,0.8)';
+      roundRect(tbX, tbY, tbW, tbH, tbH / 2); hudCtx.fill();
+      hudCtx.strokeStyle = canB ? 'rgba(180,255,200,0.95)' : 'rgba(255,255,255,0.3)';
+      hudCtx.lineWidth = 2;
+      roundRect(tbX, tbY, tbW, tbH, tbH / 2); hudCtx.stroke();
+      hudCtx.fillStyle = canB ? '#eaffef' : 'rgba(220,230,240,0.7)';
+      hudCtx.font = '800 ' + (font * 0.84) + 'px ' + FONT;
+      hudCtx.textAlign = 'center';
+      hudCtx.fillText(canB ? '建立城镇 · 选图纸' : '图纸已选', tbX + tbW / 2, tbY + tbH * 0.68);
+      hudCtx.textAlign = 'left';
+    } else buildTownBtnRect = null;
     if (townReady && townReadyBanner > 0) { // the moment it first unlocks
       hudCtx.globalAlpha = Math.min(1, townReadyBanner);
       var trText = '可以建立城镇了！';
@@ -9841,6 +10161,34 @@ var THREE = __wxRoot.THREE || window.THREE;
     if (R.debugPanel === 'selfcheck') {
       try { drawSelfCheckOverlay(hudCtx, w, h); } catch (e) { /* debug art must not break a frame */ }
     }
+    /* 登船模式（第三人称）的操作提示：这是玩家在船上的「操作说明」。 */
+    if (townView && window.ShipCrew && window.ShipCrew.isActive()) {
+      var snap = window.ShipCrew.snapshot();
+      var boardW = Math.min(w * 0.7, 480), boardH = font * 3.6;
+      var boardX = (w - boardW) / 2, boardY = h - boardH - font * 2.2;
+      hudCtx.fillStyle = 'rgba(10,26,38,0.88)';
+      roundRect(boardX, boardY, boardW, boardH, 14); hudCtx.fill();
+      hudCtx.strokeStyle = 'rgba(160,235,255,0.6)'; hudCtx.lineWidth = 2;
+      roundRect(boardX, boardY, boardW, boardH, 14); hudCtx.stroke();
+      hudCtx.textAlign = 'center';
+      hudCtx.fillStyle = '#dff6ff';
+      hudCtx.font = '800 ' + (font * 0.86) + 'px ' + FONT;
+      hudCtx.fillText('你在船上 · WASD 走动 · Shift 跑 · F 互动 · G/Esc 回航行',
+        w / 2, boardY + font * 1.35);
+      hudCtx.font = '700 ' + (font * 0.8) + 'px ' + FONT;
+      if (snap.nearSpot) {
+        var sp = null;
+        for (var spi = 0; spi < window.ShipCrew.SPOTS.length; spi++) {
+          if (window.ShipCrew.SPOTS[spi].id === snap.nearSpot) sp = window.ShipCrew.SPOTS[spi];
+        }
+        hudCtx.fillStyle = '#ffe2a8';
+        hudCtx.fillText('按 F：' + (sp ? sp.name : snap.nearSpot) + ' · 互动', w / 2, boardY + font * 2.55);
+      } else {
+        hudCtx.fillStyle = 'rgba(200,230,255,0.7)';
+        hudCtx.fillText('走近工作台 / 寿司店 / 水塔 / 舷梯 试试', w / 2, boardY + font * 2.55);
+      }
+      hudCtx.textAlign = 'left';
+    }
     /* Achievement unlock banner, drawn last so it floats above everything. */
     if (window.Achievements) {
       try {
@@ -9964,6 +10312,9 @@ var THREE = __wxRoot.THREE || window.THREE;
       if (Math.hypot(c.x - hero.x, c.z - hero.z) > shipHalfLen() + 3.5) continue;
       recruited.push(c.def);
       applyPerk(c.def);
+      // 招募成功立刻把这个人放到甲板上（船上真的多一个人）。
+      if (window.ShipCrew) window.ShipCrew.setRecruited(recruited.map(function (r) { return r.id; }).filter(function (x) { return x; }));
+      ensureCrewNodes();
       // Mirror into the dialogue module so this NPC can talk to the player and
       // carry affinity across runs.
       if (window.NpcDialogue) { try { window.NpcDialogue.recruit(c.def.id); } catch (e) { /* ignore */ } }
@@ -10552,6 +10903,17 @@ var THREE = __wxRoot.THREE || window.THREE;
       } catch (e) { window.__debugTierCycle = { error: String(e && e.message || e) }; }
     }
     if (R.debugManage) { try { openManage(); } catch (e) { /* debug only */ } }
+    /* Debug only: 第三人称登船模式的无人值守截图 —— 全员 + 寿司店 + 建满 + 下锚 + 登船。 */
+    if (R.debugBoard) {
+      try {
+        window.__debugRecruitAll();
+        window.__debugOpenSushi();
+        window.__debugGrant({ wood: 999, plastic: 999, metal: 999 });
+        window.__debugBuildAll();
+        setDocked(true);
+        if (!townView) toggleTownView();
+      } catch (e) { /* debug only */ }
+    }
     for (var i = 0; i < R.maxPickups; i++) addPickup();
     addEnemy();
     blip(520, 0.12, 'triangle', 0.07, 780);
@@ -10807,9 +11169,14 @@ var THREE = __wxRoot.THREE || window.THREE;
     }
     if (event.code === 'KeyB' && phase === 'playing' && !paused) { openBuildMenu(); event.preventDefault(); return; }
     if (event.code === 'KeyV' && phase === 'playing' && !paused && !manageOpen) { openManage(); event.preventDefault(); return; }
-    // G — 上甲板进镇 / 回航行视角（需先下锚）
+    // G — 登船（第三人称）/ 回航行视角（需先下锚）
     if (event.code === 'KeyG' && phase === 'playing' && !paused) { toggleTownView(); event.preventDefault(); return; }
+    // F — 登船时与身边的建筑/人互动
+    if (event.code === 'KeyF' && phase === 'playing' && townView && window.ShipCrew) {
+      doCrewInteract(); event.preventDefault(); return;
+    }
     // Escape also backs out of a dive.
+    if (event.code === 'Escape' && townView) { toggleTownView(); event.preventDefault(); return; }
     if (event.code === 'Escape' && dive && dive.active()) { exitDive(); event.preventDefault(); return; }
     if (event.code === 'Escape' && manageOpen) { closeManage(); event.preventDefault(); return; }
     // While a blueprint is on offer the run pauses and ← / → / Enter pick one.
@@ -10992,6 +11359,18 @@ var THREE = __wxRoot.THREE || window.THREE;
         && event.clientX >= townViewBtnRect.x && event.clientX <= townViewBtnRect.x + townViewBtnRect.w
         && event.clientY >= townViewBtnRect.y && event.clientY <= townViewBtnRect.y + townViewBtnRect.h) {
       toggleTownView();
+      return;
+    }
+    /* 「建立城镇 · 选图纸」：点它立刻弹图纸，不用等自动触发。 */
+    if (buildTownBtnRect
+        && event.clientX >= buildTownBtnRect.x && event.clientX <= buildTownBtnRect.x + buildTownBtnRect.w
+        && event.clientY >= buildTownBtnRect.y && event.clientY <= buildTownBtnRect.y + buildTownBtnRect.h) {
+      if (!buildOffer && nextBuild < BUILDING_SPECS.length) {
+        var savedAB = R.autoBuild; R.autoBuild = false;
+        offerBuild();
+        R.autoBuild = savedAB;
+        offerCooldown = 8;
+      }
       return;
     }
     // Ship management button.
@@ -11202,7 +11581,24 @@ var THREE = __wxRoot.THREE || window.THREE;
       }
 
       var dir = inputDirection();
-      if (keys.boost) triggerDash();
+      /* --- 登船模式：WASD 控制的是船员，不是船 ---
+       * 第三人称在甲板上走动；靠近交互点按 F。船体保持停泊不动。 */
+      if (townView && window.ShipCrew && window.ShipCrew.isActive()) {
+        window.ShipCrew.move({ x: dir.x, z: -dir.z }, dt, !!keys.boost);
+        var snap = window.ShipCrew.snapshot();
+        avatar.position.set(snap.x, 1.8, snap.z);
+        avatar.rotation.y = snap.facing;
+        // 走路时轻微上下摆
+        avatar.position.y += Math.abs(Math.sin(window.ShipCrew.snapshot().x * 3)) * 0.0;
+        // 船员待机
+        ensureCrewNodes();
+        var crewNow = window.ShipCrew.crewList();
+        for (var cn = 0; cn < crewNow.length; cn++) {
+          var cnode = crewNodes[crewNow[cn].id];
+          if (cnode) cnode.node.position.y = 1.8 + (crewNow[cn].bob || 0);
+        }
+      }
+      if (keys.boost && !townView) triggerDash();
       hero.dashT = Math.max(0, hero.dashT - dt);
       hero.dashCd = Math.max(0, hero.dashCd - dt);
       /* --- Docked: the raft is anchored, so the town on it becomes a place.
@@ -11514,6 +11910,13 @@ var THREE = __wxRoot.THREE || window.THREE;
     updateCastaways(dt, t);
     maybeSave(dt);   // persistent world: autosave every few seconds
     updateFishing(dt);
+    /* 寿司店开店后立刻在甲板上立起实体（不需要先进登船模式）。 */
+    refreshSushiStall();
+    /* 登船时同步船上的居民与寿司店状态。 */
+    if (townView && window.ShipCrew && window.ShipCrew.isActive()) {
+      window.ShipCrew.setRecruited(recruited.map(function (r) { return r.id; }).filter(function (x) { return x; }));
+      window.ShipCrew.setSushiOpen(window.SushiShop ? window.SushiShop.isOpen() : false);
+    }
     /* Achievements: tick once a frame with the live state. Unlocks are queued
      * and drawn as banners by drawHUD, so no DOM is involved. */
     if (window.Achievements && phase === 'playing') {
@@ -11584,10 +11987,47 @@ var THREE = __wxRoot.THREE || window.THREE;
   /* 进镇视角：下锚后可以「走上甲板」，把相机拉近、压低俯角，让建好的
    * 建筑以侧面立起来，而不是永远从高空俯视一艘扁平的船。 */
   var townView = false;
+  /** 登船时按 F：把「走到某处」变成真正的游戏动作。 */
+  function doCrewInteract() {
+    if (!window.ShipCrew) return;
+    var r = window.ShipCrew.interact();
+    if (!r.ok) { addFT(r.reason === 'nothing-nearby' ? '附近没有可互动的东西' : '', hero.x, hero.z, '#dff2ff', 1.2); return; }
+    var s = r.spot;
+    addFT(s.name + ' · ' + s.hint, hero.x, hero.z, '#ffe2a8', 2);
+    blip(660, 0.12, 'sine', 0.05, 880);
+    switch (r.action) {
+      case 'build':   openBuildMenu(); break;
+      case 'sushi':   if (window.SushiShop && window.SushiShop.isOpen()) openSushiPanel(); else addFT('寿司店还没开张（需招募小满）', hero.x, hero.z, '#ffb4a0', 2); break;
+      case 'tower':   addFT('供水正常 · 水 ' + Math.round(canteen) + '/' + Math.round(maxWater), hero.x, hero.z, '#9fe0ff', 2); break;
+      case 'rest':    canteen = maxWater; food = maxFood; addFT('休息好了 · 水食回满', hero.x, hero.z, '#9ff0b8', 2); saveWorld(); break;
+      case 'market':  addFT('木 ' + res.wood + ' / 塑 ' + res.plastic + ' / 铁 ' + res.metal, hero.x, hero.z, '#dff2ff', 2); break;
+      case 'dive':    if (!dive || !dive.active()) startDive(); break;
+      case 'sail':    toggleTownView(); setDocked(false); break;
+    }
+  }
   function toggleTownView() {
     if (!docked) { addFT('先下锚停船，才能上镇', hero.x, hero.z, '#ffb4a0', 1.8); return; }
     townView = !townView;
-    addFT(townView ? '已上镇 · 走近看看你的小镇' : '回到航行视角', hero.x, hero.z, '#9ff0b8', 2);
+    if (window.ShipCrew) {
+      if (townView) {
+        // 进入第三人称登船模式：把已招募的人放到甲板上，寿司店状态同步。
+        window.ShipCrew.setRecruited(recruited.map(function (r) { return r.id; }).filter(function (x) { return x; }));
+        window.ShipCrew.setSushiOpen(window.SushiShop ? window.SushiShop.isOpen() : false);
+        window.ShipCrew.setDeck(SHIP_TIERS[shipTier].hullLen || 8, SHIP_TIERS[shipTier].hullBeam || 3);
+        window.ShipCrew.enter();
+        crewRoot.visible = true; avatar.visible = true;
+        ensureCrewNodes();
+        addFT('已登船 · WASD 走动，靠近建筑按 F 互动', hero.x, hero.z, '#9ff0b8', 3);
+      } else {
+        window.ShipCrew.exit();
+        // 回到航行：把「你」放回船尾当船长，已招募的船员继续留在甲板上。
+        crewRoot.visible = true; avatar.visible = true;
+        avatar.position.set(0, 1.8, 9.0);
+        avatar.rotation.y = Math.PI;
+        ensureCrewNodes();
+        addFT('回到航行视角', hero.x, hero.z, '#ffe2a8', 2);
+      }
+    }
     blip(townView ? 560 : 420, 0.15, 'sine', 0.05, townView ? 760 : 300);
   }
   function cameraDistance() {
@@ -11603,8 +12043,24 @@ var THREE = __wxRoot.THREE || window.THREE;
     focus.z = lerp(focus.z, hero.z, Math.min(1, dt * 5));
     focus.y = lerp(focus.y, hero.y, Math.min(1, dt * 4));
     var distance = cameraDistance();
-    // 上镇时把镜头压低（俯角 20°）并聚焦到甲板高度，建筑就有了立体侧面；
-    // 航行/结算时保持俯视 45° 以看到整艘船。
+    // 第三人称登船：相机跟在可操控船员身后，随船体旋转。
+    if (townView && window.ShipCrew && window.ShipCrew.isActive()) {
+      var rig = window.ShipCrew.cameraRig();
+      var body = hero.node.userData.body;
+      var camLocal = new THREE.Vector3(rig.x, rig.y, rig.z);
+      var lookLocal = new THREE.Vector3(rig.lookX, rig.lookY, rig.lookZ);
+      body.localToWorld(camLocal);
+      body.localToWorld(lookLocal);
+      camera.position.lerp(camLocal, Math.min(1, dt * 8));
+      camera.lookAt(lookLocal);
+      if (skyDome) skyDome.position.copy(camera.position);
+      scene.fog.near = 12; scene.fog.far = 90;
+      sun.position.set(camLocal.x - 18, camLocal.y + 15, camLocal.z + 8);
+      sun.target.position.copy(lookLocal);
+      moon.position.set(camera.position.x + 55, camera.position.y + 48, camera.position.z - 150);
+      stars.position.set(camera.position.x, 0, camera.position.z);
+      return;
+    }
     var pitch = townView ? 20 * Math.PI / 180 : PITCH;
     var lift = townView ? 3.0 : (phase === 'playing' ? R.heroSize * 0.55 : R.heroSize * 0.20);
     camera.position.set(focus.x, focus.y + Math.sin(pitch) * distance, focus.z + Math.cos(pitch) * distance);
@@ -11614,6 +12070,8 @@ var THREE = __wxRoot.THREE || window.THREE;
       camera.position.z += (Math.random() - 0.5) * shake * 0.9;
     }
     camera.lookAt(focus.x, focus.y + lift, focus.z);
+    // 天空穹永远以相机为中心，任何俯角/位移都不会露出边缘或黑底。
+    if (skyDome) skyDome.position.copy(camera.position);
     scene.fog.near = distance * 1.05;
     scene.fog.far = distance * 2.4;
     sun.position.set(focus.x - 18, focus.y + 15, focus.z + 8);
@@ -11833,6 +12291,8 @@ var THREE = __wxRoot.THREE || window.THREE;
       shipTier: shipTier, shipTierName: SHIP_TIERS[shipTier].name, canUpgrade: canUpgrade(),
       dockBtnVisible: !!dockBtnRect, fishBtnVisible: !!fishBtnRect,
       townViewBtnVisible: !!townViewBtnRect, townView: townView,
+      onboard: window.ShipCrew ? window.ShipCrew.snapshot() : null,
+      buildTownBtnVisible: !!buildTownBtnRect,
       diveExitVisible: !!diveExitRect, diveExitBanner: Math.round(diveExitBanner * 10) / 10,
       canOpenBuild: typeof openBuildMenu === 'function',
       selfSustain: Math.round(selfSustainT * 10) / 10, townReady: townReady, buildOpen: buildOpen,
@@ -12123,6 +12583,34 @@ var THREE = __wxRoot.THREE || window.THREE;
   window.__debugSpawnCastaway = function () { spawnCastaway(); return castaways.length; };
   window.__debugRecruit = function () { return tryRecruit() ? true : false; };
   window.__debugDock = function (on) { setDocked(!!on); return docked; };
+  /* 登船模式验证 hook */
+  window.__debugBoard = function () {
+    if (!docked) setDocked(true);
+    if (!townView) toggleTownView();
+    return window.ShipCrew ? window.ShipCrew.snapshot() : null;
+  };
+  window.__debugCrewMove = function (x, z) {
+    if (!window.ShipCrew || !window.ShipCrew.isActive()) return null;
+    window.ShipCrew.move({ x: x, z: z }, 0.5);
+    return window.ShipCrew.snapshot();
+  };
+  window.__debugRecruitAll = function () {
+    if (!window.ShipCrew) return null;
+    var ids = window.ShipCrew.CREW_DEFS.map(function (c) { return c.id; });
+    recruited = [];
+    for (var i = 0; i < ids.length; i++) {
+      var def = null;
+      for (var j = 0; j < CASTAWAY_DEFS.length; j++) if (CASTAWAY_DEFS[j].id === ids[i]) def = CASTAWAY_DEFS[j];
+      if (def) { recruited.push(def); window.NpcDialogue && window.NpcDialogue.recruit(ids[i]); }
+    }
+    window.ShipCrew.setRecruited(ids);
+    ensureCrewNodes();
+    return ids;
+  };
+  window.__debugOpenSushi = function () {
+    if (window.SushiShop) { var r = window.SushiShop.unlock(); refreshSushiStall(); return r; }
+    return null;
+  };
   window.__debugCast = function () { castLine(); return fishTimer; };
   window.__debugReel = function () { return reelIn(); };
   window.__debugExitDive = function () { exitDive(); return !(dive && dive.active()); };

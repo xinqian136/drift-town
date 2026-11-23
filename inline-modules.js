@@ -23,7 +23,8 @@ const MODULES = [
   { file: 'achievements.js', marker: 'Achievements' },
   { file: 'leaderboard.js', marker: 'Leaderboard' },
   { file: 'npc-dialogue.js', marker: 'NpcDialogue' },
-  { file: 'sushi-shop.js', marker: 'SushiShop' }
+  { file: 'sushi-shop.js', marker: 'SushiShop' },
+  { file: 'ship-crew.js', marker: 'ShipCrew' }
 ];
 
 function buildBlock() {
